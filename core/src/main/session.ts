@@ -64,6 +64,7 @@ import type { DomPluginPayload } from './exporter'
 import type { Language } from '../shared/i18n'
 import {
   isRenderInFlight,
+  onRenderStateChange,
   renderTrimmedReplay,
   startAnnotatedRender,
   startDisplayRender,
@@ -3155,11 +3156,27 @@ function startFreshCaptureRenders(
   const focusedAnnotations = annotationsOnDisplay(input.annotations, focusedIndex, focusedIndex)
   const numbers = globalDisplayNumbers(input.annotations)
   const motionSpace = motionSpaceFromFrozenDisplays(displays, focusedIndex)
-  if (
+  const hasAnnotatedReplay =
     input.replayWebm !== null &&
     focused?.replayMimeType !== null &&
     focused?.replayMimeType !== undefined
-  ) {
+  let annotatedReadySettled = !hasAnnotatedReplay
+  let derivedSettled = false
+  let completionEmitted = false
+  const maybeComplete = (): void => {
+    if (!derivedSettled || !annotatedReadySettled || completionEmitted) return
+    completionEmitted = true
+    stopWatchingRender()
+    void runActionsAtState(dirPath, 'complete', settings)
+  }
+  // The focused render can finish before another display's render. The batch
+  // terminal event is emitted only after every derived job for this pack settles.
+  const stopWatchingRender = onRenderStateChange((renderDir, state) => {
+    if (renderDir !== dirPath || state === 'rendering') return
+    derivedSettled = true
+    maybeComplete()
+  })
+  if (hasAnnotatedReplay && input.replayWebm !== null && focused?.replayMimeType != null) {
     startAnnotatedRender(
       handle,
       {
@@ -3184,8 +3201,12 @@ function startFreshCaptureRenders(
         // actually runs.
         if (state === 'done') {
           void runActionsAtState(dirPath, 'annotated-replay-ready', settings).then(() => {
-            void runActionsAtState(dirPath, 'complete', settings)
+            annotatedReadySettled = true
+            maybeComplete()
           })
+        } else {
+          annotatedReadySettled = true
+          maybeComplete()
         }
       },
       (ratio) => updateToastRenderStatus(dirPath, 'rendering', ratio),
@@ -3202,14 +3223,6 @@ function startFreshCaptureRenders(
         width: input.width,
         height: input.height,
         docLanguage: packDocLanguage(settings),
-      },
-      {
-        onRendered: () => {
-          void runActionsAtState(dirPath, 'complete', settings)
-        },
-        onFailed: () => {
-          void runActionsAtState(dirPath, 'complete', settings)
-        },
       },
     )
   }
@@ -3243,6 +3256,8 @@ function startFreshCaptureRenders(
       packDocLanguage(settings),
     )
   }
+  // A competing pack operation can refuse every render before a batch begins.
+  if (!isRenderInFlight(dirPath)) stopWatchingRender()
 }
 
 async function handleExactCutFailure(

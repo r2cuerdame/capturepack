@@ -15,6 +15,7 @@ import path from 'node:path'
 import { app } from 'electron'
 import { runActionsForPack } from '../src/main/actions/host'
 import { deliverWebhook, readPackSummary } from '../src/main/actions/webhook'
+import { PackRenderBatchTracker } from '../src/main/renderBatch'
 import {
   ACTION_PERMISSIONS,
   ACTION_TIMEOUT_DEFAULT_MS,
@@ -719,15 +720,31 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
       && session.includes("void runActionsAtState(dirPath"),
   )
   check(
-    'it fires at complete once derived processing finishes after annotated-replay-ready',
-    session.includes("void runActionsAtState(dirPath, 'annotated-replay-ready', settings)")
+    'video completion waits for both the pack-wide render batch and annotated-replay-ready actions',
+    session.includes('const stopWatchingRender = onRenderStateChange((renderDir, state) => {')
+      && session.includes('if (!derivedSettled || !annotatedReadySettled || completionEmitted) return')
+      && session.includes("void runActionsAtState(dirPath, 'annotated-replay-ready', settings).then(() => {")
       && session.includes("void runActionsAtState(dirPath, 'complete', settings)"),
   )
   check(
-    "captures without video replay emit 'complete' once background keyframe still processing completes",
-    session.includes("startKeyframeStill(")
-      && session.includes("void runActionsAtState(dirPath, 'complete', settings)"),
+    "replay-less captures use the pack-wide still render settlement for 'complete'",
+    session.includes('let annotatedReadySettled = !hasAnnotatedReplay')
+      && session.includes("if (renderDir !== dirPath || state === 'rendering') return")
+      && session.includes('derivedSettled = true')
+      && session.includes('startKeyframeStill('),
   )
+
+  const renderStates: string[] = []
+  const tracker = new PackRenderBatchTracker(
+    () => () => {},
+    (_dirPath, state) => { renderStates.push(state) },
+  )
+  const finishFocused = tracker.begin('pack')
+  const finishSecondDisplay = tracker.begin('pack')
+  finishFocused?.('done')
+  check('focused render settling does not finish a multi-display pack', !renderStates.includes('done'))
+  finishSecondDisplay?.('done')
+  check('pack-wide render terminal event arrives after the last display settles', renderStates.at(-1) === 'done')
   check(
     "image packs transition through source-ready and emit 'complete' upon still completion",
     session.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)")
