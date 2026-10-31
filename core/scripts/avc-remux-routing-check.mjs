@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import fs from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import * as esbuild from 'esbuild'
 
 const core = path.resolve(import.meta.dirname, '..')
-const output = path.join(core, 'out', 'issue-243', 'routing')
-fs.mkdirSync(output, { recursive: true })
+const output = fs.mkdtempSync(path.join(tmpdir(), 'capturepack-avc-routing-'))
+process.on('exit', () => fs.rmSync(output, { recursive: true, force: true }))
 const bundle = path.join(output, 'formats.cjs')
 await esbuild.build({ entryPoints: [path.join(core, 'src/renderer/capture/recorderFormats.ts')],
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs' })

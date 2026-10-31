@@ -84,7 +84,7 @@ Case:
 
 Optional:
   --replay-backend=shipping|native-dxgi
-                              Select shipping baseline or opt-in DXGI candidate
+                              Select shipping baseline or default DXGI path
   --warmup-seconds=N         Launch-to-steady allowance before the N-second window (default 3)
   --replay-max-width=N       0 or 720..3840 (default 1920)
   --sample-interval-ms=N     Process-tree sample cadence (default 5000)
@@ -102,7 +102,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 
 const fps = finiteNumber('fps', 15, { min: 5, max: 30, integer: true })
 const replayBackendArgument = option('replay-backend')
-const replayBackend = replayBackendArgument ?? 'shipping'
+const replayBackend = replayBackendArgument ?? 'native-dxgi'
 if (!['shipping', 'native-dxgi'].includes(replayBackend)) {
   throw new Error('--replay-backend must be shipping or native-dxgi')
 }
@@ -2134,7 +2134,7 @@ try {
     '--no-global-shortcut',
     '--no-login-item',
     `--capture-now=${String(captureDelaySeconds)}`,
-    ...(replayBackend === 'native-dxgi' ? ['--dxgi-native-replay'] : []),
+    ...(replayBackend === 'shipping' ? ['--disable-dxgi-native-replay'] : []),
   ]
   appProcess = track(spawn(
     electron,

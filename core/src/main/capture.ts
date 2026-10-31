@@ -66,7 +66,7 @@ import {
 } from './dxgiTimingReference'
 import {
   DxgiReplayRuntimeManager,
-  dxgiReplayRuntimeOptedIn,
+  dxgiReplayRuntimeEnabled,
 } from './dxgiReplayRuntime'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
@@ -223,7 +223,7 @@ interface DxgiReplayServiceSlot {
   readonly signature: string
   readonly retentionMs: number
 }
-// The native backend is a guarded, opt-in export source. Shipping covers native
+// The native backend is a guarded export source. Shipping covers native
 // warm-up, then releases its capture/encoder workload after READY. Any native
 // failure restarts the same shipping window and path releases use today.
 const dxgiReplayServices = new Map<number, DxgiReplayServiceSlot>()
@@ -898,14 +898,12 @@ function rememberNativeReplayRequest(requestId: string, displayId: number): void
   nativeReplayRequests.set(requestId, displayId)
 }
 
-/** Keeps exactly one retained native service per wanted display when opted in. */
+/** Keeps exactly one retained native service per wanted display. */
 function reconcileDxgiReplayServices(
   wanted: ReadonlyMap<number, Display>,
   settings: Settings | null,
 ): void {
-  // This check is deliberately outside the manager too: without the exact
-  // launch switch, CapturePack does not even create a native candidate.
-  if (settings === null || !settings.recordingEnabled || !dxgiReplayRuntimeOptedIn(process.argv)) {
+  if (settings === null || !settings.recordingEnabled || !dxgiReplayRuntimeEnabled(process.argv)) {
     stopDxgiReplayServices(settings?.recordingEnabled === true)
     return
   }

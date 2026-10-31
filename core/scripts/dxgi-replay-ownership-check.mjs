@@ -13,6 +13,7 @@ const { default: ts } = await import(pathToFileURL(path.join(core, 'node_modules
 const parse = (relative) => ts.createSourceFile(relative,
   readFileSync(path.join(core, relative), 'utf8'), ts.ScriptTarget.Latest, true)
 const main = parse('src/main/capture.ts')
+const runtime = parse('src/main/dxgiReplayRuntime.ts')
 const renderer = parse('src/renderer/capture/capture.ts')
 const retention = parse('src/renderer/capture/recorderRetention.ts')
 function fn(source, name) {
@@ -62,7 +63,7 @@ function run(code, context) {
   }).outputText, context)
 }
 
-function harness() {
+function harness(argv = []) {
   const events = []
   const payload = { displayId: 17, focused: true, fps: 15, segmentSeconds: 30, replayMaxWidth: 0 }
   const originalEndedListeners = []
@@ -171,15 +172,16 @@ function harness() {
     IPC: { captureReplayWorkload: 'capture:replay-workload' },
     displayCadence: { reset: () => {} }, setDisplayRecorderState: (_id, state) => events.push(`state:${state.status}`),
     clearRecorderProbe: () => {}, probesInFlight: new Set(), recoveryAttempts: new Map(), probesSinceProof: new Map(),
-    DxgiReplayRuntimeManager: Manager, dxgiReplayRuntimeOptedIn: () => true,
+    DxgiReplayRuntimeManager: Manager, DXGI_REPLAY_DISABLE_SWITCH: '--disable-dxgi-native-replay',
     dxgiDisplayIdentity: () => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }),
     dxgiReplayServiceSignature: () => 'display-17-retention-30s',
-    app: { getPath: () => 'test-output' }, path, process: { argv: [] }, logWarn: () => {}, logInfo: () => {}, logError: () => {},
+    app: { getPath: () => 'test-output' }, path, process: { argv }, logWarn: () => {}, logInfo: () => {}, logError: () => {},
     display, ownsTicks: true,
     isCurrentRecorderResource: (current, candidate) => current === candidate,
     failureReason: () => 'process-stopped',
   })
   mainContext.win = mainContext.captureWindows.get(17)
+  run(fn(runtime, 'dxgiReplayRuntimeEnabled'), mainContext)
   run(mainCode, mainContext)
   run(`globalThis.handleCaptureError = ${errorHandler}`, mainContext)
   return { events, recorder, oldSession, remuxOwner, originalStream, rendererContext, mainContext, managers,
@@ -204,7 +206,12 @@ async function check(name, test) {
   passed += 1
   console.log(`  PASS  #243 ${name}`)
 }
-await check('native READY stops/releases shipping MP4 while retaining focused Lane-S clock', async () => {
+await check('diagnostic opt-out creates no native service', async () => {
+  const h = harness(['--disable-dxgi-native-replay']); h.start(); await flush()
+  assert.equal(h.managers.length, 0)
+  assert.equal(h.recorder.state, 'recording')
+})
+await check('default launch READY stops/releases shipping MP4 while retaining focused Lane-S clock', async () => {
   const h = harness(); h.start()
   assert.equal(h.recorder.state, 'recording', 'shipping must cover native warm-up')
   assert.equal(count(h.events, 'workload:false'), 0)
