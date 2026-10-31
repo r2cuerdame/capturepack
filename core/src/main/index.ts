@@ -59,9 +59,11 @@ import type { TrayControls } from './tray'
 import { dailyTelemetryLaunchPolicy, sendDailyTelemetry, telemetryOs } from './telemetry'
 import {
   checkNow,
+  holdSessionEndForUpdate,
   initUpdater,
   installPendingUpdateBeforeCapture,
-  relaunchAfterSessionEnd,
+  prepareSessionEnd,
+  quitWhenIdle,
   restartAndUpdate,
   setUpdateInstallBusyProbe,
   updaterState,
@@ -269,10 +271,22 @@ function main(): void {
     setUpdateInstallBusyProbe(() => captureFlowActive() || anyPackOperationActive())
     let sessionEnding = false
     app.on('browser-window-created', (_event, window) => {
+      window.on('query-session-end', (event) => {
+        const held = holdSessionEndForUpdate(
+          event.reasons,
+          {
+            autoInstall: settings.autoUpdateCheck,
+            launchAtLogin: settings.launchAtLogin,
+            message: (version) => uiT(settings)('update.installingAtShutdown', { version }),
+          },
+          LOGIN_HIDDEN_ARG,
+        )
+        if (held) event.preventDefault()
+      })
       window.on('session-end', (event) => {
         if (sessionEnding) return
         sessionEnding = true
-        relaunchAfterSessionEnd(
+        prepareSessionEnd(
           event.reasons,
           { autoInstall: settings.autoUpdateCheck, launchAtLogin: settings.launchAtLogin },
           LOGIN_HIDDEN_ARG,
@@ -524,7 +538,7 @@ function main(): void {
           // leave the machine without a replay buffer, and the only one the
           // next start must not complain about.
           noteExitIntent('user-quit')
-          app.quit()
+          quitWhenIdle(() => app.quit())
         },
       },
       () => uiLanguage(settings),

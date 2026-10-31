@@ -10,21 +10,27 @@ try {
   const electronStub = path.join(work, 'electron-stub.cjs')
   writeFileSync(
     electronStub,
-    `exports.app={` +
+    `const handlers={};` +
+      `exports.app={` +
       `getPath:()=>${JSON.stringify(path.join(work, 'user-data'))},` +
       `getVersion:()=>'0.6.0',` +
-      `on:()=>{},once:()=>{},isPackaged:true` +
+      `quits:[],quit:()=>{exports.app.quits.push(Date.now())},` +
+      `on:(event,listener)=>{(handlers[event]??=[]).push(listener)},` +
+      `once:(event,listener)=>{(handlers[event]??=[]).push(listener)},` +
+      `emit:(event)=>{for(const listener of handlers[event]??[])listener()},` +
+      `isPackaged:true` +
       `};` +
       `exports.crashReporter={start:()=>{}};\n`,
   )
   const updaterStub = path.join(work, 'electron-updater-stub.cjs')
   writeFileSync(
     updaterStub,
-    `const calls=[];` +
+    `const calls=[];const handlers={};` +
       `exports.autoUpdater={` +
       `calls,` +
       `autoDownload:false,autoInstallOnAppQuit:false,logger:null,` +
-      `on:()=>exports.autoUpdater,` +
+      `on:(event,listener)=>{handlers[event]=listener;return exports.autoUpdater},` +
+      `emit:(event,...args)=>handlers[event]?.(...args),` +
       `quitAndInstall:(...args)=>{calls.push(args)},` +
       `checkForUpdates:()=>Promise.resolve(null)` +
       `};\n`,
