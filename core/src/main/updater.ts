@@ -280,38 +280,52 @@ export function setAutoUpdateCheck(enabled: boolean): void {
 }
 
 let installBusy: () => boolean = () => false
-let restartGate: IdleGate | null = null
-let quitGate: IdleGate | null = null
+type UpdateExit = 'restart' | 'quit'
+let exitGate: { kind: UpdateExit; gate: IdleGate } | null = null
+let restartInstallStarted = false
 let sessionEndHandoff: Promise<SessionEndOutcome> | null = null
 
 export function setUpdateInstallBusyProbe(probe: () => boolean): void {
   installBusy = probe
 }
 
+function requestUpdateExit(kind: UpdateExit, run: () => void): void {
+  if (sessionEndHandoff !== null) {
+    logInfo(`[updater] ${kind} joins the session-end install already in progress`)
+    return
+  }
+  if (exitGate !== null && exitGate.kind === kind) {
+    exitGate.gate.request()
+    return
+  }
+  exitGate?.gate.cancel()
+  exitGate = {
+    kind,
+    gate: createIdleGate({
+      isBusy: () => installBusy(),
+      onDeferred: () => logInfo(`[updater] ${kind} and update waits for the capture/save in progress`),
+      run,
+    }),
+  }
+  exitGate.gate.request()
+}
+
 export function restartAndUpdate(): void {
-  restartGate ??= createIdleGate({
-    isBusy: () => installBusy(),
-    onDeferred: () => logInfo('[updater] restart and update waits for the capture/save in progress'),
-    run: () => {
-      noteExitIntent('update-restart')
-      autoUpdater.quitAndInstall(false, true)
-    },
+  requestUpdateExit('restart', () => {
+    restartInstallStarted = true
+    noteExitIntent('update-restart')
+    autoUpdater.quitAndInstall(false, true)
   })
-  restartGate.request()
 }
 
 export function quitWhenIdle(quit: () => void): void {
   const installsOnQuit = initialized && autoUpdater.autoInstallOnAppQuit && lastDownloadedVersion !== null
-  if (!installsOnQuit) {
+  if (sessionEndHandoff === null && !installsOnQuit) {
+    exitGate?.gate.cancel()
     quit()
     return
   }
-  quitGate ??= createIdleGate({
-    isBusy: () => installBusy(),
-    onDeferred: () => logInfo('[updater] quit and update waits for the capture/save in progress'),
-    run: quit,
-  })
-  quitGate.request()
+  requestUpdateExit('quit', quit)
 }
 
 async function rememberDownloadedUpdate(version: string, installerPath: string): Promise<void> {
@@ -466,7 +480,7 @@ export function holdSessionEndForUpdate(
   hiddenArg: string,
 ): boolean {
   if (sessionEndHandoff !== null) return true
-  if (!app.isPackaged || process.platform !== 'win32') return false
+  if (!app.isPackaged || process.platform !== 'win32' || restartInstallStarted) return false
   const file = pendingUpdateFile(app.getPath('userData'))
   const pending = readPendingUpdate(file)
   const plan = sessionEndPlan({
@@ -478,6 +492,8 @@ export function holdSessionEndForUpdate(
   })
   if (!plan.install || pending === null) return false
   logInfo(`[updater] session ending with v${pending.version} waiting: installing it before Windows continues`)
+  exitGate?.gate.cancel()
+  exitGate = null
   sessionEndHandoff = runSessionEndHandoff(plan, {
     verify: async () => {
       if ((await hashFileSha512(pending.installerPath)) === pending.sha512) return true

@@ -1120,6 +1120,11 @@ Safeguards:
   `autoInstallOnAppQuit`.
 - One installer at a time: install-on-quit is disarmed whenever a session ends,
   so the shutdown teardown never starts a second, unguarded Setup.
+- One exit at a time: a waiting **Quit** and a waiting **Restart and update**
+  replace each other, the last request wins. A shutdown handoff cancels
+  either one and owns the exit; Quit or Restart and update pressed during it
+  joins it and still waits for the capture/save. Once Restart and update has
+  started Setup, a shutdown query is no longer held for a second one.
 - Setup keeps owning stand-down, native-host exit and process close through
   `build/installer.nsh`. Relaunch belongs to Setup (`--force-run`) for
   **Restart and update** and the startup install, and to Windows sign-in for a

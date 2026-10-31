@@ -510,22 +510,6 @@ async function main(): Promise<void> {
     }
   })
 
-  await section('THE APP DEFERS RESTART AND UPDATE', async () => {
-    const calls = (autoUpdater as unknown as { calls: unknown[][] }).calls
-    let appBusy = true
-    setUpdateInstallBusyProbe(() => appBusy)
-    restartAndUpdate()
-    restartAndUpdate()
-    check('no installer is started while a capture/save runs', calls.length === 0, JSON.stringify(calls))
-    appBusy = false
-    await sleep(INSTALL_IDLE_POLL_MS + 300)
-    check(
-      'the install follows exactly once after the work ends',
-      calls.length === 1 && calls[0]?.[0] === false && calls[0]?.[1] === true,
-      JSON.stringify(calls),
-    )
-  })
-
   const userData = app.getPath('userData')
   mkdirSync(userData, { recursive: true })
   const marker = pendingUpdateFile(userData)
@@ -715,7 +699,142 @@ async function main(): Promise<void> {
   stubApp.emit('will-quit')
 }
 
-main()
+function appFixture() {
+  const userData = app.getPath('userData')
+  mkdirSync(userData, { recursive: true })
+  const calls = (autoUpdater as unknown as { calls: unknown[][] }).calls
+  const stubApp = app as unknown as { quits: number[]; emit: (event: string) => void }
+  const stubUpdater = autoUpdater as unknown as { emit: (event: string, ...args: unknown[]) => void }
+  const hold = (reasons: SessionEndReason[]): boolean =>
+    updater.holdSessionEndForUpdate(
+      reasons,
+      { autoInstall: true, launchAtLogin: true, message: (version) => `v${version}` },
+      '--openAsHidden',
+    )
+  const stagedChangedInstaller = (): void =>
+    writePendingUpdate(
+      pendingUpdateFile(userData),
+      pending({ installerPath: process.execPath, sha512: 'not-the-bytes' }),
+    )
+  return { calls, stubApp, stubUpdater, hold, stagedChangedInstaller }
+}
+
+async function restartGroup(): Promise<void> {
+  await section('THE APP DEFERS RESTART AND UPDATE', async () => {
+    const calls = (autoUpdater as unknown as { calls: unknown[][] }).calls
+    let appBusy = true
+    setUpdateInstallBusyProbe(() => appBusy)
+    restartAndUpdate()
+    restartAndUpdate()
+    check('no installer is started while a capture/save runs', calls.length === 0, JSON.stringify(calls))
+    appBusy = false
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check(
+      'the install follows exactly once after the work ends',
+      calls.length === 1 && calls[0]?.[0] === false && calls[0]?.[1] === true,
+      JSON.stringify(calls),
+    )
+  })
+
+  const { calls, stubApp, stubUpdater, hold, stagedChangedInstaller } = appFixture()
+
+  await section('A RESTART THAT STARTED SETUP NEVER ALSO HOLDS WINDOWS FOR A SECOND ONE', async () => {
+    if (process.platform !== 'win32') {
+      skip('session end after restart and update', 'Windows only')
+      return
+    }
+    stagedChangedInstaller()
+    const quitsBefore = stubApp.quits.length
+    check('a shutdown query after Restart and update started setup is not held', !hold(['shutdown']))
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check(
+      'and no session-end handoff quits the app a second time',
+      stubApp.quits.length === quitsBefore,
+      `${String(stubApp.quits.length - quitsBefore)} quit(s)`,
+    )
+    rmSync(pendingUpdateFile(app.getPath('userData')), { force: true })
+  })
+
+  await section('QUIT AND RESTART AND UPDATE SHARE ONE EXIT', async () => {
+    initUpdater({ autoCheck: true })
+    stubUpdater.emit('update-downloaded', { version: '0.6.1', downloadedFile: '' })
+    let appBusy = true
+    setUpdateInstallBusyProbe(() => appBusy)
+    let quits = 0
+    const installsBefore = calls.length
+    restartAndUpdate()
+    updater.quitWhenIdle(() => {
+      quits += 1
+    })
+    appBusy = false
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check(
+      'Quit while Restart and update waits replaces it: one quit, no second installer',
+      quits === 1 && calls.length === installsBefore,
+      `${String(quits)} quit(s), ${String(calls.length - installsBefore)} restart install(s)`,
+    )
+    appBusy = true
+    updater.quitWhenIdle(() => {
+      quits += 1
+    })
+    restartAndUpdate()
+    appBusy = false
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check(
+      'Restart and update while Quit waits replaces it: one restart install, no extra quit',
+      quits === 1 && calls.length === installsBefore + 1,
+      `${String(quits - 1)} quit(s), ${String(calls.length - installsBefore)} restart install(s)`,
+    )
+  })
+
+  stubApp.emit('will-quit')
+}
+
+async function handoffGroup(): Promise<void> {
+  const { calls, stubApp, stubUpdater, hold, stagedChangedInstaller } = appFixture()
+
+  await section('A SHUTDOWN HANDOFF OWNS THE EXIT: QUIT AND RESTART JOIN IT', async () => {
+    if (process.platform !== 'win32') {
+      skip('session end handoff ownership', 'Windows only')
+      return
+    }
+    initUpdater({ autoCheck: true })
+    stubUpdater.emit('update-downloaded', { version: '0.6.1', downloadedFile: '' })
+    let appBusy = true
+    setUpdateInstallBusyProbe(() => appBusy)
+    let trayQuits = 0
+    const quitsBefore = stubApp.quits.length
+    restartAndUpdate()
+    stagedChangedInstaller()
+    check('a waiting update holds the shutdown', hold(['shutdown']))
+    updater.quitWhenIdle(() => {
+      trayQuits += 1
+    })
+    restartAndUpdate()
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check(
+      'tray Quit during the handoff waits for the capture/save in progress',
+      trayQuits === 0 && stubApp.quits.length === quitsBefore,
+      `${String(trayQuits)} tray quit(s), ${String(stubApp.quits.length - quitsBefore)} app quit(s)`,
+    )
+    check('a queued Restart and update never runs beside the handoff', calls.length === 0, JSON.stringify(calls))
+    appBusy = false
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check(
+      'after the work ends the handoff alone quits, exactly once',
+      trayQuits === 0 && stubApp.quits.length === quitsBefore + 1,
+      `${String(trayQuits)} tray quit(s), ${String(stubApp.quits.length - quitsBefore)} app quit(s)`,
+    )
+    check('and no restart install follows', calls.length === 0, JSON.stringify(calls))
+  })
+
+  stubApp.emit('will-quit')
+}
+
+const groups: Record<string, () => Promise<void>> = { main, restart: restartGroup, handoff: handoffGroup }
+const group = groups[process.argv[2] ?? 'main']
+
+;(group ?? (() => Promise.reject(new Error(`unknown group ${String(process.argv[2])}`))))()
   .catch((err: unknown) => {
     failed += 1
     console.error(err)

@@ -50,7 +50,15 @@ try {
     ],
     { stdio: ['ignore', 'ignore', 'inherit'] },
   )
-  execFileSync(process.execPath, [bundle], { stdio: 'inherit', cwd: path.join(here, '..') })
+  let failedGroups = 0
+  for (const group of ['main', 'restart', 'handoff']) {
+    try {
+      execFileSync(process.execPath, [bundle, group], { stdio: 'inherit', cwd: path.join(here, '..') })
+    } catch {
+      failedGroups += 1
+    }
+  }
+  if (failedGroups > 0) process.exitCode = 1
 } finally {
   rmSync(work, { recursive: true, force: true })
 }
