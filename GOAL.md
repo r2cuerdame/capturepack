@@ -1077,6 +1077,36 @@ The policy lives alone in `core/src/main/updateNotice.ts` with no imports, so
 `check:update-notice` can hold it — and the app's use of it — without an
 Electron stub that could drift out from under the rule.
 
+**When a downloaded update installs (#149)**
+
+| Situation | Behaviour |
+|---|---|
+| Tray **Quit** | Installs on exit (`autoInstallOnAppQuit`), unchanged. |
+| Process killed (no Quit) | The next start installs it silently **before** MCP, the recorders or the tray start, then relaunches the new version. |
+| Windows shutdown / restart / sign-out | Relaunches at the next sign-in, where the start above installs it before capture. With launch at login off, a one-shot `HKCU\…\RunOnce` entry provides that relaunch. |
+| Capture or save in progress | **Restart and update** waits until the capture flow and every pack operation have finished, then installs. It never cancels them. |
+
+Safeguards:
+
+- Every download is recorded in `pending-update.json` (version, installer path,
+  sha512 of the verified bytes). An installer whose bytes no longer match, a
+  missing installer, or a version that is not newer is never run, and its
+  record is dropped.
+- The startup install is attempted at most once per running version. An
+  installer that fails or cannot start leaves the current version running, and
+  later starts do not loop on it.
+- The install is skipped while automatic update checks are turned off, the
+  same as `autoInstallOnAppQuit`.
+- Setup keeps owning stand-down, process close and relaunch through
+  `build/installer.nsh`, and the single-instance lock still rejects any
+  duplicate tray process.
+
+Windows does not let a per-user process finish an NSIS reinstall during
+shutdown: it can end the installer partway through extraction. So the install
+happens at the first sign-in after the shutdown, before any capture.
+
+`check:update-install` holds these rules and their wiring.
+
 **Release pipeline**
 
 ```
