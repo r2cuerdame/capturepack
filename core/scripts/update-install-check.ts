@@ -56,6 +56,58 @@ async function section(title: string, body: () => void | Promise<void>): Promise
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+const windowsPowerShell = (): string =>
+  path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+function queryEndSession(pid: number, title: string): Promise<{ answer: string; stderr: string }> {
+  const script = [
+    `Add-Type -TypeDefinition @'`,
+    `using System;`,
+    `using System.Collections.Generic;`,
+    `using System.Runtime.InteropServices;`,
+    `using System.Text;`,
+    `public static class SessionQueryProbe {`,
+    `  delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);`,
+    `  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lParam);`,
+    `  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);`,
+    `  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);`,
+    `  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);`,
+    `  [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);`,
+    `  public static string Query(uint pid, string title) {`,
+    `    var answers = new List<string>();`,
+    `    EnumWindows((hWnd, lParam) => {`,
+    `      uint owner;`,
+    `      GetWindowThreadProcessId(hWnd, out owner);`,
+    `      var text = new StringBuilder(256);`,
+    `      GetWindowText(hWnd, text, text.Capacity);`,
+    `      if (owner != pid || !IsWindowVisible(hWnd) || text.ToString() != title) return true;`,
+    `      IntPtr result;`,
+    `      SendMessageTimeout(hWnd, 0x0011, IntPtr.Zero, IntPtr.Zero, 2, 5000, out result);`,
+    `      answers.Add(result.ToInt64().ToString());`,
+    `      return true;`,
+    `    }, IntPtr.Zero);`,
+    `    return string.Join(",", answers);`,
+    `  }`,
+    `}`,
+    `'@`,
+    `[Console]::Out.Write([SessionQueryProbe]::Query(${String(pid)}, '${title.replace(/'/gu, "''")}'))`,
+  ].join('\n')
+  return new Promise((resolve) => {
+    const probe = spawn(windowsPowerShell(), install.powerShellEncodedArgs(script), {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    let answer = ''
+    let stderr = ''
+    probe.stdout.on('data', (chunk: Buffer) => {
+      answer += chunk.toString('utf8')
+    })
+    probe.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+    })
+    probe.once('exit', () => resolve({ answer: answer.trim(), stderr: stderr.trim() }))
+  })
+}
 const sha = (bytes: Buffer): string => createHash('sha512').update(bytes).digest('base64')
 const pending = (overrides: Partial<PendingUpdate> = {}): PendingUpdate => ({
   version: '0.6.1',
@@ -343,7 +395,12 @@ async function main(): Promise<void> {
     )
     check(
       'it relaunches in the same session only when Windows did not end it',
-      /if \(-not \$state\.ending\) \{[\s\S]*Remove-ItemProperty[\s\S]*Start-Process -FilePath \$appPath/u.test(script),
+      /if \(-not \(Test-SessionEnding\)\) \{[\s\S]*Remove-ItemProperty[\s\S]*Start-Process -FilePath \$appPath/u.test(script),
+    )
+    check(
+      'whether Windows is ending is read when setup ends, not kept from a cancelable shutdown query',
+      script.includes('GetSystemMetrics(8192) -ne 0') &&
+        script.indexOf('function Test-SessionEnding') < script.indexOf('function Complete-Install'),
     )
     const args = install.powerShellEncodedArgs(script)
     check(
@@ -385,8 +442,7 @@ async function main(): Promise<void> {
         appArgs: ['--openAsHidden'],
         runOncePath: `HKCU:\\Software\\CapturePackUpdateCheck-${randomUUID()}`,
       })
-      const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-      const guardian = spawn(powershell, install.powerShellEncodedArgs(script), {
+      const guardian = spawn(windowsPowerShell(), install.powerShellEncodedArgs(script), {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })
@@ -416,6 +472,13 @@ async function main(): Promise<void> {
         'setup has not started while the app is alive',
         !existsSync(path.join(work, 'installer-ran.txt')),
       )
+      const query = await queryEndSession(guardian.pid ?? 0, 'CapturePack')
+      check(
+        'the guardian refuses a shutdown query while the install is pending',
+        query.answer === '0',
+        `${query.answer} ${query.stderr}`,
+      )
+      check('the refused query does not close the guardian', guardian.exitCode === null)
       fakeApp.kill()
       await appExited
       const exitCode = await Promise.race([guardianExit, sleep(60_000).then(() => 'timeout' as const)])
@@ -439,7 +502,7 @@ async function main(): Promise<void> {
       await sleep(500)
       const relaunch = path.join(work, 'app-ran.txt')
       check(
-        'a session that did not end gets the app back, hidden',
+        'a shutdown that was queried and then cancelled gets the app back, hidden',
         existsSync(relaunch) && readFileSync(relaunch, 'utf8').trim() === '--openAsHidden',
       )
     } finally {
@@ -626,6 +689,10 @@ async function main(): Promise<void> {
     check(
       'session end disarms install-on-quit and arms the next-boot relaunch',
       /window\.on\('session-end'[\s\S]*?prepareSessionEnd\(/u.test(indexSource),
+    )
+    check(
+      'a hidden window keeps the shutdown listeners alive with recording off and no window open',
+      /app\.on\('browser-window-created'[\s\S]*?\}\)\s*void new BrowserWindow\(\{ show: false,/u.test(indexSource),
     )
     check(
       'tray Quit goes through the capture/save gate',

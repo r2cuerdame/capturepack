@@ -303,6 +303,7 @@ export async function runSessionEndHandoff(
 
 export const GUARDIAN_READY = 'capturepack-update-guardian-ready'
 export const GUARDIAN_READY_TIMEOUT_MS = 20_000
+const SM_SHUTTINGDOWN = 0x2000
 export const SESSION_END_RESULT_FILE = 'session-end-install.json'
 
 export interface SessionEndResult {
@@ -372,10 +373,10 @@ export function sessionEndGuardianScript(input: SessionEndGuardianInput): string
     `$app = Get-Process -Id ${String(Math.trunc(input.waitPid))} -ErrorAction SilentlyContinue`,
     `Add-Type -AssemblyName System.Windows.Forms`,
     `Add-Type -AssemblyName System.Drawing`,
-    `$blockReason = $true`,
+    `$native = $true`,
     `try {`,
-    `  Add-Type -Namespace CapturePack -Name ShutdownBlock -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, string reason); [DllImport("user32.dll")] public static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd);'`,
-    `} catch { $blockReason = $false }`,
+    `  Add-Type -Namespace CapturePack -Name ShutdownBlock -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, string reason); [DllImport("user32.dll")] public static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd); [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);'`,
+    `} catch { $native = $false }`,
     `$state = @{ done = $false; ending = $false; installer = $null; exitCode = $null }`,
     `$form = New-Object System.Windows.Forms.Form`,
     `$form.Text = 'CapturePack'`,
@@ -397,13 +398,17 @@ export function sessionEndGuardianScript(input: SessionEndGuardianInput): string
     `  if ($closing.CloseReason -eq [System.Windows.Forms.CloseReason]::WindowsShutDown) { $state.ending = $true }`,
     `  if (-not $state.done) { $closing.Cancel = $true }`,
     `})`,
+    `function Test-SessionEnding {`,
+    `  if ($native) { try { return [CapturePack.ShutdownBlock]::GetSystemMetrics(${SM_SHUTTINGDOWN}) -ne 0 } catch {} }`,
+    `  return $state.ending`,
+    `}`,
     `$timer = New-Object System.Windows.Forms.Timer`,
     `$timer.Interval = 250`,
     `function Complete-Install([object]$code) {`,
     `  $timer.Stop()`,
     `  $state.exitCode = $code`,
     `  $relaunched = $false`,
-    `  if (-not $state.ending) {`,
+    `  if (-not (Test-SessionEnding)) {`,
     `    try {`,
     `      Remove-ItemProperty -Path $runOncePath -Name $runOnceValue -ErrorAction SilentlyContinue`,
     `      if ($appArgs.Count -gt 0) { Start-Process -FilePath $appPath -ArgumentList $appArgs } else { Start-Process -FilePath $appPath }`,
@@ -415,7 +420,7 @@ export function sessionEndGuardianScript(input: SessionEndGuardianInput): string
     `    [System.IO.File]::WriteAllText($resultFile, $json)`,
     `  } catch {}`,
     `  $state.done = $true`,
-    `  if ($blockReason) { try { [void][CapturePack.ShutdownBlock]::ShutdownBlockReasonDestroy($form.Handle) } catch {} }`,
+    `  if ($native) { try { [void][CapturePack.ShutdownBlock]::ShutdownBlockReasonDestroy($form.Handle) } catch {} }`,
     `  $form.Close()`,
     `}`,
     `$timer.add_Tick({`,
@@ -433,7 +438,7 @@ export function sessionEndGuardianScript(input: SessionEndGuardianInput): string
     `  }`,
     `})`,
     `$form.add_Shown({`,
-    `  if ($blockReason) { try { [void][CapturePack.ShutdownBlock]::ShutdownBlockReasonCreate($form.Handle, $message) } catch {} }`,
+    `  if ($native) { try { [void][CapturePack.ShutdownBlock]::ShutdownBlockReasonCreate($form.Handle, $message) } catch {} }`,
     `  [Console]::Out.WriteLine('${GUARDIAN_READY}')`,
     `  [Console]::Out.Flush()`,
     `  $timer.Start()`,

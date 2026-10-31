@@ -1,5 +1,5 @@
 // Main-process entry: single-instance tray app; wires hotkey, tray, capture, updater.
-import { app, dialog, globalShortcut, Notification, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Notification, powerMonitor, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { UpdaterStatusPayload } from '../shared/ipc'
@@ -231,11 +231,6 @@ function main(): void {
     // Tray app: keep running with zero windows (default behavior would quit).
   })
 
-  // No 'session-end' hook: Electron 36 exposes that on BrowserWindow, and this
-  // app can be windowless. A Windows logoff or shutdown still tears the app
-  // down through the normal quit sequence, so it reaches will-quit and is
-  // recorded as a clean exit whose cause we did not observe ('unknown') —
-  // honest, and crucially NOT reported to the user as a crash (issue #61).
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     stopRecorderStateListener()
@@ -293,6 +288,7 @@ function main(): void {
         )
       })
     })
+    void new BrowserWindow({ show: false, width: 1, height: 1, skipTaskbar: true, focusable: false })
     const telemetryPolicy = dailyTelemetryLaunchPolicy(app.isPackaged, process.env)
     if (telemetryPolicy.enabled) {
       void sendDailyTelemetry({

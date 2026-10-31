@@ -1088,7 +1088,8 @@ Electron stub that could drift out from under the rule.
 
 Who owns what at shutdown:
 
-1. The app answers the shutdown query by holding it, disarms its own
+1. The app answers the shutdown query by holding it (a hidden window receives
+   the query even with recording off and no other window open), disarms its own
    install-on-quit and starts a guardian (a hidden-console Windows PowerShell
    with a small topmost window and a shutdown block reason) that waits for the
    app's process id.
@@ -1096,8 +1097,9 @@ Who owns what at shutdown:
 3. Only after the app process has exited does the guardian run Setup
    (`--updated /S`, no `--force-run`), and it holds Windows until Setup exits.
 4. Windows continues. At the next sign-in, launch at login or RunOnce starts the
-   new version. If the shutdown was cancelled instead, the guardian removes the
-   RunOnce entry and starts the app straight away.
+   new version. If the shutdown was cancelled instead (Windows no longer reports
+   that it is shutting down when Setup exits), the guardian removes the RunOnce
+   entry and starts the app straight away.
 5. The next start logs the guardian's result from `session-end-install.json`.
 
 A critical shutdown cannot be held. Then, and whenever the guardian cannot get
