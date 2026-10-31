@@ -171,6 +171,9 @@ check('field runner opts out only for shipping baseline and samples Windows GPU 
     && fieldSource.includes("const replayBackend = replayBackendArgument ?? 'native-dxgi'")
     && fieldSource.includes("Get-Counter -Counter '\\\\GPU Engine(*)\\\\Utilization Percentage'")
     && fieldSource.includes('gpu_engines=@($gpuByPid[[int]$node.ProcessId])'))
+const starvedFieldSource = readFileSync(new URL('./native-replay-fallback-e2e.mjs', import.meta.url), 'utf8')
+check('starved-recorder field run selects the Chromium baseline so native cannot bypass starvation',
+  /`--simulate-no-frames=\$\{simulatedDisplayId\}`,\s*'--disable-dxgi-native-replay',/.test(starvedFieldSource))
 check('field runner records production fMP4 validation and post-ready evidence',
   fieldSource.includes('productionHelper.validateNativeReplayMp4(')
     && fieldSource.includes('latest production DXGI native READY through capture request')

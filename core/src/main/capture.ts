@@ -903,7 +903,12 @@ function reconcileDxgiReplayServices(
   wanted: ReadonlyMap<number, Display>,
   settings: Settings | null,
 ): void {
-  if (settings === null || !settings.recordingEnabled || !dxgiReplayRuntimeEnabled(process.argv)) {
+  if (
+    settings === null
+    || !settings.recordingEnabled
+    || process.platform !== 'win32'
+    || !dxgiReplayRuntimeEnabled(process.argv)
+  ) {
     stopDxgiReplayServices(settings?.recordingEnabled === true)
     return
   }

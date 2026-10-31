@@ -63,7 +63,7 @@ function run(code, context) {
   }).outputText, context)
 }
 
-function harness(argv = []) {
+function harness(argv = [], platform = 'win32') {
   const events = []
   const payload = { displayId: 17, focused: true, fps: 15, segmentSeconds: 30, replayMaxWidth: 0 }
   const originalEndedListeners = []
@@ -175,7 +175,7 @@ function harness(argv = []) {
     DxgiReplayRuntimeManager: Manager, DXGI_REPLAY_DISABLE_SWITCH: '--disable-dxgi-native-replay',
     dxgiDisplayIdentity: () => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }),
     dxgiReplayServiceSignature: () => 'display-17-retention-30s',
-    app: { getPath: () => 'test-output' }, path, process: { argv }, logWarn: () => {}, logInfo: () => {}, logError: () => {},
+    app: { getPath: () => 'test-output' }, path, process: { argv, platform }, logWarn: () => {}, logInfo: () => {}, logError: () => {},
     display, ownsTicks: true,
     isCurrentRecorderResource: (current, candidate) => current === candidate,
     failureReason: () => 'process-stopped',
@@ -208,6 +208,11 @@ async function check(name, test) {
 }
 await check('diagnostic opt-out creates no native service', async () => {
   const h = harness(['--disable-dxgi-native-replay']); h.start(); await flush()
+  assert.equal(h.managers.length, 0)
+  assert.equal(h.recorder.state, 'recording')
+})
+await check('non-Windows launch creates no native service', async () => {
+  const h = harness([], 'darwin'); h.start(); await flush()
   assert.equal(h.managers.length, 0)
   assert.equal(h.recorder.state, 'recording')
 })

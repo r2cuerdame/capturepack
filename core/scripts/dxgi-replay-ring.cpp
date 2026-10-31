@@ -55,7 +55,7 @@ constexpr std::uint32_t kMinimumCaptureMs = 100;
 constexpr std::uint32_t kMaximumCaptureMs = 30'000;
 constexpr std::uint32_t kMinimumRetentionMs = 1'000;
 // The settings loader accepts legacy/manual values through 600 s, but the
-// opt-in native candidate deliberately owns at most one UI-sized 60 s window
+// native replay service deliberately owns at most one UI-sized 60 s window
 // per display. Larger requests are rejected before capture so the application
 // keeps its shipping recorder instead of multiplying hundreds of MiB across
 // a multi-display desktop.

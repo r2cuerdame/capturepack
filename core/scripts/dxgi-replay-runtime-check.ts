@@ -154,6 +154,7 @@ async function main(): Promise<void> {
       && !dxgiReplayRuntimeEnabled([DXGI_REPLAY_RUNTIME_SWITCH], false))
   check('explicit diagnostic opt-out wins over the legacy opt-in switch',
     !dxgiReplayRuntimeEnabled([DXGI_REPLAY_DISABLE_SWITCH])
+      && !dxgiReplayRuntimeEnabled([DXGI_REPLAY_DISABLE_SWITCH], true)
       && !dxgiReplayRuntimeEnabled([DXGI_REPLAY_RUNTIME_SWITCH, DXGI_REPLAY_DISABLE_SWITCH]))
 
   const locked = { status: 'unavailable', reason: 'duplicate-access-denied', stages: [] } as const

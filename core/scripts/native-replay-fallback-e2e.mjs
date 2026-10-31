@@ -441,6 +441,7 @@ try {
       '--no-login-item',
       '--capture-now=18',
       `--simulate-no-frames=${simulatedDisplayId}`,
+      '--disable-dxgi-native-replay',
     ],
     {
       cwd: coreDir,

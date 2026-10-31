@@ -40,11 +40,15 @@ the next public release is **stable `v0.6.0`**, not an RC, draft, or historical
 0.6.0 preserves the default 0.5.0 shipping recorder behavior and may publish
 only after the existing complete `qa:rc`, privacy isolation, updater artifact,
 release-contract, and live site integration gates pass without weakening them.
-The native Windows DXGI replay implementation is an explicit opt-in experimental
-candidate for a later release. Its retained-duration, cadence, past-context,
-backend-ownership, lifecycle, and resource field acceptance remains required
-before that implementation can become a default or a release claim, but it is
-not a 0.6.0 publication gate.
+Following the [2026-10-31 owner decision](https://github.com/r2cuerdame/capturepack/issues/243#issuecomment-6543899455),
+the native Windows DXGI replay implementation is the default replay owner for
+the next candidate after 0.6.0, selected only after a complete READY health
+packet and falling back to the Chromium recorder on any native failure;
+`--disable-dxgi-native-replay` selects the Chromium baseline for diagnostics.
+Its retained-duration, cadence, past-context, backend-ownership, lifecycle, and
+resource acceptance on the deployed installer, including #245's two-hour
+installed test, remains required before that release claim. It was not a 0.6.0
+publication gate.
 
 - Live recording is on by default, holds 30 seconds by default, is configurable
   from 1–60 seconds at 5–30 fps, and records nothing when switched off.

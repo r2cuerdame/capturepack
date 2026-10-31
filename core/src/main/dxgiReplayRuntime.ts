@@ -500,7 +500,7 @@ export function dxgiReplayRuntimeEnabled(
   argv: readonly string[],
   injected?: boolean,
 ): boolean {
-  return injected ?? !argv.includes(DXGI_REPLAY_DISABLE_SWITCH)
+  return !argv.includes(DXGI_REPLAY_DISABLE_SWITCH) && (injected ?? true)
 }
 
 export function selectDxgiReplayRuntime(input: {
