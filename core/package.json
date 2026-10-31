@@ -89,6 +89,7 @@
     "check:about": "node scripts/about-window-check.mjs",
     "check:update-notice": "node scripts/update-notice-check.mjs",
     "check:update-restart": "node scripts/update-restart-check.mjs",
+    "check:update-install": "node scripts/update-install-check.mjs",
     "check:telemetry": "node scripts/telemetry-check.mjs",
     "check:actions": "node scripts/action-pipeline-check.mjs",
     "check:clipboard-contract": "node scripts/clipboard-contract-check.mjs",

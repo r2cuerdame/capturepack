@@ -242,6 +242,10 @@ type EditorOutcome =
 let flowActive = false
 let activeEditor: BrowserWindow | null = null
 
+export function captureFlowActive(): boolean {
+  return flowActive
+}
+
 // How long the flow kept the user waiting (ROADMAP: "never sacrifice the
 // 5-second workflow"). One flow at a time is already guaranteed by `flowActive`
 // above, so this is module state rather than a parameter threaded through every

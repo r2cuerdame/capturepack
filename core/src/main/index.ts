@@ -50,13 +50,22 @@ import {
   noteRenderEnded,
   saveNowRequest,
 } from './saveNow'
-import { startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
+import { anyPackOperationActive } from './packOperations'
+import { captureFlowActive, startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
 import { dailyTelemetryLaunchPolicy, sendDailyTelemetry, telemetryOs } from './telemetry'
-import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
+import {
+  checkNow,
+  initUpdater,
+  installPendingUpdateBeforeCapture,
+  relaunchAfterSessionEnd,
+  restartAndUpdate,
+  setUpdateInstallBusyProbe,
+  updaterState,
+} from './updater'
 import { shouldAnnounceUpdate } from './updateNotice'
 import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
 
@@ -253,6 +262,23 @@ function main(): void {
     // `firstRun` is TRUE only when no settings file existed a moment ago — the
     // one honest fresh-install signal (GOAL "Welcome": never shown on update).
     const { settings, firstRun } = loadSettings()
+    if (await installPendingUpdateBeforeCapture(settings.autoUpdateCheck)) {
+      app.quit()
+      return
+    }
+    setUpdateInstallBusyProbe(() => captureFlowActive() || anyPackOperationActive())
+    let sessionEnding = false
+    app.on('browser-window-created', (_event, window) => {
+      window.on('session-end', (event) => {
+        if (sessionEnding) return
+        sessionEnding = true
+        relaunchAfterSessionEnd(
+          event.reasons,
+          { autoInstall: settings.autoUpdateCheck, launchAtLogin: settings.launchAtLogin },
+          LOGIN_HIDDEN_ARG,
+        )
+      })
+    })
     const telemetryPolicy = dailyTelemetryLaunchPolicy(app.isPackaged, process.env)
     if (telemetryPolicy.enabled) {
       void sendDailyTelemetry({
