@@ -1081,10 +1081,28 @@ Electron stub that could drift out from under the rule.
 
 | Situation | Behaviour |
 |---|---|
-| Tray **Quit** | Installs on exit (`autoInstallOnAppQuit`), unchanged. |
-| Process killed (no Quit) | The next start installs it silently **before** MCP, the recorders or the tray start, then relaunches the new version. |
-| Windows shutdown / restart / sign-out | Relaunches at the next sign-in, where the start above installs it before capture. With launch at login off, a one-shot `HKCU\…\RunOnce` entry provides that relaunch. |
-| Capture or save in progress | **Restart and update** waits until the capture flow and every pack operation have finished, then installs. It never cancels them. |
+| Tray **Quit** | Installs on exit (`autoInstallOnAppQuit`). With an update waiting, Quit first waits for a capture/save in progress. |
+| Process killed (no Quit) | The next start installs it silently **before** MCP, the recorders or the tray start, then relaunches the new version. Nothing can be capturing or saving yet. |
+| Windows shutdown / restart / sign-out | Installs **during** the shutdown: Windows is held until Setup finishes, then continues. The app comes back at the next sign-in (launch at login, or a one-shot `HKCU\…\RunOnce` entry when that is off). |
+| Capture or save in progress | Every path above, and **Restart and update**, waits until the capture flow and every pack operation have finished, then installs. It never cancels them. |
+
+Who owns what at shutdown:
+
+1. The app answers the shutdown query by holding it, disarms its own
+   install-on-quit and starts a guardian (a hidden-console Windows PowerShell
+   with a small topmost window and a shutdown block reason) that waits for the
+   app's process id.
+2. The app waits for its capture/save to finish, then quits through will-quit.
+3. Only after the app process has exited does the guardian run Setup
+   (`--updated /S`, no `--force-run`), and it holds Windows until Setup exits.
+4. Windows continues. At the next sign-in, launch at login or RunOnce starts the
+   new version. If the shutdown was cancelled instead, the guardian removes the
+   RunOnce entry and starts the app straight away.
+5. The next start logs the guardian's result from `session-end-install.json`.
+
+A critical shutdown cannot be held. Then, and whenever the guardian cannot get
+ready, nothing installs during the shutdown and the next start installs before
+capture.
 
 Safeguards:
 
@@ -1094,16 +1112,16 @@ Safeguards:
   record is dropped.
 - The startup install is attempted at most once per running version. An
   installer that fails or cannot start leaves the current version running, and
-  later starts do not loop on it.
-- The install is skipped while automatic update checks are turned off, the
-  same as `autoInstallOnAppQuit`.
-- Setup keeps owning stand-down, process close and relaunch through
-  `build/installer.nsh`, and the single-instance lock still rejects any
-  duplicate tray process.
-
-Windows does not let a per-user process finish an NSIS reinstall during
-shutdown: it can end the installer partway through extraction. So the install
-happens at the first sign-in after the shutdown, before any capture.
+  later starts do not loop on it. A failed startup attempt also stops shutdown
+  installs of that download.
+- Nothing installs while automatic update checks are turned off, the same as
+  `autoInstallOnAppQuit`.
+- One installer at a time: install-on-quit is disarmed whenever a session ends,
+  so the shutdown teardown never starts a second, unguarded Setup.
+- Setup keeps owning stand-down, native-host exit and process close through
+  `build/installer.nsh`. Relaunch belongs to Setup (`--force-run`) for
+  **Restart and update** and the startup install, and to Windows sign-in for a
+  shutdown. The single-instance lock still rejects any duplicate tray process.
 
 `check:update-install` holds these rules and their wiring.
 
