@@ -549,8 +549,9 @@ async function main(): Promise<void> {
         JSON.stringify(result),
       )
       check('the result is read once', !existsSync(resultFile))
-      await sleep(500)
       const relaunch = path.join(work, 'app-ran.txt')
+      for (let waited = 0; waited < 15_000 && !existsSync(relaunch); waited += 200) await sleep(200)
+      await sleep(300)
       check(
         'a shutdown that was queried and then cancelled gets the app back, hidden',
         existsSync(relaunch) && readFileSync(relaunch, 'utf8').trim() === '--openAsHidden',
@@ -558,7 +559,7 @@ async function main(): Promise<void> {
     } finally {
       if (hostApp !== null && hostApp.exitCode === null) hostApp.kill()
       if (guardianPid > 0) killQuietly(guardianPid)
-      rmSync(work, { recursive: true, force: true })
+      rmSync(work, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
     }
   })
 
