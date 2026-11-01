@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -303,6 +304,7 @@ export async function runSessionEndHandoff(
 
 export const GUARDIAN_READY = 'capturepack-update-guardian-ready'
 export const GUARDIAN_READY_TIMEOUT_MS = 20_000
+const GUARDIAN_PID = 'capturepack-update-guardian-pid '
 const SM_SHUTTINGDOWN = 0x2000
 export const SESSION_END_RESULT_FILE = 'session-end-install.json'
 
@@ -460,4 +462,86 @@ export function powerShellEncodedArgs(script: string): string[] {
     '-EncodedCommand',
     Buffer.from(script, 'utf16le').toString('base64'),
   ]
+}
+
+export function sessionEndGuardianLauncherScript(): string {
+  return [
+    `$ErrorActionPreference = 'Stop'`,
+    `$info = New-Object System.Diagnostics.ProcessStartInfo`,
+    `$info.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName`,
+    `$info.Arguments = [Console]::In.ReadToEnd().Trim()`,
+    `$info.UseShellExecute = $false`,
+    `$info.CreateNoWindow = $true`,
+    `$info.RedirectStandardOutput = $true`,
+    `$guardian = [System.Diagnostics.Process]::Start($info)`,
+    `[Console]::Out.WriteLine('${GUARDIAN_PID}' + $guardian.Id)`,
+    `[Console]::Out.Flush()`,
+    `while ($null -ne ($line = $guardian.StandardOutput.ReadLine())) {`,
+    `  if ($line.Trim() -eq '${GUARDIAN_READY}') {`,
+    `    [Console]::Out.WriteLine('${GUARDIAN_READY}')`,
+    `    [Console]::Out.Flush()`,
+    `    exit 0`,
+    `  }`,
+    `}`,
+    `exit 1`,
+    ``,
+  ].join('\n')
+}
+
+export interface SessionEndGuardianLaunch {
+  ready: boolean
+  pid: number | null
+  reason: string
+}
+
+export function launchSessionEndGuardian(
+  powerShellPath: string,
+  script: string,
+  timeoutMs = GUARDIAN_READY_TIMEOUT_MS,
+): Promise<SessionEndGuardianLaunch> {
+  return new Promise<SessionEndGuardianLaunch>((resolve) => {
+    let launcher: ChildProcess
+    try {
+      launcher = spawn(powerShellPath, powerShellEncodedArgs(sessionEndGuardianLauncherScript()), {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        windowsHide: true,
+      })
+    } catch (err) {
+      resolve({ ready: false, pid: null, reason: `could not be started: ${String(err)}` })
+      return
+    }
+    let settled = false
+    let output = ''
+    let pid: number | null = null
+    const settle = (failure: string | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      launcher.stdout?.removeAllListeners('data')
+      launcher.stdout?.destroy()
+      if (failure === null) {
+        launcher.unref()
+      } else {
+        launcher.kill()
+        if (pid !== null) {
+          try {
+            process.kill(pid)
+          } catch {}
+        }
+      }
+      resolve({ ready: failure === null, pid, reason: failure ?? 'ready' })
+    }
+    const timer = setTimeout(() => settle('did not get ready in time'), timeoutMs)
+    launcher.stdout?.on('data', (chunk: Buffer) => {
+      output += chunk.toString('utf8')
+      const lines = output.split(/\r?\n/u).map((line) => line.trim())
+      const announced = lines.find((line) => line.startsWith(GUARDIAN_PID))
+      if (announced !== undefined) pid = Number(announced.slice(GUARDIAN_PID.length)) || null
+      if (lines.includes(GUARDIAN_READY)) settle(null)
+    })
+    launcher.once('error', (err) => settle(`could not be started: ${String(err)}`))
+    launcher.once('exit', (code) => settle(`exited early (${String(code)})`))
+    launcher.stdin?.on('error', () => {})
+    launcher.stdin?.end(powerShellEncodedArgs(script).join(' '))
+  })
 }

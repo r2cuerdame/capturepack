@@ -25,9 +25,7 @@ import {
   nextPendingUpdate,
   pendingUpdateFile,
   readPendingUpdate,
-  GUARDIAN_READY,
-  GUARDIAN_READY_TIMEOUT_MS,
-  powerShellEncodedArgs,
+  launchSessionEndGuardian,
   runOnceArgs,
   runSessionEndHandoff,
   sessionEndGuardianScript,
@@ -437,41 +435,12 @@ function startSessionEndGuardian(update: PendingUpdate, message: string, hiddenA
     appPath: process.execPath,
     appArgs: [hiddenArg],
   })
-  return new Promise<boolean>((resolve) => {
-    let settled = false
-    let output = ''
-    const child = spawn(
-      windowsSystemPath('WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      powerShellEncodedArgs(script),
-      { detached: true, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
-    )
-    const settle = (ready: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      child.stdout?.removeAllListeners('data')
-      child.stdout?.destroy()
-      if (ready) child.unref()
-      else child.kill()
-      resolve(ready)
-    }
-    const timer = setTimeout(() => {
-      logWarn('[updater] the session-end install guardian did not get ready in time')
-      settle(false)
-    }, GUARDIAN_READY_TIMEOUT_MS)
-    child.stdout?.on('data', (chunk: Buffer) => {
-      output += chunk.toString('utf8')
-      if (output.includes(GUARDIAN_READY)) settle(true)
-    })
-    child.once('error', (err) => {
-      logError('[updater] the session-end install guardian could not be started:', err)
-      settle(false)
-    })
-    child.once('exit', (code) => {
-      if (!settled) logWarn(`[updater] the session-end install guardian exited early (${String(code)})`)
-      settle(false)
-    })
-  })
+  return launchSessionEndGuardian(windowsSystemPath('WindowsPowerShell', 'v1.0', 'powershell.exe'), script).then(
+    (launch) => {
+      if (!launch.ready) logWarn(`[updater] the session-end install guardian ${launch.reason}`)
+      return launch.ready
+    },
+  )
 }
 
 export function holdSessionEndForUpdate(

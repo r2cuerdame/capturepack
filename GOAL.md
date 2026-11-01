@@ -1092,7 +1092,9 @@ Who owns what at shutdown:
    the query even with recording off and no other window open), disarms its own
    install-on-quit and starts a guardian (a hidden-console Windows PowerShell
    with a small topmost window and a shutdown block reason) that waits for the
-   app's process id.
+   app's process id. A short-lived PowerShell launcher starts the guardian, so
+   the guardian has a console to run in and is not killed with the app's own
+   child processes when the app exits.
 2. The app waits for its capture/save to finish, then quits through will-quit.
 3. Only after the app process has exited does the guardian run Setup
    (`--updated /S`, no `--force-run`), and it holds Windows until Setup exits.

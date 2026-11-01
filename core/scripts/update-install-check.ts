@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -58,6 +58,59 @@ async function section(title: string, body: () => void | Promise<void>): Promise
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 const windowsPowerShell = (): string =>
   path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+const GUARDIAN_HOST = 'guardian-host'
+
+interface GuardianHostInput {
+  installerPath: string
+  resultFile: string
+  appPath: string
+  runOncePath: string
+}
+
+function processAlive(pid: number): boolean {
+  if (pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (processAlive(pid)) {
+    if (Date.now() > deadline) return false
+    await sleep(200)
+  }
+  return true
+}
+
+function killQuietly(pid: number): void {
+  if (pid <= 0) return
+  try {
+    process.kill(pid)
+  } catch {}
+}
+
+async function guardianHostGroup(): Promise<void> {
+  const input = JSON.parse(process.argv[3] ?? '{}') as GuardianHostInput
+  const script = install.sessionEndGuardianScript({
+    installerPath: input.installerPath,
+    installerArgs: install.sessionEndInstallArgs(),
+    waitPid: process.pid,
+    version: '0.6.1',
+    message: 'CapturePack update check',
+    resultFile: input.resultFile,
+    appPath: input.appPath,
+    appArgs: ['--openAsHidden'],
+    runOncePath: input.runOncePath,
+  })
+  const launch = await install.launchSessionEndGuardian(windowsPowerShell(), script)
+  console.log(`${GUARDIAN_HOST} ${JSON.stringify(launch)}`)
+  setInterval(() => {}, 1000)
+}
 
 function queryEndSession(pid: number, title: string): Promise<{ answer: string; stderr: string }> {
   const script = [
@@ -417,13 +470,25 @@ async function main(): Promise<void> {
       return
     }
     const work = mkdtempSync(path.join(tmpdir(), "capturepack-guardian-O'Brien\u2019s "))
+    let hostApp: ChildProcess | null = null
+    let guardianPid = 0
     try {
       const installerPath = path.join(work, 'Setup.cmd')
       writeFileSync(installerPath, '@echo off\r\n>"%~dp0installer-ran.txt" echo %*\r\nexit /b 7\r\n')
       const appPath = path.join(work, 'App.cmd')
       writeFileSync(appPath, '@echo off\r\n>"%~dp0app-ran.txt" echo %*\r\n')
       const resultFile = install.sessionEndResultFile(work)
-      const fakeApp = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+      const host: GuardianHostInput = {
+        installerPath,
+        resultFile,
+        appPath,
+        runOncePath: `HKCU:\\Software\\CapturePackUpdateCheck-${randomUUID()}`,
+      }
+      const fakeApp = spawn(process.execPath, [process.argv[1] ?? '', GUARDIAN_HOST, JSON.stringify(host)], {
+        stdio: ['ignore', 'pipe', 'inherit'],
+        windowsHide: true,
+      })
+      hostApp = fakeApp
       let appExitedAt = 0
       const appExited = new Promise<void>((resolve) => {
         fakeApp.once('exit', () => {
@@ -431,58 +496,43 @@ async function main(): Promise<void> {
           resolve()
         })
       })
-      const script = install.sessionEndGuardianScript({
-        installerPath,
-        installerArgs: install.sessionEndInstallArgs(),
-        waitPid: fakeApp.pid ?? 0,
-        version: '0.6.1',
-        message: 'CapturePack update check',
-        resultFile,
-        appPath,
-        appArgs: ['--openAsHidden'],
-        runOncePath: `HKCU:\\Software\\CapturePackUpdateCheck-${randomUUID()}`,
-      })
-      const guardian = spawn(windowsPowerShell(), install.powerShellEncodedArgs(script), {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      })
-      let stdout = ''
-      let stderr = ''
-      guardian.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8')
-      })
-      const guardianExit = new Promise<number | null>((resolve) => guardian.once('exit', resolve))
-      const ready = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), 30_000)
-        guardian.stdout.on('data', (chunk: Buffer) => {
-          stdout += chunk.toString('utf8')
-          if (stdout.includes(install.GUARDIAN_READY)) {
-            clearTimeout(timer)
-            resolve(true)
-          }
-        })
-        guardian.once('exit', () => {
+      let hostOutput = ''
+      const launch = await new Promise<install.SessionEndGuardianLaunch | null>((resolve) => {
+        const timer = setTimeout(() => resolve(null), install.GUARDIAN_READY_TIMEOUT_MS + 10_000)
+        fakeApp.stdout.on('data', (chunk: Buffer) => {
+          hostOutput += chunk.toString('utf8')
+          const line = hostOutput.split(/\r?\n/u).find((entry) => entry.startsWith(`${GUARDIAN_HOST} `))
+          if (line === undefined) return
           clearTimeout(timer)
-          resolve(false)
+          resolve(JSON.parse(line.slice(GUARDIAN_HOST.length + 1)) as install.SessionEndGuardianLaunch)
+        })
+        fakeApp.once('exit', () => {
+          clearTimeout(timer)
+          resolve(null)
         })
       })
-      check('the guardian reports ready while the app still runs', ready && fakeApp.exitCode === null, stderr.trim())
+      guardianPid = launch?.pid ?? 0
+      check(
+        'the app starts the guardian the way the shipped app does, and it reports ready while the app still runs',
+        launch?.ready === true && guardianPid > 0 && fakeApp.exitCode === null,
+        JSON.stringify(launch),
+      )
       await sleep(1500)
       check(
         'setup has not started while the app is alive',
         !existsSync(path.join(work, 'installer-ran.txt')),
       )
-      const query = await queryEndSession(guardian.pid ?? 0, 'CapturePack')
+      const query = await queryEndSession(guardianPid, 'CapturePack')
       check(
         'the guardian refuses a shutdown query while the install is pending',
         query.answer === '0',
         `${query.answer} ${query.stderr}`,
       )
-      check('the refused query does not close the guardian', guardian.exitCode === null)
+      check('the refused query does not close the guardian', processAlive(guardianPid))
       fakeApp.kill()
       await appExited
-      const exitCode = await Promise.race([guardianExit, sleep(60_000).then(() => 'timeout' as const)])
-      if (exitCode === 'timeout') guardian.kill()
+      const guardianEnded = await waitForExit(guardianPid, 60_000)
+      if (!guardianEnded) killQuietly(guardianPid)
       const marker = path.join(work, 'installer-ran.txt')
       check(
         'setup runs after the app exits, silently and without --force-run',
@@ -491,8 +541,8 @@ async function main(): Promise<void> {
           readFileSync(marker, 'utf8').trim() === '--updated /S',
         existsSync(marker) ? readFileSync(marker, 'utf8').trim() : 'no marker',
       )
-      check('the guardian ends with setup', exitCode === 7, `${String(exitCode)} ${stderr.trim()}`)
       const result = install.takeSessionEndResult(resultFile)
+      check('the guardian outlives the app that started it and ends with setup', guardianEnded && result?.exitCode === 7)
       check(
         'it leaves a result for the next start',
         result?.version === '0.6.1' && result.exitCode === 7 && result.relaunched,
@@ -506,6 +556,8 @@ async function main(): Promise<void> {
         existsSync(relaunch) && readFileSync(relaunch, 'utf8').trim() === '--openAsHidden',
       )
     } finally {
+      if (hostApp !== null && hostApp.exitCode === null) hostApp.kill()
+      if (guardianPid > 0) killQuietly(guardianPid)
       rmSync(work, { recursive: true, force: true })
     }
   })
@@ -687,6 +739,12 @@ async function main(): Promise<void> {
       /installerArgs: sessionEndInstallArgs\(\)[\s\S]*?waitPid: process\.pid/u.test(updaterSource),
     )
     check(
+      'the shipped app starts the guardian through the launcher the end-to-end test runs',
+      /return launchSessionEndGuardian\(windowsSystemPath\('WindowsPowerShell', 'v1\.0', 'powershell\.exe'\), script\)/u.test(
+        updaterSource,
+      ) && !updaterSource.includes("'powershell.exe'),\n      powerShellEncodedArgs("),
+    )
+    check(
       'every download is remembered for a killed run',
       /'update-downloaded'[\s\S]*?rememberDownloadedUpdate\(info\.version, info\.downloadedFile\)/u.test(updaterSource),
     )
@@ -831,7 +889,12 @@ async function handoffGroup(): Promise<void> {
   stubApp.emit('will-quit')
 }
 
-const groups: Record<string, () => Promise<void>> = { main, restart: restartGroup, handoff: handoffGroup }
+const groups: Record<string, () => Promise<void>> = {
+  main,
+  restart: restartGroup,
+  handoff: handoffGroup,
+  [GUARDIAN_HOST]: guardianHostGroup,
+}
 const group = groups[process.argv[2] ?? 'main']
 
 ;(group ?? (() => Promise.reject(new Error(`unknown group ${String(process.argv[2])}`))))()
