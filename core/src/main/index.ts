@@ -50,6 +50,7 @@ import {
   noteRenderEnded,
   saveNowRequest,
 } from './saveNow'
+import { captureOrSaveInProgress } from './captureActivity'
 import { anyPackOperationActive } from './packOperations'
 import { captureFlowActive, startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
@@ -263,7 +264,15 @@ function main(): void {
       app.quit()
       return
     }
-    setUpdateInstallBusyProbe(() => captureFlowActive() || anyPackOperationActive())
+    setUpdateInstallBusyProbe(
+      () => captureOrSaveInProgress(captureFlowActive()) || anyPackOperationActive(),
+      (kind) => {
+        new Notification({
+          title: 'CapturePack',
+          body: uiT(settings)(kind === 'quit' ? 'update.quitWaitsForSave' : 'update.restartWaitsForSave'),
+        }).show()
+      },
+    )
     let sessionEnding = false
     app.on('browser-window-created', (_event, window) => {
       window.on('query-session-end', (event) => {

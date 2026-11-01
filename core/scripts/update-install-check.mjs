@@ -51,7 +51,7 @@ try {
     { stdio: ['ignore', 'ignore', 'inherit'] },
   )
   let failedGroups = 0
-  for (const group of ['main', 'restart', 'handoff']) {
+  for (const group of ['main', 'restart', 'handoff', 'editor']) {
     try {
       execFileSync(process.execPath, [bundle, group], { stdio: 'inherit', cwd: path.join(here, '..') })
     } catch {

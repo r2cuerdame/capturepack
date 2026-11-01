@@ -24,6 +24,7 @@ import {
   type SessionEndPlan,
   type SessionEndReason,
 } from '../src/main/updateInstall'
+import * as activity from '../src/main/captureActivity'
 import * as updater from '../src/main/updater'
 import {
   initUpdater,
@@ -713,9 +714,28 @@ async function main(): Promise<void> {
         indexSource,
       ),
     )
+    const sessionSource = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
     check(
-      'every install path waits on the capture flow and pack operations',
-      /setUpdateInstallBusyProbe\(\(\) => captureFlowActive\(\) \|\| anyPackOperationActive\(\)\)/u.test(indexSource),
+      'every install path waits on a real capture/save and pack operations, not on an open editor',
+      /setUpdateInstallBusyProbe\(\s*\(\) => captureOrSaveInProgress\(captureFlowActive\(\)\) \|\| anyPackOperationActive\(\),/u.test(
+        indexSource,
+      ),
+    )
+    check(
+      'a deferred Quit or Restart and update is shown to the user',
+      /setUpdateInstallBusyProbe\([\s\S]*?new Notification\(\{[\s\S]*?'update\.quitWaitsForSave' : 'update\.restartWaitsForSave'[\s\S]*?\.show\(\)/u.test(
+        indexSource,
+      ),
+    )
+    check(
+      'the editor waiting for the user is the only part of a flow that is not busy',
+      /function runEditor\([\s\S]*?\): Promise<EditorOutcome> \{\s*return awaitEditorDecision\(new Promise/u.test(sessionSource),
+    )
+    check(
+      'plugin writes that land while the editor is open count as saving',
+      (sessionSource.match(/await trackPackWrite\(\s*writeUiaPlugin\(/gu) ?? []).length === 2 &&
+        sessionSource.includes('const domWrite = trackPackWrite(writeCapturedDomPlugin(saveFirstHandle))') &&
+        sessionSource.includes('const domWrite: Promise<void> = trackPackWrite((async () => {'),
     )
     check(
       'a shutdown query is held while an update installs',
@@ -763,7 +783,10 @@ function appFixture() {
   mkdirSync(userData, { recursive: true })
   const calls = (autoUpdater as unknown as { calls: unknown[][] }).calls
   const stubApp = app as unknown as { quits: number[]; emit: (event: string) => void }
-  const stubUpdater = autoUpdater as unknown as { emit: (event: string, ...args: unknown[]) => void }
+  const stubUpdater = autoUpdater as unknown as {
+    autoInstallOnAppQuit: boolean
+    emit: (event: string, ...args: unknown[]) => void
+  }
   const hold = (reasons: SessionEndReason[]): boolean =>
     updater.holdSessionEndForUpdate(
       reasons,
@@ -782,10 +805,17 @@ async function restartGroup(): Promise<void> {
   await section('THE APP DEFERS RESTART AND UPDATE', async () => {
     const calls = (autoUpdater as unknown as { calls: unknown[][] }).calls
     let appBusy = true
-    setUpdateInstallBusyProbe(() => appBusy)
+    const notices: string[] = []
+    setUpdateInstallBusyProbe(
+      () => appBusy,
+      (kind) => {
+        notices.push(kind)
+      },
+    )
     restartAndUpdate()
     restartAndUpdate()
     check('no installer is started while a capture/save runs', calls.length === 0, JSON.stringify(calls))
+    check('the wait is shown to the user once', JSON.stringify(notices) === '["restart"]', JSON.stringify(notices))
     appBusy = false
     await sleep(INSTALL_IDLE_POLL_MS + 300)
     check(
@@ -890,10 +920,86 @@ async function handoffGroup(): Promise<void> {
   stubApp.emit('will-quit')
 }
 
+async function editorGroup(): Promise<void> {
+  const { stubApp, stubUpdater } = appFixture()
+
+  await section('AN OPEN EDITOR IS NOT A CAPTURE/SAVE IN PROGRESS', async () => {
+    const decide = activity.awaitEditorDecision as (<T>(decision: Promise<T>) => Promise<T>) | undefined
+    const write = activity.trackPackWrite as (<T>(work: Promise<T>) => Promise<T>) | undefined
+    const inProgress = activity.captureOrSaveInProgress as ((flowActive: boolean) => boolean) | undefined
+    check(
+      'capture/save activity is tracked apart from the editor waiting for the user',
+      typeof decide === 'function' && typeof write === 'function' && typeof inProgress === 'function',
+    )
+    if (decide === undefined || write === undefined || inProgress === undefined) return
+    check('no flow is not busy', !inProgress(false))
+    check('capturing before the editor opens is busy', inProgress(true))
+    let closeEditor: (outcome: string) => void = () => {}
+    const editor = decide(new Promise<string>((resolve) => (closeEditor = resolve)))
+    check('an editor waiting for the user is not busy', !inProgress(true))
+    let finishWrite: () => void = () => {}
+    const pluginWrite = write(new Promise<void>((resolve) => (finishWrite = resolve)))
+    check('a pack write while the editor is open is busy', inProgress(true))
+    finishWrite()
+    await pluginWrite
+    check('the open editor is idle again once that write lands', !inProgress(true))
+    closeEditor('export')
+    check('the save after the editor closes is busy', (await editor) === 'export' && inProgress(true))
+    const failing = write(Promise.reject(new Error('disk full')))
+    await failing.catch(() => {})
+    check('a failed pack write stops counting', !inProgress(false))
+
+    initUpdater({ autoCheck: true })
+    stubUpdater.emit('update-downloaded', { version: '0.6.1', downloadedFile: '' })
+    let flowActive = true
+    const notices: string[] = []
+    setUpdateInstallBusyProbe(
+      () => inProgress(flowActive),
+      (kind) => {
+        notices.push(kind)
+      },
+    )
+    let quits = 0
+    let closeOpenEditor: (outcome: string) => void = () => {}
+    const openEditor = decide(new Promise<string>((resolve) => (closeOpenEditor = resolve)))
+    updater.quitWhenIdle(() => {
+      quits += 1
+    })
+    check(
+      'tray Quit with only an editor open quits at once and installs on quit',
+      quits === 1 && stubUpdater.autoInstallOnAppQuit && notices.length === 0,
+      `${String(quits)} quit(s), ${String(notices.length)} notice(s)`,
+    )
+    closeOpenEditor('cancel')
+    await openEditor
+    let finishSave: () => void = () => {}
+    const save = write(new Promise<void>((resolve) => (finishSave = resolve)))
+    flowActive = false
+    updater.quitWhenIdle(() => {
+      quits += 1
+    })
+    updater.quitWhenIdle(() => {
+      quits += 1
+    })
+    check(
+      'tray Quit during a real save waits and tells the user once',
+      quits === 1 && notices.length === 1 && notices[0] === 'quit',
+      `${String(quits)} quit(s), notices ${JSON.stringify(notices)}`,
+    )
+    finishSave()
+    await save
+    await sleep(INSTALL_IDLE_POLL_MS + 300)
+    check('the save is not cut short, then Quit installs exactly once', quits === 2, String(quits))
+  })
+
+  stubApp.emit('will-quit')
+}
+
 const groups: Record<string, () => Promise<void>> = {
   main,
   restart: restartGroup,
   handoff: handoffGroup,
+  editor: editorGroup,
   [GUARDIAN_HOST]: guardianHostGroup,
 }
 const group = groups[process.argv[2] ?? 'main']

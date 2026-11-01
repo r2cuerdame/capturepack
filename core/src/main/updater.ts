@@ -278,13 +278,18 @@ export function setAutoUpdateCheck(enabled: boolean): void {
 }
 
 let installBusy: () => boolean = () => false
-type UpdateExit = 'restart' | 'quit'
+export type UpdateExit = 'restart' | 'quit'
+let exitDeferredNotice: (kind: UpdateExit, version: string | null) => void = () => {}
 let exitGate: { kind: UpdateExit; gate: IdleGate } | null = null
 let restartInstallStarted = false
 let sessionEndHandoff: Promise<SessionEndOutcome> | null = null
 
-export function setUpdateInstallBusyProbe(probe: () => boolean): void {
+export function setUpdateInstallBusyProbe(
+  probe: () => boolean,
+  onExitDeferred?: (kind: UpdateExit, version: string | null) => void,
+): void {
   installBusy = probe
+  if (onExitDeferred !== undefined) exitDeferredNotice = onExitDeferred
 }
 
 function requestUpdateExit(kind: UpdateExit, run: () => void): void {
@@ -301,7 +306,14 @@ function requestUpdateExit(kind: UpdateExit, run: () => void): void {
     kind,
     gate: createIdleGate({
       isBusy: () => installBusy(),
-      onDeferred: () => logInfo(`[updater] ${kind} and update waits for the capture/save in progress`),
+      onDeferred: () => {
+        logInfo(`[updater] ${kind} and update waits for the capture/save in progress`)
+        try {
+          exitDeferredNotice(kind, lastDownloadedVersion)
+        } catch (err) {
+          logWarn(`[updater] could not show that the ${kind} waits: ${String(err)}`)
+        }
+      },
       run,
     }),
   }

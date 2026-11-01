@@ -1084,7 +1084,17 @@ Electron stub that could drift out from under the rule.
 | Tray **Quit** | Installs on exit (`autoInstallOnAppQuit`). With an update waiting, Quit first waits for a capture/save in progress. |
 | Process killed (no Quit) | The next start installs it silently **before** MCP, the recorders or the tray start, then relaunches the new version. Nothing can be capturing or saving yet. |
 | Windows shutdown / restart / sign-out | Installs **during** the shutdown: Windows is held until Setup finishes, then continues. The app comes back at the next sign-in (launch at login, or a one-shot `HKCU\…\RunOnce` entry when that is off). |
-| Capture or save in progress | Every path above, and **Restart and update**, waits until the capture flow and every pack operation have finished, then installs. It never cancels them. |
+| Capture or save in progress | Every path above, and **Restart and update**, waits until the capture/save in progress has finished, then installs. It never cancels it. When Quit or Restart and update waits, a notification says so. |
+
+What counts as a capture/save in progress: capturing up to the moment the
+editor opens, the save after the editor closes (Save, Save As New, re-edit
+save), a plugin write that lands in the save-first pack while the editor is
+open, and every pack operation (History rename/delete, Share Copy). An editor
+that is only open, waiting for the user, does **not** count: the pack was
+already written by save-first, so Quit with an update waiting closes the editor
+and installs exactly as Quit does without one. Deferring Quit on an open editor
+would turn the tray Quit into a silent no-op for as long as the editor stays
+open.
 
 Who owns what at shutdown:
 
