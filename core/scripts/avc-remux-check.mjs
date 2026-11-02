@@ -70,6 +70,56 @@ test('actual production ring reads local-offset legal fMP4 and honest frame dura
   assert.ok(replay.durationMs>=200 && replay.durationMs<=202)
   times(new Uint8Array(replay.buffer))
 })
+for (const key of [false, true]) test(`sparse ${key ? 'key' : 'delta'} tail preserves history without duplicating the preceding gap`, () => {
+  const mux = new Muxer(budget)
+  const endAtMs = 20_000
+  const output = mux.pushBytes(stream([block(0, true), block(10_000, key)]), endAtMs)
+  if (key) {
+    assert.ok(Math.abs(output.at(-1).endAtMs - (endAtMs - 66.667)) < 0.001)
+  }
+  output.push(...mux.finish(endAtMs))
+  const bytes = join(...output.map(chunk => chunk.bytes))
+  const durations = []
+  for (const moof of boxes(bytes).filter(item => item.type === 'moof')) {
+    const traf = boxes(bytes, moof.start + 8, moof.end).find(item => item.type === 'traf')
+    const trun = boxes(bytes, traf.start + 8, traf.end).find(item => item.type === 'trun')
+    const view = new DataView(bytes.buffer, bytes.byteOffset)
+    for (let i = 0; i < view.getUint32(trun.start + 12); i++) {
+      durations.push(view.getUint32(trun.start + 20 + i * 12))
+    }
+  }
+  assert.deepEqual(durations, [10_000_000, 66_667])
+  const ring = new Ring(15_000, 6_000_000)
+  for (const chunk of output) ring.pushBytes(chunk.bytes, chunk.endAtMs)
+  const replay = ring.assemble(endAtMs)
+  assert.ok(replay, 'a valid sparse GOP inside retention must remain available')
+  assert.ok(Math.abs(replay.durationMs - 10_067) <= 1)
+  assert.equal(ring.stats().timing.sampleCount, 2)
+})
+
+test('fractional fragment clocks expire exactly at the retention boundary', () => {
+  const mux = new Muxer(budget)
+  const ring = new Ring(30_000, 6_000_000)
+  mux.pushBytes(prefix(), 1000)
+  for (let sequence = 0; sequence < 1600; sequence++) {
+    const chunks = mux.pushBytes(cluster(sequence * 200, [block(0, true), block(67, false), block(134, false)]), 1200 + sequence * 200)
+    for (const chunk of chunks) ring.pushBytes(chunk.bytes, chunk.endAtMs)
+    assert.ok(ring.stats().fragmentCount <= 150, `retained ${ring.stats().fragmentCount} fragments at delivery ${sequence}`)
+    assert.ok(ring.stats().retainedDurationMs <= 30_000)
+  }
+})
+
+test('fractional retention keeps recent history until its full age expires', () => {
+  const { output } = complete(stream([block(0, true), block(67, true), block(134, true)]))
+  const ring = new Ring(30_000, 6_000_000)
+  ring.pushBytes(output[0].bytes, 1000)
+  ring.pushBytes(output[1].bytes, 1000.333)
+  ring.pushBytes(output[2].bytes, 31_000.332)
+  assert.equal(ring.stats().fragmentCount, 2)
+  ring.pushBytes(output[3].bytes, 31_000.333)
+  assert.equal(ring.stats().fragmentCount, 2)
+})
+
 test('uint64 media clocks preserve a stream beyond the uint32 timestamp boundary', () => {
   const {bytes} = complete(stream(undefined,5_000_000))
   assert.equal(times(bytes)[0],5_000_000_000n)

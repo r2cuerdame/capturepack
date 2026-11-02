@@ -192,7 +192,6 @@ export class AvcMatroskaRemuxer {
   private width = 0
   private height = 0
   private nominalDuration: number
-  private lastDuration: number
   private sequence = 0
   private latestTimestamp: bigint | null = null
   private emittedSamples = 0n
@@ -203,7 +202,6 @@ export class AvcMatroskaRemuxer {
     if (!Number.isSafeInteger(budgetBytes) || budgetBytes < MAX_METADATA_BYTES) throw new Error('invalid AVC remux budget')
     this.nominalDuration = Math.round(SCALE / fps)
     if (!Number.isSafeInteger(this.nominalDuration) || this.nominalDuration <= 0) throw new Error('invalid AVC frame rate')
-    this.lastDuration = this.nominalDuration
   }
 
   pushBytes(data: Uint8Array<ArrayBufferLike>, endAtMs: number): AvcRemuxChunk[] {
@@ -299,7 +297,7 @@ export class AvcMatroskaRemuxer {
     }
     this.finished = true
     if (this.samples.length === 0) return []
-    this.samples[this.samples.length - 1]!.duration = this.lastDuration
+    this.samples[this.samples.length - 1]!.duration = this.nominalDuration
     const last = this.samples[this.samples.length - 1]!
     const end = last.timestamp + BigInt(last.duration)
     return this.anchor([{ bytes: this.emit(), end }], endAtMs)
@@ -346,7 +344,7 @@ export class AvcMatroskaRemuxer {
     const duration = scalar(fields, 0x23e383, BigInt(this.nominalDuration) * 1000n)
     const microseconds = Number((duration + 500n) / 1000n)
     if (!Number.isSafeInteger(microseconds) || microseconds <= 0 || microseconds > 0xffffffff) throw new Error('invalid AVC default frame duration')
-    this.nominalDuration = microseconds; this.lastDuration = microseconds
+    this.nominalDuration = microseconds
   }
 
   private readBlock(payload: Uint8Array<ArrayBufferLike>, key: boolean,
@@ -400,7 +398,6 @@ export class AvcMatroskaRemuxer {
       previous.duration = duration
       // Chromium can repeat its zero timestamp while a resumed stream starts.
       // Preserve both samples with a zero trun duration; never invent a gap.
-      if (duration > 0) this.lastDuration = duration
       if (isKey) output.push({ bytes: this.emit(), end: timestamp })
     } else if (!isKey) throw new Error('AVC recording must begin at a keyframe')
     if (this.sampleBytes + bytes.byteLength + this.pending.byteLength > this.budgetBytes) throw new Error('AVC GOP exceeds remux byte budget')
@@ -424,7 +421,7 @@ export class AvcMatroskaRemuxer {
   private anchor(output: Array<{ bytes: Uint8Array<ArrayBuffer>; end: bigint | null }>,
     endAtMs: number): AvcRemuxChunk[] {
     const latestEnd = this.latestTimestamp === null ? null :
-      this.latestTimestamp + BigInt(this.lastDuration)
+      this.latestTimestamp + BigInt(this.nominalDuration)
     return output.map(item => ({ bytes: item.bytes, endAtMs: item.end === null || latestEnd === null
       ? endAtMs : endAtMs - Number(latestEnd - item.end) / 1000 }))
   }
