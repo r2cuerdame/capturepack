@@ -1081,6 +1081,73 @@ The policy lives alone in `core/src/main/updateNotice.ts` with no imports, so
 `check:update-notice` can hold it — and the app's use of it — without an
 Electron stub that could drift out from under the rule.
 
+**When a downloaded update installs (#149)**
+
+| Situation | Behaviour |
+|---|---|
+| Tray **Quit** | Installs on exit (`autoInstallOnAppQuit`). With an update waiting, Quit first waits for a capture/save in progress. |
+| Process killed (no Quit) | The next start installs it silently **before** MCP, the recorders or the tray start, then relaunches the new version. Nothing can be capturing or saving yet. |
+| Windows shutdown / restart / sign-out | Installs **during** the shutdown: Windows is held until Setup finishes, then continues. The app comes back at the next sign-in (launch at login, or a one-shot `HKCU\…\RunOnce` entry when that is off). |
+| Capture or save in progress | Every path above, and **Restart and update**, waits until the capture/save in progress has finished, then installs. It never cancels it. When Quit or Restart and update waits, a notification says so. |
+
+What counts as a capture/save in progress: capturing up to the moment the
+editor opens, the save after the editor closes (Save, Save As New, re-edit
+save), a plugin write that lands in the save-first pack while the editor is
+open, and every pack operation (History rename/delete, Share Copy). An editor
+that is only open, waiting for the user, does **not** count: the pack was
+already written by save-first, so Quit with an update waiting closes the editor
+and installs exactly as Quit does without one. Deferring Quit on an open editor
+would turn the tray Quit into a silent no-op for as long as the editor stays
+open.
+
+Who owns what at shutdown:
+
+1. The app answers the shutdown query by holding it (a hidden window receives
+   the query even with recording off and no other window open), disarms its own
+   install-on-quit and starts a guardian (a hidden-console Windows PowerShell
+   with a small topmost window and a shutdown block reason) that waits for the
+   app's process id. A short-lived PowerShell launcher starts the guardian, so
+   the guardian has a console to run in and is not killed with the app's own
+   child processes when the app exits.
+2. The app waits for its capture/save to finish, then quits through will-quit.
+3. Only after the app process has exited does the guardian run Setup
+   (`--updated /S`, no `--force-run`), and it holds Windows until Setup exits.
+4. Windows continues. At the next sign-in, launch at login or RunOnce starts the
+   new version. If the shutdown was cancelled instead (Windows no longer reports
+   that it is shutting down when Setup exits), the guardian removes the RunOnce
+   entry and starts the app straight away.
+5. The next start logs the guardian's result from `session-end-install.json`.
+
+A critical shutdown cannot be held. Then, and whenever the guardian cannot get
+ready, nothing installs during the shutdown and the next start installs before
+capture.
+
+Safeguards:
+
+- Every download is recorded in `pending-update.json` (version, installer path,
+  sha512 of the verified bytes). An installer whose bytes no longer match, a
+  missing installer, or a version that is not newer is never run, and its
+  record is dropped.
+- The startup install is attempted at most once per running version. An
+  installer that fails or cannot start leaves the current version running, and
+  later starts do not loop on it. A failed startup attempt also stops shutdown
+  installs of that download.
+- Nothing installs while automatic update checks are turned off, the same as
+  `autoInstallOnAppQuit`.
+- One installer at a time: install-on-quit is disarmed whenever a session ends,
+  so the shutdown teardown never starts a second, unguarded Setup.
+- One exit at a time: a waiting **Quit** and a waiting **Restart and update**
+  replace each other, the last request wins. A shutdown handoff cancels
+  either one and owns the exit; Quit or Restart and update pressed during it
+  joins it and still waits for the capture/save. Once Restart and update has
+  started Setup, a shutdown query is no longer held for a second one.
+- Setup keeps owning stand-down, native-host exit and process close through
+  `build/installer.nsh`. Relaunch belongs to Setup (`--force-run`) for
+  **Restart and update** and the startup install, and to Windows sign-in for a
+  shutdown. The single-instance lock still rejects any duplicate tray process.
+
+`check:update-install` holds these rules and their wiring.
+
 **Release pipeline**
 
 ```

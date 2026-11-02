@@ -1,5 +1,5 @@
 // Main-process entry: single-instance tray app; wires hotkey, tray, capture, updater.
-import { app, dialog, globalShortcut, Notification, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Notification, powerMonitor, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { UpdaterStatusPayload } from '../shared/ipc'
@@ -50,13 +50,25 @@ import {
   noteRenderEnded,
   saveNowRequest,
 } from './saveNow'
-import { startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
+import { captureOrSaveInProgress } from './captureActivity'
+import { anyPackOperationActive } from './packOperations'
+import { captureFlowActive, startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
 import { dailyTelemetryLaunchPolicy, sendDailyTelemetry, telemetryOs } from './telemetry'
-import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
+import {
+  checkNow,
+  holdSessionEndForUpdate,
+  initUpdater,
+  installPendingUpdateBeforeCapture,
+  prepareSessionEnd,
+  quitWhenIdle,
+  restartAndUpdate,
+  setUpdateInstallBusyProbe,
+  updaterState,
+} from './updater'
 import { shouldAnnounceUpdate } from './updateNotice'
 import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
 
@@ -220,11 +232,6 @@ function main(): void {
     // Tray app: keep running with zero windows (default behavior would quit).
   })
 
-  // No 'session-end' hook: Electron 36 exposes that on BrowserWindow, and this
-  // app can be windowless. A Windows logoff or shutdown still tears the app
-  // down through the normal quit sequence, so it reaches will-quit and is
-  // recorded as a clean exit whose cause we did not observe ('unknown') —
-  // honest, and crucially NOT reported to the user as a crash (issue #61).
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     stopRecorderStateListener()
@@ -253,6 +260,44 @@ function main(): void {
     // `firstRun` is TRUE only when no settings file existed a moment ago — the
     // one honest fresh-install signal (GOAL "Welcome": never shown on update).
     const { settings, firstRun } = loadSettings()
+    if (await installPendingUpdateBeforeCapture(settings.autoUpdateCheck)) {
+      app.quit()
+      return
+    }
+    setUpdateInstallBusyProbe(
+      () => captureOrSaveInProgress(captureFlowActive()) || anyPackOperationActive(),
+      (kind) => {
+        new Notification({
+          title: 'CapturePack',
+          body: uiT(settings)(kind === 'quit' ? 'update.quitWaitsForSave' : 'update.restartWaitsForSave'),
+        }).show()
+      },
+    )
+    let sessionEnding = false
+    app.on('browser-window-created', (_event, window) => {
+      window.on('query-session-end', (event) => {
+        const held = holdSessionEndForUpdate(
+          event.reasons,
+          {
+            autoInstall: settings.autoUpdateCheck,
+            launchAtLogin: settings.launchAtLogin,
+            message: (version) => uiT(settings)('update.installingAtShutdown', { version }),
+          },
+          LOGIN_HIDDEN_ARG,
+        )
+        if (held) event.preventDefault()
+      })
+      window.on('session-end', (event) => {
+        if (sessionEnding) return
+        sessionEnding = true
+        prepareSessionEnd(
+          event.reasons,
+          { autoInstall: settings.autoUpdateCheck, launchAtLogin: settings.launchAtLogin },
+          LOGIN_HIDDEN_ARG,
+        )
+      })
+    })
+    void new BrowserWindow({ show: false, width: 1, height: 1, skipTaskbar: true, focusable: false })
     const telemetryPolicy = dailyTelemetryLaunchPolicy(app.isPackaged, process.env)
     if (telemetryPolicy.enabled) {
       void sendDailyTelemetry({
@@ -498,7 +543,7 @@ function main(): void {
           // leave the machine without a replay buffer, and the only one the
           // next start must not complain about.
           noteExitIntent('user-quit')
-          app.quit()
+          quitWhenIdle(() => app.quit())
         },
       },
       () => uiLanguage(settings),

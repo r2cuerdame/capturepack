@@ -22,3 +22,7 @@ export function beginPackOperation(packPath: string): PackOperationRelease | nul
 export function packOperationActive(packPath: string): boolean {
   return active.has(path.resolve(packPath).toLowerCase())
 }
+
+export function anyPackOperationActive(): boolean {
+  return active.size > 0
+}
