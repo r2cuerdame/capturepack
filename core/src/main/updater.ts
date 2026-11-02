@@ -1,18 +1,46 @@
 // GitHub Releases auto-updater. electron-updater reads the publish config from
 // electron-builder.yml and verifies the sha512 in latest.yml before applying.
-// Installation happens only on app exit (autoInstallOnAppQuit) or via the
-// explicit restartAndUpdate() below — the app is never restarted from under
-// the user, because a live replay buffer would be lost.
+// Installation happens only on app exit (autoInstallOnAppQuit), via the
+// explicit restartAndUpdate() below, at the next start before capture begins
+// when the previous run never quit, or at Windows shutdown once this process
+// has exited (#149). Every path waits for a capture/save in progress, and the
+// app is never restarted from under the user, because a live replay buffer
+// would be lost.
 //
 // The module also keeps the LAST KNOWN state (updaterState()) so the tray menu
 // item and the About window can render it without holding state of their own,
 // and offers checkNow() for the manual tray check (GOAL "Tray Menu").
 
+import { spawn, spawnSync } from 'node:child_process'
+import * as path from 'node:path'
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import { noteExitIntent } from './lifecycle'
-import { logError, logInfo } from './log'
+import { logError, logInfo, logWarn } from './log'
+import {
+  clearPendingUpdate,
+  createIdleGate,
+  hashFileSha512,
+  nextPendingUpdate,
+  pendingUpdateFile,
+  readPendingUpdate,
+  launchSessionEndGuardian,
+  runOnceArgs,
+  runSessionEndHandoff,
+  sessionEndGuardianScript,
+  sessionEndInstallArgs,
+  sessionEndPlan,
+  sessionEndResultFile,
+  startupInstallArgs,
+  startupUpdateDecision,
+  takeSessionEndResult,
+  writePendingUpdate,
+  type IdleGate,
+  type PendingUpdate,
+  type SessionEndOutcome,
+  type SessionEndReason,
+} from './updateInstall'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 // How long "You're up to date" stays on the tray item after a finished check
@@ -143,6 +171,7 @@ export function initUpdater(opts: {
   autoUpdater.on('download-progress', () => setStatus({ state: 'downloading' }))
   autoUpdater.on('update-downloaded', (info) => {
     lastDownloadedVersion = info.version
+    void rememberDownloadedUpdate(info.version, info.downloadedFile)
     setStatus({ state: 'downloaded', version: info.version })
   })
   autoUpdater.on('error', (err) => {
@@ -248,13 +277,245 @@ export function setAutoUpdateCheck(enabled: boolean): void {
   if (enabled) runCheck?.()
 }
 
+let installBusy: () => boolean = () => false
+export type UpdateExit = 'restart' | 'quit'
+let exitDeferredNotice: (kind: UpdateExit, version: string | null) => void = () => {}
+let exitGate: { kind: UpdateExit; gate: IdleGate } | null = null
+let restartInstallStarted = false
+let sessionEndHandoff: Promise<SessionEndOutcome> | null = null
+
+export function setUpdateInstallBusyProbe(
+  probe: () => boolean,
+  onExitDeferred?: (kind: UpdateExit, version: string | null) => void,
+): void {
+  installBusy = probe
+  if (onExitDeferred !== undefined) exitDeferredNotice = onExitDeferred
+}
+
+function requestUpdateExit(kind: UpdateExit, run: () => void): void {
+  if (sessionEndHandoff !== null) {
+    logInfo(`[updater] ${kind} joins the session-end install already in progress`)
+    return
+  }
+  if (exitGate !== null && exitGate.kind === kind) {
+    exitGate.gate.request()
+    return
+  }
+  exitGate?.gate.cancel()
+  exitGate = {
+    kind,
+    gate: createIdleGate({
+      isBusy: () => installBusy(),
+      onDeferred: () => {
+        logInfo(`[updater] ${kind} and update waits for the capture/save in progress`)
+        try {
+          exitDeferredNotice(kind, lastDownloadedVersion)
+        } catch (err) {
+          logWarn(`[updater] could not show that the ${kind} waits: ${String(err)}`)
+        }
+      },
+      run,
+    }),
+  }
+  exitGate.gate.request()
+}
+
 export function restartAndUpdate(): void {
-  // Not a disappearance: the app is coming straight back (issue #61). Recorded
-  // HERE, not by the caller — the tray menu remembered to, the About window's
-  // Restart button and the update toast did not, and their runs closed the
-  // marker as 'unknown' (#182). First intent wins, so a caller that still
-  // notes it first loses nothing.
+  requestUpdateExit('restart', () => {
+    restartInstallStarted = true
+    noteExitIntent('update-restart')
+    autoUpdater.quitAndInstall(false, true)
+  })
+}
+
+export function quitWhenIdle(quit: () => void): void {
+  const installsOnQuit = initialized && autoUpdater.autoInstallOnAppQuit && lastDownloadedVersion !== null
+  if (sessionEndHandoff === null && !installsOnQuit) {
+    exitGate?.gate.cancel()
+    quit()
+    return
+  }
+  requestUpdateExit('quit', quit)
+}
+
+async function rememberDownloadedUpdate(version: string, installerPath: string): Promise<void> {
+  if (typeof installerPath !== 'string' || installerPath === '') return
+  const file = pendingUpdateFile(app.getPath('userData'))
+  try {
+    const previous = readPendingUpdate(file)
+    if (previous !== null && previous.version === version && previous.installerPath === installerPath) {
+      return
+    }
+    const sha512 = await hashFileSha512(installerPath)
+    if (sha512 === null) {
+      logWarn(`[updater] could not read the downloaded installer for v${version}`)
+      return
+    }
+    writePendingUpdate(file, nextPendingUpdate(previous, { version, installerPath, sha512 }))
+  } catch (err) {
+    logError('[updater] could not record the downloaded update:', err)
+  }
+}
+
+export async function installPendingUpdateBeforeCapture(autoInstall: boolean): Promise<boolean> {
+  if (!app.isPackaged) return false
+  const sessionEnd = takeSessionEndResult(sessionEndResultFile(app.getPath('userData')))
+  if (sessionEnd !== null) {
+    logInfo(
+      `[updater] session-end install of v${sessionEnd.version} finished at ${sessionEnd.finishedAt} ` +
+        `(setup exit ${String(sessionEnd.exitCode)}${sessionEnd.relaunched ? ', relaunched in the same session' : ''})`,
+    )
+  }
+  const file = pendingUpdateFile(app.getPath('userData'))
+  const pending = readPendingUpdate(file)
+  if (pending === null) return false
+  const currentVersion = app.getVersion()
+  const decision = startupUpdateDecision({
+    pending,
+    currentVersion,
+    autoInstall,
+    installerSha512: await hashFileSha512(pending.installerPath),
+  })
+  if (decision.kind === 'none') return false
+  if (decision.kind === 'clear') {
+    logInfo(`[updater] pending update v${pending.version} dropped: ${decision.reason}`)
+    try {
+      clearPendingUpdate(file)
+    } catch (err) {
+      logWarn(`[updater] could not clear the pending update record: ${String(err)}`)
+    }
+    return false
+  }
+  if (decision.kind === 'keep') {
+    logInfo(`[updater] pending update v${pending.version} not installed at startup: ${decision.reason}`)
+    return false
+  }
+  try {
+    writePendingUpdate(file, { ...decision.update, startupAttemptFrom: currentVersion })
+  } catch (err) {
+    logError('[updater] could not record the startup install attempt; continuing on the current version:', err)
+    return false
+  }
+  const started = await new Promise<boolean>((resolve) => {
+    try {
+      const child = spawn(decision.update.installerPath, startupInstallArgs(), {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      child.once('error', (err) => {
+        logError('[updater] the downloaded installer could not be started:', err)
+        resolve(false)
+      })
+      child.once('spawn', () => {
+        child.unref()
+        resolve(true)
+      })
+    } catch (err) {
+      logError('[updater] the downloaded installer could not be started:', err)
+      resolve(false)
+    }
+  })
+  if (!started) return false
+  logInfo(`[updater] installing v${decision.update.version} before capture starts (previous run did not quit)`)
   noteExitIntent('update-restart')
-  // isSilent=false, isForceRunAfter=true — the only permitted quitAndInstall.
-  autoUpdater.quitAndInstall(false, true)
+  return true
+}
+
+function windowsSystemPath(...parts: string[]): string {
+  return path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', ...parts)
+}
+
+function armNextSignInRun(hiddenArg: string): void {
+  const result = spawnSync(windowsSystemPath('reg.exe'), runOnceArgs(process.execPath, hiddenArg), {
+    timeout: 3000,
+    windowsHide: true,
+    stdio: 'ignore',
+  })
+  if (result.status !== 0) throw new Error(`reg exit ${String(result.status)}`)
+  logInfo('[updater] CapturePack runs once at the next sign-in')
+}
+
+function startSessionEndGuardian(update: PendingUpdate, message: string, hiddenArg: string): Promise<boolean> {
+  const script = sessionEndGuardianScript({
+    installerPath: update.installerPath,
+    installerArgs: sessionEndInstallArgs(),
+    waitPid: process.pid,
+    version: update.version,
+    message,
+    resultFile: sessionEndResultFile(app.getPath('userData')),
+    appPath: process.execPath,
+    appArgs: [hiddenArg],
+  })
+  return launchSessionEndGuardian(windowsSystemPath('WindowsPowerShell', 'v1.0', 'powershell.exe'), script).then(
+    (launch) => {
+      if (!launch.ready) logWarn(`[updater] the session-end install guardian ${launch.reason}`)
+      return launch.ready
+    },
+  )
+}
+
+export function holdSessionEndForUpdate(
+  reasons: readonly SessionEndReason[],
+  settings: { autoInstall: boolean; launchAtLogin: boolean; message: (version: string) => string },
+  hiddenArg: string,
+): boolean {
+  if (sessionEndHandoff !== null) return true
+  if (!app.isPackaged || process.platform !== 'win32' || restartInstallStarted) return false
+  const file = pendingUpdateFile(app.getPath('userData'))
+  const pending = readPendingUpdate(file)
+  const plan = sessionEndPlan({
+    reasons,
+    pending,
+    currentVersion: app.getVersion(),
+    autoInstall: settings.autoInstall,
+    launchAtLogin: settings.launchAtLogin,
+  })
+  if (!plan.install || pending === null) return false
+  logInfo(`[updater] session ending with v${pending.version} waiting: installing it before Windows continues`)
+  exitGate?.gate.cancel()
+  exitGate = null
+  sessionEndHandoff = runSessionEndHandoff(plan, {
+    verify: async () => {
+      if ((await hashFileSha512(pending.installerPath)) === pending.sha512) return true
+      logWarn(`[updater] pending update v${pending.version} dropped at session end: its installer is gone or changed`)
+      clearPendingUpdate(file)
+      return false
+    },
+    startGuardian: () => startSessionEndGuardian(pending, settings.message(pending.version), hiddenArg),
+    armRelaunch: () => armNextSignInRun(hiddenArg),
+    disarmQuitInstall: () => {
+      if (initialized) autoUpdater.autoInstallOnAppQuit = false
+    },
+    isBusy: () => installBusy(),
+    onDeferred: () => logInfo('[updater] the session-end install waits for the capture/save in progress'),
+    quit: (outcome) => {
+      logInfo(`[updater] session-end handoff: ${outcome}`)
+      if (outcome !== 'dropped') noteExitIntent('update-restart')
+      app.quit()
+    },
+  })
+  return true
+}
+
+export function prepareSessionEnd(
+  reasons: readonly SessionEndReason[],
+  settings: { autoInstall: boolean; launchAtLogin: boolean },
+  hiddenArg: string,
+): void {
+  if (sessionEndHandoff !== null || !app.isPackaged || process.platform !== 'win32') return
+  if (initialized) autoUpdater.autoInstallOnAppQuit = false
+  const plan = sessionEndPlan({
+    reasons,
+    pending: readPendingUpdate(pendingUpdateFile(app.getPath('userData'))),
+    currentVersion: app.getVersion(),
+    autoInstall: settings.autoInstall,
+    launchAtLogin: settings.launchAtLogin,
+  })
+  if (!plan.relaunch) return
+  try {
+    armNextSignInRun(hiddenArg)
+  } catch (err) {
+    logWarn(`[updater] could not arm the next sign-in install: ${String(err)}`)
+  }
 }

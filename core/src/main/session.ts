@@ -152,6 +152,7 @@ import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { runActionsAtState, settleSaveActionSession } from './actions/onSave'
+import { awaitEditorDecision, trackPackWrite } from './captureActivity'
 import { clearPackLedger } from './actions/host'
 import {
   noteFlowEnded,
@@ -241,6 +242,10 @@ type EditorOutcome =
 // editors (or an editor over a capture in progress) must never coexist.
 let flowActive = false
 let activeEditor: BrowserWindow | null = null
+
+export function captureFlowActive(): boolean {
+  return flowActive
+}
 
 // How long the flow kept the user waiting (ROADMAP: "never sacrifice the
 // 5-second workflow"). One flow at a time is already guaranteed by `flowActive`
@@ -1755,15 +1760,18 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
     const saved = handle
     if (payload === null || saved === null) return payload
     try {
-      await writeUiaPlugin(saved.dirPath, payload)
-      await addManifestPlugin(saved, uiaPluginDeclaration(), packDocLanguage(settings))
+      await trackPackWrite(
+        writeUiaPlugin(saved.dirPath, payload).then(() =>
+          addManifestPlugin(saved, uiaPluginDeclaration(), packDocLanguage(settings)),
+        ),
+      )
     } catch (err) {
       logError(`[image] writing plugins/${UIA_PLUGIN_NAME} failed:`, err)
     }
     return payload
   })
 
-  const domWrite: Promise<void> = (async () => {
+  const domWrite: Promise<void> = trackPackWrite((async () => {
     const saved = handle
     if (saved === null || domPayload === null) return
     try {
@@ -1775,7 +1783,7 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
       // Browser context refines a capture; it may never fail one.
       logError('[image] writing plugins/chrome-dom failed:', err)
     }
-  })()
+  })())
 
   const { win: editor, mode: windowMode } = createEditorWindow(
     still.editorBounds,
@@ -2438,8 +2446,11 @@ async function runFlow(settings: Settings): Promise<void> {
     const saved = handle
     if (payload === null || saved === null) return payload
     try {
-      await writeUiaPlugin(saved.dirPath, payload)
-      await addManifestPlugin(saved, uiaPluginDeclaration(), packDocLanguage(settings))
+      await trackPackWrite(
+        writeUiaPlugin(saved.dirPath, payload).then(() =>
+          addManifestPlugin(saved, uiaPluginDeclaration(), packDocLanguage(settings)),
+        ),
+      )
     } catch (err) {
       logError(`capturepack: writing plugins/${UIA_PLUGIN_NAME} failed:`, err)
     }
@@ -2476,7 +2487,7 @@ async function runFlow(settings: Settings): Promise<void> {
     }
   }
   const saveFirstHandle = handle
-  const domWrite = writeCapturedDomPlugin(saveFirstHandle).catch((err: unknown) => {
+  const domWrite = trackPackWrite(writeCapturedDomPlugin(saveFirstHandle)).catch((err: unknown) => {
     // Browser context is a source refinement, never permission to fail the
     // capture. Final save still waits for this settled result before publishing
     // its manifest, so a successful payload cannot race behind the save toast.
@@ -4763,7 +4774,7 @@ function runEditor(
   t0Ms: number,
   unattended: (() => EditorExportPayload) | null = null,
 ): Promise<EditorOutcome> {
-  return new Promise((resolve) => {
+  return awaitEditorDecision(new Promise((resolve) => {
     // loadFile/startup guards can close the hidden window before the caller has
     // finished assembling init data and reaches runEditor(). Waiting for a
     // `closed` event that already happened would recreate the same permanent
@@ -4874,7 +4885,7 @@ function runEditor(
       if (editor.isVisible()) exportWithoutAPerson()
       else editor.once('show', exportWithoutAPerson)
     }
-  })
+  }))
 }
 
 // ---------------------------------------------------------------------------
