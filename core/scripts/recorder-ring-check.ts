@@ -567,7 +567,7 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
   console.log('\nWebM capability and dual-slot lifecycle')
   const mp4Preferred = pickRecorderFormat(
     (mimeType) =>
-      mimeType === 'video/mp4;codecs=avc1' ||
+      mimeType === 'video/x-matroska;codecs=avc1' ||
       mimeType === 'video/webm;codecs=vp8',
   )
   check(
@@ -578,11 +578,10 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
 
   const webmFallback = pickRecorderFormat(
     (mimeType) =>
-      mimeType === 'video/x-matroska;codecs=avc1' ||
       mimeType === 'video/webm;codecs=vp8',
   )
   check(
-    'mp4=false/webm=true selects legal VP8 WebM, never Matroska AVC',
+    'avc=false/webm=true selects legal VP8 WebM',
     webmFallback?.strategy === 'dual-slot-webm' &&
       webmFallback.mimeType === 'video/webm;codecs=vp8' &&
       webmFallback.replayFile === 'replay.webm',
@@ -592,8 +591,11 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
     (mimeType) => mimeType === 'video/x-matroska;codecs=avc1',
   )
   check(
-    'Matroska AVC alone is rejected rather than mislabeled replay.webm',
-    matroskaOnly === null,
+    'internal Matroska AVC is remuxed to legal public MP4, never renamed WebM',
+    matroskaOnly?.recordingMimeType === 'video/x-matroska;codecs=avc1' &&
+      matroskaOnly.mimeType === 'video/mp4;codecs=avc1' &&
+      matroskaOnly.replayFile === 'replay.mp4' &&
+      matroskaOnly.strategy === 'fragmented-mp4',
   )
 
   let generation = 1
@@ -1887,7 +1889,7 @@ console.log('  SKIP  rc.36 field replay fixture is not present on this machine')
   )
   check(
     'only completed MP4 fragments refresh maintenance freshness; recurring partial boxes cannot defer flush forever',
-    /const completedFragments = payload\.ring\.pushBytes\(\s*bytes,\s*payload\.endAtMs,\s*\)/.test(
+    /let completedFragments = 0\s*for \(const chunk of chunks\) \{\s*completedFragments \+= payload\.ring\.pushBytes\(chunk\.bytes, chunk\.endAtMs\)/.test(
       captureSource,
     ) &&
       captureSource.includes('if (completedFragments > 0)') &&

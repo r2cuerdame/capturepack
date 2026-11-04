@@ -1,5 +1,12 @@
 # Release 0.5.1 stability gate audit (#245)
 
+The [2026-10-31 owner decision](https://github.com/r2cuerdame/capturepack/issues/243#issuecomment-6543899455)
+supersedes `DEFER_DXGI_AND_SHIP` for the next candidate: Windows native DXGI
+replay becomes the default, with READY validation and explicit fallback. The
+0.5.1 findings below remain historical evidence. #243 stays open until the
+deployed default path passes #245, including the two-hour installed test, after
+#240 integration verification.
+
 This document records the formal stability gate audit for CapturePack **0.5.1** pursuant to Issue [#245](https://github.com/r2cuerdame/capturepack/issues/245) and incorporates the findings and rejection reasons from the independent Quality Audit (품질검수실 검수 회차 1, 2026-09-21T02:29:41.844Z).
 
 ---

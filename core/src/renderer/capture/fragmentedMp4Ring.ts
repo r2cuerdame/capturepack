@@ -1388,13 +1388,13 @@ export class FragmentedMp4Ring {
   }
 
   private prune(endAtMs: number): void {
-    const cutoff = endAtMs - this.retentionMs
     // ISO-BMFF does not impose a one-second minimum `moof` cadence. Pruning by
     // an assumed fragment count shortened a 30-second ring to 3.2 seconds when
     // the muxer emitted 100 ms fragments. Every stored duration is clamped to
     // at least 1 ms above, so time-based pruning still bounds references by the
     // configured retention window without discarding valid footage.
-    while (this.fragments.length > 0 && this.fragments[0]!.endAtMs <= cutoff) {
+    while (this.fragments.length > 0 &&
+      Math.round(endAtMs * 1000) - Math.round(this.fragments[0]!.endAtMs * 1000) >= this.retentionMs * 1000) {
       this.fragments.shift()
     }
   }

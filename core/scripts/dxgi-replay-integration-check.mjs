@@ -69,8 +69,8 @@ check('native uses shipping replay size while retaining physical display identit
     && nativeIdentity.includes('screen.dipToScreenRect')
     && reconcile.includes('dxgiDisplayIdentity(display, settings.replayMaxWidth)'))
 check(
-  'native candidates require the exact explicit opt-in and warm in background',
-  reconcile.includes('dxgiReplayRuntimeOptedIn(process.argv)')
+  'native candidates use the default-enabled policy and warm in background',
+  reconcile.includes('dxgiReplayRuntimeEnabled(process.argv)')
     && reconcile.includes('void manager.start({')
     && !reconcile.includes('await manager.start({'),
 )

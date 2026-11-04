@@ -6,13 +6,14 @@ import {
   DXGI_REPLAY_MAX_GOP_MS,
   DXGI_REPLAY_CURSOR_COMPOSITED_FLAG,
   DXGI_REPLAY_RUNTIME_SWITCH,
+  DXGI_REPLAY_DISABLE_SWITCH,
   DXGI_REPLAY_SERVICE_ALL_FLAGS,
   DXGI_REPLAY_SERVICE_PACKET_BYTES,
   DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS,
   DxgiReplayRuntime,
   DxgiReplayRuntimeManager,
   DxgiReplayServicePacketParser,
-  dxgiReplayRuntimeOptedIn,
+  dxgiReplayRuntimeEnabled,
   parseDxgiReplayServicePacket,
   selectDxgiReplayRuntime,
   validateDxgiReplayMp4,
@@ -146,11 +147,15 @@ class FakeProcess extends EventEmitter implements DxgiReplayRuntimeProcess {
 }
 
 async function main(): Promise<void> {
-  check('DXGI runtime is off unless explicitly opted in',
-    !dxgiReplayRuntimeOptedIn([])
-      && dxgiReplayRuntimeOptedIn([DXGI_REPLAY_RUNTIME_SWITCH])
-      && dxgiReplayRuntimeOptedIn([], true)
-      && !dxgiReplayRuntimeOptedIn([DXGI_REPLAY_RUNTIME_SWITCH], false))
+  check('DXGI runtime is enabled for a normal launch without opt-in',
+    dxgiReplayRuntimeEnabled([])
+      && dxgiReplayRuntimeEnabled([DXGI_REPLAY_RUNTIME_SWITCH])
+      && dxgiReplayRuntimeEnabled([], true)
+      && !dxgiReplayRuntimeEnabled([DXGI_REPLAY_RUNTIME_SWITCH], false))
+  check('explicit diagnostic opt-out wins over the legacy opt-in switch',
+    !dxgiReplayRuntimeEnabled([DXGI_REPLAY_DISABLE_SWITCH])
+      && !dxgiReplayRuntimeEnabled([DXGI_REPLAY_DISABLE_SWITCH], true)
+      && !dxgiReplayRuntimeEnabled([DXGI_REPLAY_RUNTIME_SWITCH, DXGI_REPLAY_DISABLE_SWITCH]))
 
   const locked = { status: 'unavailable', reason: 'duplicate-access-denied', stages: [] } as const
   check('pure selector fails closed for platform, helper, locked session and missing health',
@@ -249,6 +254,14 @@ async function main(): Promise<void> {
     startupTimeoutMs: 500,
     snapshotTimeoutMs: 500,
   }
+  const disabled = new DxgiReplayRuntimeManager({
+    ...common, enabled: undefined, argv: [DXGI_REPLAY_DISABLE_SWITCH],
+    probe: async () => { throw new Error('disabled runtime must not probe') },
+    spawnProcess: () => { spawned++; return new FakeProcess() },
+  })
+  check('diagnostic opt-out neither probes nor spawns a native service',
+    reasonOf(await disabled.start({ deviceName: 'DISPLAY1', retentionMs: 30_000 })) === 'switch-disabled'
+      && spawned === 0)
   const missing = new DxgiReplayRuntimeManager({ ...common, fileExists: () => false, spawnProcess: () => { spawned++; return new FakeProcess() } })
   const missingSelection = await missing.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
   check('missing helper returns shipping without probing/spawning',
@@ -347,7 +360,7 @@ async function main(): Promise<void> {
       kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(mp4.length),
     }), 71))
   })
-  const liveManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: (_executable, args) => {
+  const liveManager = new DxgiReplayRuntimeManager({ ...common, enabled: undefined, argv: [], spawnProcess: (_executable, args) => {
     check('manager launches exact persistent service arguments',
       args.includes('--serve') && args.includes('--retention-ms') && args.includes('30000')
         && args[args.indexOf('--output-width') + 1] === '1920'
@@ -355,7 +368,7 @@ async function main(): Promise<void> {
     queueMicrotask(() => liveChild.output(servicePacket(), 17))
     return liveChild
   } })
-  check('complete capability plus READY promotes native',
+  check('a default launch probes and promotes native only after complete READY',
     (await liveManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000,
       outputSize: { width: 1920, height: 1080 } })).backend === 'native-dxgi')
   const snapshot = await liveManager.snapshot(1_000)

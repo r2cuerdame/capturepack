@@ -4,8 +4,9 @@ Issue [#138](https://github.com/r2cuerdame/capturepack/issues/138) replaces the
 always-on Windows replay path only after the replacement proves lower overhead
 and preserves replay timing, retention, fallback, and still capture.
 
-The native helper now contains a bounded opt-in production candidate. The
-shipping backend remains the default and covers native warm-up. After native
+The native helper is selected by default on Windows following the
+[2026-10-31 owner decision](https://github.com/r2cuerdame/capturepack/issues/243#issuecomment-6543899455).
+The Chromium backend covers native warm-up. After native
 READY, its MediaRecorder encoders and replay rings are suspended so only one
 replay encoder owns a display; a native failure restarts shipping capture. The
 focused window keeps its live one-pixel presentation sink temporarily because
@@ -49,14 +50,26 @@ QPC, pointer position, visibility, shape size, accumulated frames); encoder
 event, output, and MEError failures always print their HRESULT.
 
 The existing Chromium/MediaRecorder replay flow and its declared GDI fallback
-remain available. The exact `--dxgi-native-replay` process switch permits a native
-candidate only after capability probing and a successful service `READY`
+remain available. Normal launches create a native candidate without an opt-in
+switch; selection still requires capability probing and a successful service `READY`
 health packet. Missing helper, locked session, encoder failure, malformed
 protocol, invalid export, timeout, or service death retains or restarts the
 shipping replay path. A failure after native takeover can make that triggering
 capture screenshot-only while shipping rebuilds an honest fresh buffer. The
 normal still-image capture flow is unchanged and is never routed through this
 helper.
+
+`--disable-dxgi-native-replay` explicitly selects the Chromium baseline for
+diagnostics and A/B comparison. The legacy `--dxgi-native-replay` switch remains
+compatible, but does not override an explicit disable switch. The field runner
+defaults to native without passing an enable switch; its shipping trials pass
+the disable switch. The CI starved-recorder case explicitly selects that
+baseline so native desktop acquisition cannot bypass the injected starvation.
+
+This default change does not establish release acceptance. Exact-head CI,
+independent review, #240 integration verification, and #245's deployed installer
+verification (including two hours on the default path) remain required before
+#243 can close. The earlier isolated AVC remux soak is not installed DXGI evidence.
 
 ## Modes and wire contracts
 

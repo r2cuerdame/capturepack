@@ -136,6 +136,7 @@ jobs:
             --output-dir="$work\packs" `
             --no-global-shortcut `
             --simulate-no-frames `
+            --disable-dxgi-native-replay `
             --capture-now=6 `
             --save-now=180
           Write-Host "capture exited $LASTEXITCODE"

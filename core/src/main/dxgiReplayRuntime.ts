@@ -16,6 +16,7 @@ import { dxgiQpcToUnixNs } from './dxgiTimingReference'
 import type { CaptureCadenceSummary } from '../shared/captureCadence'
 
 export const DXGI_REPLAY_RUNTIME_SWITCH = '--dxgi-native-replay'
+export const DXGI_REPLAY_DISABLE_SWITCH = '--disable-dxgi-native-replay'
 export const DXGI_REPLAY_SERVICE_PACKET_BYTES = 288
 export const DXGI_REPLAY_SERVICE_MAX_COMMAND_BYTES = 32_768
 export const DXGI_REPLAY_MIN_RETENTION_MS = 1_000
@@ -495,11 +496,11 @@ export type DxgiReplayRuntimeSelection =
   | { readonly backend: 'shipping'; readonly reason: DxgiReplayRuntimeFallbackReason; readonly detail?: string }
   | { readonly backend: 'native-dxgi'; readonly ready: DxgiReplayServicePacket }
 
-export function dxgiReplayRuntimeOptedIn(
+export function dxgiReplayRuntimeEnabled(
   argv: readonly string[],
   injected?: boolean,
 ): boolean {
-  return injected ?? argv.includes(DXGI_REPLAY_RUNTIME_SWITCH)
+  return !argv.includes(DXGI_REPLAY_DISABLE_SWITCH) && (injected ?? true)
 }
 
 export function selectDxgiReplayRuntime(input: {
@@ -625,7 +626,7 @@ export class DxgiReplayRuntimeManager {
     const startGeneration = this.lifecycleGeneration
     const argv = this.options.argv ?? process.argv
     const platform = this.options.platform ?? process.platform
-    const optedIn = dxgiReplayRuntimeOptedIn(argv, this.options.enabled)
+    const optedIn = dxgiReplayRuntimeEnabled(argv, this.options.enabled)
     if (!optedIn) return this.setFallback('switch-disabled')
     if (platform !== 'win32') return this.setFallback('unsupported-platform')
     if (!Number.isSafeInteger(request.retentionMs)
@@ -1120,7 +1121,6 @@ export interface DxgiReplayRuntimeDisplay {
 }
 
 export interface DxgiReplayRuntimeSyncOptions {
-  /** Explicit opt-in; false is the default and keeps every shipping recorder. */
   readonly enabled: boolean
   readonly retentionMs: number
   /** Part of resource identity even though the v1 native service fixes its own target rate. */

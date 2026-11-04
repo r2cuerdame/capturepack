@@ -13,6 +13,7 @@ const { default: ts } = await import(pathToFileURL(path.join(core, 'node_modules
 const parse = (relative) => ts.createSourceFile(relative,
   readFileSync(path.join(core, relative), 'utf8'), ts.ScriptTarget.Latest, true)
 const main = parse('src/main/capture.ts')
+const runtime = parse('src/main/dxgiReplayRuntime.ts')
 const renderer = parse('src/renderer/capture/capture.ts')
 const retention = parse('src/renderer/capture/recorderRetention.ts')
 function fn(source, name) {
@@ -37,7 +38,7 @@ if (process.argv.includes('--mutate-omit-recorder-stop')) {
 }
 const rendererCode = [
   fn(retention, 'detachRecorderHandlers'), fn(retention, 'releaseRecorderReferences'),
-  suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
+  fn(renderer, 'clearRecorderRemuxers'), suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
   fn(renderer, 'resumeShippingReplayEncoding'), fn(renderer, 'startCapture'), workloadNode.getText(renderer),
 ].join('\n')
 let tickPump = fn(renderer, 'startFrameTicks')
@@ -62,7 +63,7 @@ function run(code, context) {
   }).outputText, context)
 }
 
-function harness() {
+function harness(argv = [], platform = 'win32') {
   const events = []
   const payload = { displayId: 17, focused: true, fps: 15, segmentSeconds: 30, replayMaxWidth: 0 }
   const originalEndedListeners = []
@@ -78,7 +79,8 @@ function harness() {
     ondataavailable: () => events.push('unexpected-old-data'), onerror: () => {},
     stop() { this.state = 'inactive'; events.push('recorder-stop') },
   }
-  const oldSession = { recorder, flushTimer: 'flush', flushBatch: { cancel: () => events.push('flush-cancel') } }
+  const remuxOwner = { retainedBytes: 1024, clear() { this.retainedBytes = 0; events.push('remux-clear') } }
+  const oldSession = { avcRemuxer: remuxOwner, recorder, flushTimer: 'flush', flushBatch: { cancel: () => events.push('flush-cancel') } }
   let workloadCallback
   const rendererContext = vm.createContext({
     console: { info: () => {} }, captureGeneration: 7, captureStreamGeneration: 0, replayWorkloadActive: true,
@@ -94,6 +96,7 @@ function harness() {
     ingestQueue: { cancel: () => events.push('ingest-cancel') }, recorderQueue: Promise.resolve(),
     replayHold: { watchdog: 'hold' }, replayResumeTokens: { clear: () => events.push('resume-tokens-clear') },
     retryTimer: 'retry', evidenceTimer: 'evidence', cadenceTimer: 'cadence', cadence: {},
+    recorderRemuxers: new Set([remuxOwner]),
     activeRecorder: oldSession, replayRing: { clear: () => events.push('ring-clear') },
     webmRing: { clear: () => events.push('webm-clear') },
     stopFrameTicks: () => { events.push('lane-s-ticks-stop'); rendererContext.tickVideo = null },
@@ -169,18 +172,19 @@ function harness() {
     IPC: { captureReplayWorkload: 'capture:replay-workload' },
     displayCadence: { reset: () => {} }, setDisplayRecorderState: (_id, state) => events.push(`state:${state.status}`),
     clearRecorderProbe: () => {}, probesInFlight: new Set(), recoveryAttempts: new Map(), probesSinceProof: new Map(),
-    DxgiReplayRuntimeManager: Manager, dxgiReplayRuntimeOptedIn: () => true,
+    DxgiReplayRuntimeManager: Manager, DXGI_REPLAY_DISABLE_SWITCH: '--disable-dxgi-native-replay',
     dxgiDisplayIdentity: () => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }),
     dxgiReplayServiceSignature: () => 'display-17-retention-30s',
-    app: { getPath: () => 'test-output' }, path, process: { argv: [] }, logWarn: () => {}, logInfo: () => {}, logError: () => {},
+    app: { getPath: () => 'test-output' }, path, process: { argv, platform }, logWarn: () => {}, logInfo: () => {}, logError: () => {},
     display, ownsTicks: true,
     isCurrentRecorderResource: (current, candidate) => current === candidate,
     failureReason: () => 'process-stopped',
   })
   mainContext.win = mainContext.captureWindows.get(17)
+  run(fn(runtime, 'dxgiReplayRuntimeEnabled'), mainContext)
   run(mainCode, mainContext)
   run(`globalThis.handleCaptureError = ${errorHandler}`, mainContext)
-  return { events, recorder, oldSession, originalStream, rendererContext, mainContext, managers,
+  return { events, recorder, oldSession, remuxOwner, originalStream, rendererContext, mainContext, managers,
     workload: (active) => workloadCallback({ active }),
     connectErrors: () => {
       const sender = mainContext.win.webContents
@@ -202,7 +206,17 @@ async function check(name, test) {
   passed += 1
   console.log(`  PASS  #243 ${name}`)
 }
-await check('native READY stops/releases shipping MP4 while retaining focused Lane-S clock', async () => {
+await check('diagnostic opt-out creates no native service', async () => {
+  const h = harness(['--disable-dxgi-native-replay']); h.start(); await flush()
+  assert.equal(h.managers.length, 0)
+  assert.equal(h.recorder.state, 'recording')
+})
+await check('non-Windows launch creates no native service', async () => {
+  const h = harness([], 'darwin'); h.start(); await flush()
+  assert.equal(h.managers.length, 0)
+  assert.equal(h.recorder.state, 'recording')
+})
+await check('default launch READY stops/releases shipping MP4 while retaining focused Lane-S clock', async () => {
   const h = harness(); h.start()
   assert.equal(h.recorder.state, 'recording', 'shipping must cover native warm-up')
   assert.equal(count(h.events, 'workload:false'), 0)
@@ -212,6 +226,9 @@ await check('native READY stops/releases shipping MP4 while retaining focused La
   for (const name of ['onstop', 'ondataavailable', 'onerror']) assert.equal(h.recorder[name], null)
   for (const name of ['activeRecorder', 'replayRing', 'webmRing', 'ingestQueue', 'replayHold']) assert.equal(h.rendererContext[name], null)
   assert.equal(h.oldSession.flushBatch, null)
+  assert.equal(h.remuxOwner.retainedBytes, 0, 'native READY must clear the internal AVC byte owner')
+  assert.equal(h.rendererContext.recorderRemuxers.size, 0)
+  assert.equal(count(h.events, 'remux-clear'), 1)
   for (const event of ['flush-cancel', 'ingest-cancel', 'ring-clear', 'webm-clear', 'watchdog-stop', 'resume-tokens-clear',
     'timeout-clear:flush', 'timeout-clear:hold', 'timeout-clear:retry', 'timeout-clear:evidence', 'interval-clear:cadence']) {
     assert.equal(count(h.events, event), 1, event)

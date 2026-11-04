@@ -166,10 +166,14 @@ check('fewer than three trials is not release evidence',
     .some((failure) => failure.includes('at least 3 trials')))
 
 const fieldSource = readFileSync(new URL('./windows-replay-field-check.mjs', import.meta.url), 'utf8')
-check('field runner launches only the explicit native switch and samples Windows GPU engines',
-  fieldSource.includes("...(replayBackend === 'native-dxgi' ? ['--dxgi-native-replay'] : [])")
+check('field runner opts out only for shipping baseline and samples Windows GPU engines',
+  fieldSource.includes("...(replayBackend === 'shipping' ? ['--disable-dxgi-native-replay'] : [])")
+    && fieldSource.includes("const replayBackend = replayBackendArgument ?? 'native-dxgi'")
     && fieldSource.includes("Get-Counter -Counter '\\\\GPU Engine(*)\\\\Utilization Percentage'")
     && fieldSource.includes('gpu_engines=@($gpuByPid[[int]$node.ProcessId])'))
+const starvedFieldSource = readFileSync(new URL('./native-replay-fallback-e2e.mjs', import.meta.url), 'utf8')
+check('starved-recorder field run selects the Chromium baseline so native cannot bypass starvation',
+  /`--simulate-no-frames=\$\{simulatedDisplayId\}`,\s*'--disable-dxgi-native-replay',/.test(starvedFieldSource))
 check('field runner records production fMP4 validation and post-ready evidence',
   fieldSource.includes('productionHelper.validateNativeReplayMp4(')
     && fieldSource.includes('latest production DXGI native READY through capture request')
