@@ -21,6 +21,8 @@
 // was not already hosting the element.
 ;(() => {
   const IS_TOP = window.top === window
+  // Shadow roots nested deeper than this are a loop, not a page.
+  const MAX_SHADOW_DEPTH = 32
 
   // RE-ARMING RE-ARMS. This used to `return` when the flag was already set, so
   // any injection that did not reach its own cleanup — an Escape that raced a
@@ -57,9 +59,15 @@
     return window.CSS && CSS.escape ? CSS.escape(v) : v.replace(/([^\w-])/g, '\\$1')
   }
 
-  // Shortest stable selector: unique id → unique tag+attribute → positional path.
-  function buildSelector(el) {
-    if (el.id && document.querySelectorAll('#' + cssEscape(el.id)).length === 1) {
+  /** The open shadow root `el` sits in, or null when it sits in the document. */
+  function shadowScopeOf(el) {
+    const root = typeof el.getRootNode === 'function' ? el.getRootNode() : null
+    return root && root !== document && root.host ? root : null
+  }
+
+  // Shortest stable selector within ONE tree: unique id → positional path.
+  function scopedSelector(el, scope) {
+    if (el.id && scope.querySelectorAll('#' + cssEscape(el.id)).length === 1) {
       return '#' + cssEscape(el.id)
     }
     const parts = []
@@ -71,8 +79,11 @@
         break
       }
       const parent = node.parentElement
-      if (parent) {
-        const siblings = Array.from(parent.children).filter(c => c.tagName === node.tagName)
+      // The top of a shadow tree has no parent ELEMENT, but its siblings are
+      // still siblings: they are counted against the root they share.
+      const container = parent || (scope !== document && node.parentNode === scope ? scope : null)
+      if (container) {
+        const siblings = Array.from(container.children).filter(c => c.tagName === node.tagName)
         if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')'
       }
       parts.unshift(part)
@@ -82,6 +93,46 @@
     return selector || el.tagName.toLowerCase()
   }
 
+  // NO SELECTOR WRITTEN IN THE DOCUMENT'S SCOPE REACHES INTO A SHADOW TREE
+  // (#345), so an element inside one is named as its host's selector, then
+  // ` >>> `, then its path inside that root — Puppeteer's deep combinator, read
+  // left to right one shadow boundary at a time. An id is only "unique" within
+  // the tree it was looked up in, which is why each step is scoped to its own.
+  function buildSelector(el) {
+    const scope = shadowScopeOf(el)
+    if (scope === null) return scopedSelector(el, document)
+    return buildSelector(scope.host) + ' >>> ' + scopedSelector(el, scope)
+  }
+
+  /**
+   * THE ELEMENT UNDER THE POINTER, THROUGH EVERY OPEN SHADOW ROOT (#345).
+   *
+   * `document.elementFromPoint` answers in the document's own scope, so on a
+   * page built from web components it names the HOST — a whole video player —
+   * and never the button inside it the user is pointing at. Each open root can
+   * be asked the same question in its own scope; asking until the answer stops
+   * changing finds the element actually drawn there.
+   *
+   * A closed root reads as null, and its host is then the honest answer. The
+   * depth bound is for a page whose roots answer one another in a loop.
+   */
+  function deepElementFromPoint(x, y) {
+    let el = document.elementFromPoint(x, y)
+    for (let depth = 0; el && depth < MAX_SHADOW_DEPTH; depth += 1) {
+      let root = null
+      try {
+        root = el.shadowRoot
+      } catch {
+        // A host that refuses to be read is a host whose inside we do not pick.
+      }
+      if (!root || typeof root.elementFromPoint !== 'function') break
+      const inner = root.elementFromPoint(x, y)
+      if (!inner || inner === el) break
+      el = inner
+    }
+    return el
+  }
+
   function implicitRole(el) {
     const tag = el.tagName.toLowerCase()
     const map = { button: 'button', a: 'link', input: 'textbox', select: 'listbox', textarea: 'textbox', img: 'img', nav: 'navigation', main: 'main', header: 'banner', footer: 'contentinfo' }
@@ -89,7 +140,7 @@
   }
 
   function onMove(e) {
-    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const el = deepElementFromPoint(e.clientX, e.clientY)
     if (!el || el === highlight) return
     current = el
     const r = el.getBoundingClientRect()
@@ -305,7 +356,10 @@
   function onClick(e) {
     e.preventDefault()
     e.stopPropagation()
-    const el = current || e.target
+    // A click that no mousemove preceded — the picker armed from the keyboard
+    // under a still pointer — would otherwise take `e.target`, which a listener
+    // on the document only ever sees retargeted to the outermost shadow host.
+    const el = current || deepElementFromPoint(e.clientX, e.clientY) || e.target
     const r = el.getBoundingClientRect()
     deliver({
       element: {

@@ -26,7 +26,9 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { deflateSync } from 'node:zlib'
 import { terminateProcessTree } from './process-tree.mjs'
 
@@ -86,6 +88,219 @@ function frame(message) {
   const head = Buffer.alloc(4)
   head.writeUInt32LE(body.length, 0)
   return Buffer.concat([head, body])
+}
+
+// ---------------------------------------------------------------------------
+// A page built from web components, for the shipped picker to run in (#345).
+//
+// The wire half proves the app accepts what the extension sends. It cannot say
+// what the extension WOULD send on a page whose UI lives in shadow roots — and
+// there `document.elementFromPoint` names the host, a whole video player, never
+// the button inside it. So the three files `armPicker` injects run here,
+// byte for byte, in a page small enough to state every rectangle, and the pick
+// they produce is the one that then crosses the wire.
+//
+// Hit testing follows the browser's rule: each scope answers with the deepest
+// element of ITS OWN tree under the point, so the document sees a host and only
+// the host's root can see inside it. A closed root draws but is null to scripts.
+// ---------------------------------------------------------------------------
+
+const EXTENSION = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'extensions', 'chrome')
+
+function hitTest(nodes, x, y) {
+  // Later siblings paint over earlier ones, so they are asked first.
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const r = nodes[i].rect
+    if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+      return hitTest(nodes[i].children, x, y) ?? nodes[i]
+    }
+  }
+  return null
+}
+
+/** `#id` within one tree, never into a shadow root; anything else matches nothing. */
+function queryIn(nodes, selector) {
+  const found = []
+  if (!selector.startsWith('#')) return found
+  const visit = (list) => {
+    for (const node of list) {
+      if (node.id === selector.slice(1)) found.push(node)
+      visit(node.children)
+    }
+  }
+  visit(nodes)
+  return found
+}
+
+function domNode(tag, options = {}) {
+  const attrs = options.attrs ?? {}
+  const node = {
+    nodeType: 1,
+    tagName: tag.toUpperCase(),
+    id: attrs.id ?? '',
+    rect: options.rect ?? { x: 0, y: 0, width: 0, height: 0 },
+    style: {},
+    innerText: options.text ?? '',
+    childNodes: options.text === undefined ? [] : [{ nodeType: 3, nodeValue: options.text }],
+    children: [],
+    parentElement: null,
+    parentNode: null,
+    shadowRoot: null,
+    hasAttribute: (name) => Object.prototype.hasOwnProperty.call(attrs, name),
+    getAttribute: (name) => (Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null),
+    getBoundingClientRect: () => ({
+      x: node.rect.x, y: node.rect.y, left: node.rect.x, top: node.rect.y,
+      width: node.rect.width, height: node.rect.height,
+      right: node.rect.x + node.rect.width, bottom: node.rect.y + node.rect.height,
+    }),
+    getRootNode: () => {
+      let top = node
+      while (top.parentNode) top = top.parentNode
+      return top
+    },
+  }
+  for (const child of options.children ?? []) {
+    child.parentElement = node
+    child.parentNode = node
+    node.children.push(child)
+    node.childNodes.push(child)
+  }
+  if (options.shadow !== undefined) {
+    const root = { nodeType: 11, host: node, children: [], childNodes: [], parentNode: null }
+    for (const child of options.shadow) {
+      // The top of a shadow tree has a parent NODE, the root, and no parent element.
+      child.parentElement = null
+      child.parentNode = root
+      root.children.push(child)
+      root.childNodes.push(child)
+    }
+    root.elementFromPoint = (x, y) => hitTest(root.children, x, y)
+    root.querySelectorAll = (selector) => queryIn(root.children, selector)
+    if (options.closed !== true) node.shadowRoot = root
+  }
+  return node
+}
+
+function componentPage() {
+  const sent = []
+  const created = []
+  const documentListeners = new Map()
+  const windowListeners = new Map()
+  const listening = (map) => ({
+    addEventListener: (type, fn) => map.set(type, fn),
+    removeEventListener: (type, fn) => {
+      if (map.get(type) === fn) map.delete(type)
+    },
+  })
+
+  const player = domNode('video-player', {
+    attrs: { id: 'player' },
+    rect: { x: 100, y: 100, width: 640, height: 360 },
+    shadow: [
+      domNode('div', {
+        attrs: { class: 'controls' },
+        rect: { x: 100, y: 400, width: 640, height: 60 },
+        children: [
+          domNode('button', { rect: { x: 110, y: 410, width: 80, height: 40 }, text: 'Play' }),
+          domNode('button', { rect: { x: 200, y: 410, width: 80, height: 40 }, text: 'Mute' }),
+          domNode('seek-bar', {
+            rect: { x: 300, y: 410, width: 300, height: 40 },
+            shadow: [domNode('div', { attrs: { id: 'thumb' }, rect: { x: 350, y: 415, width: 20, height: 30 } })],
+          }),
+        ],
+      }),
+    ],
+  })
+  const closed = domNode('closed-widget', {
+    attrs: { id: 'closed' },
+    rect: { x: 800, y: 100, width: 200, height: 100 },
+    shadow: [domNode('span', { rect: { x: 810, y: 110, width: 100, height: 20 }, text: 'CLOSED-INSIDE' })],
+    closed: true,
+  })
+  const body = domNode('body', {
+    rect: { x: 0, y: 0, width: 1280, height: 720 },
+    children: [domNode('h1', { rect: { x: 20, y: 20, width: 400, height: 40 }, text: 'Store' }), player, closed],
+  })
+  const html = domNode('html', { rect: { x: 0, y: 0, width: 1280, height: 720 }, children: [body] })
+  // The picker's highlight is appended here, and kept out of the tree so the
+  // snapshot below describes the page and not the overlay.
+  html.appendChild = (child) => {
+    child.parentNode = html
+  }
+
+  const document = {
+    documentElement: html,
+    body,
+    title: 'Components',
+    createElement: (tag) => {
+      const made = domNode(tag)
+      made.remove = () => {
+        made.removed = true
+      }
+      created.push(made)
+      return made
+    },
+    elementFromPoint: (x, y) => hitTest([html], x, y),
+    querySelectorAll: (selector) => queryIn([html], selector),
+    ...listening(documentListeners),
+  }
+  html.parentNode = document
+
+  const sandbox = {
+    document,
+    location: { href: 'https://example.com/components' },
+    Node: { TEXT_NODE: 3 },
+    innerWidth: 1280,
+    innerHeight: 720,
+    devicePixelRatio: 1,
+    scrollX: 0,
+    scrollY: 0,
+    screenX: 0,
+    screenY: 0,
+    outerWidth: 1280,
+    outerHeight: 820,
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }),
+    postMessage: () => {},
+    chrome: { runtime: { sendMessage: (message) => sent.push(message) } },
+    ...listening(windowListeners),
+  }
+  sandbox.window = sandbox
+  sandbox.top = sandbox
+  sandbox.parent = sandbox
+  for (const file of ['frame-geometry.js', 'document-snapshot.js', 'content-script.js']) {
+    runInNewContext(readFileSync(join(EXTENSION, file), 'utf8'), sandbox)
+  }
+  return {
+    sent,
+    created,
+    documentListeners,
+    document,
+    // The walk `background.js` and the full-page capture call, in this page.
+    snapshot: () => sandbox.__capturepackDocumentSnapshot(),
+  }
+}
+
+/**
+ * Point at (x, y) and click, as a user does — or click without moving first,
+ * as a user does who armed the picker from the keyboard over a still pointer.
+ */
+function pickInComponentPage(x, y, { move = true } = {}) {
+  const page = componentPage()
+  const pointer = {
+    clientX: x,
+    clientY: y,
+    // What a listener on the document actually receives: retargeted to the host.
+    target: page.document.elementFromPoint(x, y),
+    preventDefault: () => {},
+    stopPropagation: () => {},
+  }
+  if (move) page.documentListeners.get('mousemove')(pointer)
+  const highlight = page.created[0]
+  const lit = highlight === undefined
+    ? null
+    : { left: highlight.style.left, top: highlight.style.top, width: highlight.style.width, height: highlight.style.height }
+  page.documentListeners.get('click')(pointer)
+  return { pick: page.sent.find((m) => m.type === 'dom.element.selected'), lit, sent: page.sent }
 }
 
 const require = createRequire(import.meta.url)
@@ -170,6 +385,56 @@ const outDir = join(profile, 'out')
 function logText() {
   const file = join(dataDir, 'logs', 'main.log')
   return existsSync(file) ? readFileSync(file, 'utf8') : ''
+}
+
+console.log('\nPicking inside web components, with the shipped extension files (#345)')
+let shadowPick
+{
+  let moved = null
+  let still = null
+  let closedPick = null
+  let snapshot = null
+  let thrown = null
+  try {
+    moved = pickInComponentPage(240, 430)
+    still = pickInComponentPage(360, 430, { move: false })
+    closedPick = pickInComponentPage(900, 150)
+    snapshot = componentPage().snapshot()
+  } catch (error) {
+    thrown = error
+  }
+  check('the picker runs on a page built from shadow roots', thrown === null,
+    thrown instanceof Error ? thrown.stack : String(thrown))
+  check('the highlight sits on the button inside the shadow root, not on its host',
+    moved?.lit?.left === '200px' && moved.lit.top === '410px'
+      && moved.lit.width === '80px' && moved.lit.height === '40px',
+    JSON.stringify(moved?.lit))
+  const mute = moved?.pick?.element
+  check('a click picks that button',
+    mute?.tag === 'button' && mute.text === 'Mute' && mute.role === 'button'
+      && mute.bounds?.x === 200 && mute.bounds?.y === 410 && mute.bounds?.width === 80,
+    JSON.stringify(mute))
+  check('and names it through the shadow boundary, which no document-scoped selector can',
+    mute?.selector === '#player >>> div > button:nth-of-type(2)', String(mute?.selector))
+  const thumb = still?.pick?.element
+  check('a click with no move before it reaches through nested roots too',
+    thumb?.tag === 'div' && thumb.id === 'thumb'
+      && thumb.selector === '#player >>> div > seek-bar >>> #thumb',
+    JSON.stringify(thumb))
+  const closedHost = closedPick?.pick?.element
+  check('a closed root is picked as its host, and nothing inside it is read',
+    closedHost?.tag === 'closed-widget' && closedHost.selector === '#closed'
+      && !JSON.stringify(closedPick?.sent).includes('CLOSED-INSIDE'),
+    JSON.stringify(closedHost))
+  const drawn = snapshot?.elements ?? []
+  check('the document snapshot records what the open shadow roots draw',
+    drawn.some((e) => e.tag === 'button' && e.text === 'Mute')
+      && drawn.some((e) => e.tag === 'button' && e.text === 'Play')
+      && drawn.some((e) => e.id === 'thumb'),
+    JSON.stringify(drawn.map((e) => e.text ?? e.id ?? e.tag)))
+  check('and nothing from inside a closed one',
+    snapshot !== null && !JSON.stringify(snapshot).includes('CLOSED-INSIDE'))
+  shadowPick = moved?.pick
 }
 
 console.log('\nStarting the app with a profile of its own')
@@ -333,6 +598,25 @@ if (listening) {
   check('a picker that could not arm says why',
     /\[chrome\] element picker could not arm: Cannot access a chrome:\/\/ URL/.test(log),
     'picker.failed never reached main.log')
+
+  // THE PICK THE SHIPPED PICKER MADE INSIDE A SHADOW ROOT (#345), forwarded as
+  // background.js forwards one. The app has to keep the element inside — its
+  // pierced selector and its own rectangle — not refuse it or fall back to the host.
+  if (shadowPick === undefined) {
+    check('a pick from inside a shadow root reaches the app', false, 'the picker produced no pick to send')
+  } else {
+    host.stdin.write(frame({
+      ...shadowPick,
+      protocol: 1,
+      tab: { url: 'https://example.com/components', title: 'Components' },
+    }))
+    const shadowLogged = await waitFor(
+      () => logText().includes('#player >>> div > button:nth-of-type(2) 80x40'),
+      10_000,
+    )
+    check('a pick from inside a shadow root reaches the app as that element', shadowLogged,
+      'no element-pick line naming the pierced selector in main.log')
+  }
 
   // Nothing above is supposed to take the app down — the DOM is not streamed
   // to the log either — so the proof is that the app is still healthy and

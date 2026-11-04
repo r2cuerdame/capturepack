@@ -164,9 +164,12 @@ console.log('\nThe picker actually uses it, in every frame')
   // 0.4.0 makes the toolbar click a full-page capture that speaks
   // `page.captured` / `page.chunk` and expects `page.received` back (#157);
   // 0.4.1 keeps that wire and fixes the HiDPI full-page plan, so a shipped
-  // worker can be told apart from the one QA rejected.
+  // worker can be told apart from the one QA rejected; 0.4.2 keeps it again and
+  // picks and walks through open shadow roots (#345) — the app only recopies
+  // the extension folder when this number moves, so without it the new
+  // picker would never reach an installed browser.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.4.1', manifest.version)
+    manifest.version === '0.4.2', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 

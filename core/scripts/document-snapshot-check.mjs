@@ -49,6 +49,21 @@ function el(tag, options = {}) {
     node.children.push(child)
     node.childNodes.push(child)
   }
+  // `shadowRoot` is what a page script sees: the root for an OPEN shadow tree,
+  // null for a closed one or none at all. `shadowThrows` stands in for a host
+  // object that refuses to be read.
+  if (options.shadow !== undefined) {
+    node.shadowRoot = { host: node, children: [...options.shadow], childNodes: [...options.shadow] }
+  } else if (options.closedShadow !== undefined) {
+    node.shadowRoot = null
+  }
+  if (options.shadowThrows === true) {
+    Object.defineProperty(node, 'shadowRoot', {
+      get() {
+        throw new Error('SecurityError: Blocked a frame from accessing a cross-origin object')
+      },
+    })
+  }
   node.getBoundingClientRect = () => ({
     ...node.rect,
     right: node.rect.left + node.rect.width,
@@ -313,6 +328,145 @@ console.log('\nText is recorded once, where it belongs')
   check('and the descendant carries its own', p?.text === 'Inner words', JSON.stringify(p?.text))
 }
 
+console.log('\nAn open shadow tree is part of the visible page (#345)')
+{
+  // A web component draws its UI inside its shadow root, so `el.children` of
+  // the host is the light DOM it was given and not what the user sees. Before
+  // this, a page built from components (youtube.com is one) came out as a list
+  // of hosts with nothing inside them.
+  const snap = snapshotOf(
+    el('html', {
+      children: [
+        el('video-player', {
+          attrs: { id: 'player' },
+          rect: { left: 0, top: 0, width: 640, height: 360 },
+          shadow: [
+            el('button', { attrs: { class: 'play' }, text: 'SHADOW-PLAY-BUTTON' }),
+            el('control-bar', {
+              rect: { left: 0, top: 320, width: 640, height: 40 },
+              shadow: [el('span', { text: 'NESTED-SHADOW-TIME' })],
+            }),
+          ],
+          children: [el('p', { text: 'SLOTTED-LIGHT-CAPTION' })],
+        }),
+      ],
+    }),
+  )
+  const button = find(snap, 'button')[0]
+  check(
+    'an element inside an open shadow root is recorded',
+    button?.text === 'SHADOW-PLAY-BUTTON' && button.role === 'button' && button.class === 'play',
+    JSON.stringify(snap.elements),
+  )
+  check(
+    'a shadow tree inside a shadow tree is recorded too',
+    JSON.stringify(snap).includes('NESTED-SHADOW-TIME'),
+    JSON.stringify(snap.elements),
+  )
+  check(
+    'and the light children the host was given still are',
+    JSON.stringify(snap).includes('SLOTTED-LIGHT-CAPTION'),
+    JSON.stringify(snap.elements),
+  )
+  const order = snap.elements.map((e) => e.tag)
+  check(
+    'the host comes before what it draws',
+    order.indexOf('video-player') !== -1 && order.indexOf('video-player') < order.indexOf('button'),
+    JSON.stringify(order),
+  )
+  check(
+    'every element is numbered once, in walk order',
+    snap.elements.every((e, i) => e.i === i),
+    JSON.stringify(snap.elements.map((e) => e.i)),
+  )
+}
+
+console.log('\nA shadow tree keeps every refusal')
+{
+  const snap = snapshotOf(
+    el('html', {
+      children: [
+        el('login-form', {
+          shadow: [
+            el('input', { attrs: { type: 'text', name: 'user' }, value: 'SHADOW-TYPED-NAME' }),
+            el('input', { attrs: { type: 'password', name: 'shadow-account' }, value: 'SHADOW-HUNTER2' }),
+            el('div', {
+              attrs: { 'data-token': 'SHADOW-TOKEN' },
+              style: { display: 'none' },
+              children: [el('span', { text: 'SHADOW-COLLAPSED-TEXT' })],
+            }),
+          ],
+        }),
+        el('closed-menu', {
+          attrs: { 'aria-hidden': 'true' },
+          shadow: [el('span', { text: 'UNDER-A-HIDDEN-HOST' })],
+        }),
+      ],
+    }),
+  )
+  const serialized = JSON.stringify(snap)
+  check('no value typed into a shadow field', !serialized.includes('SHADOW-TYPED-NAME'))
+  check(
+    'a shadow password field is a password field',
+    !serialized.includes('SHADOW-HUNTER2') && !serialized.includes('shadow-account')
+      && find(snap, 'input').some((i) => i.secret === true),
+    JSON.stringify(find(snap, 'input')),
+  )
+  check(
+    'hidden inside a shadow tree is hidden',
+    !serialized.includes('SHADOW-COLLAPSED-TEXT') && !serialized.includes('SHADOW-TOKEN'),
+  )
+  check(
+    'a hidden host hides the tree it draws',
+    !serialized.includes('UNDER-A-HIDDEN-HOST'),
+  )
+}
+
+console.log('\nWhat a page script cannot reach is skipped, never an error')
+{
+  let snap = null
+  let thrown = null
+  try {
+    snap = snapshotOf(
+      el('html', {
+        children: [
+          // A closed root: `shadowRoot` is null to anyone but its owner.
+          el('closed-widget', { text: 'CLOSED-HOST-LABEL', closedShadow: [el('span', { text: 'CLOSED-INSIDE' })] }),
+          el('hostile-host', { text: 'THROWING-HOST-LABEL', shadowThrows: true }),
+          el('p', { text: 'AFTER-THE-UNREACHABLE' }),
+        ],
+      }),
+    )
+  } catch (error) {
+    thrown = error
+  }
+  check('the walk completes', thrown === null, String(thrown))
+  const serialized = JSON.stringify(snap)
+  check('a closed root contributes nothing', !serialized.includes('CLOSED-INSIDE'))
+  check(
+    'its host, and one whose root cannot be read, are still recorded',
+    serialized.includes('CLOSED-HOST-LABEL') && serialized.includes('THROWING-HOST-LABEL'),
+    JSON.stringify(snap?.elements),
+  )
+  check('and so is the page after them', serialized.includes('AFTER-THE-UNREACHABLE'))
+}
+
+console.log('\nThe cap counts shadow elements like any other')
+{
+  const many = Array.from({ length: 4100 }, (_, i) => el('li', { text: `row ${String(i)}` }))
+  const snap = snapshotOf(el('html', { children: [el('long-list', { shadow: many })] }))
+  check(
+    'a shadow tree past the cap stops at the cap and says so',
+    snap.elements.length === 4000 && snap.truncated === true,
+    `${String(snap.elements.length)} element(s), truncated ${String(snap.truncated)}`,
+  )
+  check(
+    'and what it did record came from inside the shadow tree',
+    find(snap, 'li').length === 3998,
+    `${String(find(snap, 'li').length)} li`,
+  )
+}
+
 console.log('\nThe payload says what it left out')
 {
   const snap = snapshotOf(el('html', { children: [el('p', { text: 'hi' })] }))
@@ -322,6 +476,11 @@ console.log('\nThe payload says what it left out')
       && snap.omitted.some((s) => s.includes('input'))
       && snap.omitted.some((s) => s.includes('password'))
       && snap.omitted.some((s) => s.includes('could not see')),
+    JSON.stringify(snap.omitted),
+  )
+  check(
+    'including the shadow trees a page keeps closed to every script',
+    snap.omitted.some((s) => s.includes('closed shadow root')),
     JSON.stringify(snap.omitted),
   )
   check(
