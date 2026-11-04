@@ -168,6 +168,27 @@
   }
 
   /**
+   * The root of an OPEN shadow tree, or null (#345).
+   *
+   * A web component draws its UI inside its shadow root, and `el.children` of
+   * the host is only the light DOM it was handed — so a page built from
+   * components came out as a list of hosts with nothing inside them.
+   *
+   * A closed root reads as null to every script but its owner's: the page has
+   * said it is not ours to read, and the host alone is recorded. A host object
+   * that throws on the read is the same answer delivered rudely, and costs the
+   * walk nothing either.
+   */
+  const openShadowRoot = (el) => {
+    try {
+      const root = el.shadowRoot
+      return root !== null && typeof root === 'object' && root.children !== undefined ? root : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Walk the document in order, refusing subtrees rather than elements where a
    * whole branch is invisible — a closed menu costs one refusal, not one per
    * item inside it.
@@ -203,8 +224,20 @@
       // descended into. Only inherited invisibility prunes.
       if (described === null) continue
       if (described !== SKIP) elements.push(described)
+      // Pushed last so they pop first: the host's shadow tree is what it draws,
+      // then the light children it was given. Those are on screen only where a
+      // slot puts them, and their boxes say so — an unslotted one measures zero
+      // and is skipped by the same rule as any other empty box.
+      //
+      // Inherited invisibility pruned above, before either list was pushed, so a
+      // hidden host hides the tree it draws exactly as it hides its children.
       const children = el.children
       for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i])
+      const shadow = openShadowRoot(el)
+      if (shadow !== null) {
+        const drawn = shadow.children
+        for (let i = drawn.length - 1; i >= 0; i -= 1) stack.push(drawn[i])
+      }
     }
     return { elements, truncated, visited }
   }
@@ -248,6 +281,7 @@
         'text of elements the user could not see',
         wholeDocument ? 'elements outside the captured page area' : 'elements outside the viewport',
         'attributes outside the recorded allowlist',
+        'the inside of every closed shadow root, which the page keeps from all scripts',
       ],
     }
   }
