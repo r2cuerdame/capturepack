@@ -1,6 +1,10 @@
 ---
 stage: 보수/PLC
 platform: web
+productStage: released
+platforms:
+  - web
+version: 0.5.1
 deployWorkflow: pages.yml
 smokeUrl: https://capturepack.dev
 versionNeedle: CapturePack
