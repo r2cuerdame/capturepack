@@ -434,6 +434,13 @@ async function visibleActiveTabs() {
 
 /** One window's visible document, with the viewport that places it. */
 async function snapshotOneTab(tab) {
+  // The tab object may predate an SPA navigation. Read the live URL/title
+  // immediately before injection so the document and its manifest facts match.
+  try {
+    tab = await chrome.tabs.get(tab.id)
+  } catch {
+    // Keep the enumerated tab; injection below will report if it disappeared.
+  }
   // Top frame only: a document snapshot is placed by a viewport a reader can
   // locate, and that is the top one.
   await chrome.scripting.executeScript({
@@ -857,6 +864,26 @@ if (chrome.commands && chrome.commands.onCommand) {
 
 // Element selections from the content script.
 chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg && msg.type === 'route-changed') {
+    const tabId = sender.tab && sender.tab.id
+    const url = typeof msg.url === 'string' ? msg.url.slice(0, 2048) : ''
+    const title = typeof msg.title === 'string' ? msg.title.slice(0, 512) : ''
+    if (tabId === undefined || !url) return
+    // Ignore a delayed message from a tab that is no longer the active tab in
+    // its window; this is context for the active page used by the next capture.
+    chrome.tabs.get(tabId).then((tab) => {
+      if (!tab.active) return
+      tab.url = url
+      tab.title = title
+      send({
+        type: 'url.changed',
+        protocol: PROTOCOL,
+        timestamp: Date.now(),
+        tab: { url, title },
+      })
+    }).catch(() => {})
+    return
+  }
   // ARMED IS A STATE THE USER CAN SEE. Clicking the toolbar icon used to do
   // nothing visible at all, so a picker that failed to arm and a picker
   // waiting for a click looked identical — and when the injection guard was

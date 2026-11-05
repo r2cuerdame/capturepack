@@ -162,6 +162,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
   private readonly snapshotDipBoundsAt: (display: number) => Rect | undefined
   private placedCache: PlacedPick[] | null = null
   private refusalCache: DomPlacementRefusal[] = []
+  private routeContext = new Map<string, { tMs: number; url: string; title: string }>()
 
   constructor(
     events: readonly DomEvent[],
@@ -169,16 +170,31 @@ export class ChromeDomProvider implements TemporalContextProvider {
     snapshotPixelsPerDipAt: (display: number) => number | null = () => null,
     snapshotDipBoundsAt: (display: number) => Rect | undefined = () => undefined,
   ) {
-    this.events = events
+    this.events = []
     this.surfacesAt = surfacesAt
     this.snapshotPixelsPerDipAt = snapshotPixelsPerDipAt
     this.snapshotDipBoundsAt = snapshotDipBoundsAt
+    this.replace(events)
   }
 
   /** Late-arriving events (the bridge keeps receiving during an open editor). */
   replace(events: readonly DomEvent[]): void {
     this.events = events
+    const latestByPreviousUrl = new Map<string, { tMs: number; url: string; title: string }>()
+    let previousUrl: string | null = null
+    for (const event of [...events].sort((a, b) => a.tMs - b.tMs)) {
+      if (event.type !== 'url.changed' && event.type !== 'tab.updated') continue
+      if (previousUrl !== null) {
+        const previous = latestByPreviousUrl.get(previousUrl)
+        if (!previous || previous.tMs <= event.tMs) {
+          latestByPreviousUrl.set(previousUrl, { tMs: event.tMs, url: event.tab.url, title: event.tab.title })
+        }
+      }
+      previousUrl = event.tab.url
+    }
+    this.routeContext = latestByPreviousUrl
     this.placedCache = null
+    this.refusalCache = []
   }
 
   get pickCount(): number {
@@ -275,6 +291,8 @@ export class ChromeDomProvider implements TemporalContextProvider {
     const out: PlacedPick[] = []
     const refusals: DomPlacementRefusal[] = []
     for (const [eventOrdinal, event] of this.events.entries()) {
+      const route = this.routeContext.get(event.tab.url)
+      if (route && event.tMs < route.tMs) continue
       // A CAPTURED DOCUMENT IS EVERY ELEMENT, NOT ONE (#130).
       //
       // This loop only ever understood `dom.element.selected` — the single
