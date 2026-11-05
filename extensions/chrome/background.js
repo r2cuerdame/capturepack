@@ -289,6 +289,11 @@ async function armPicker(tab, via) {
   }
   const url = tab.url || ''
   try {
+    try {
+      await installRouteObserver(tab.id)
+    } catch {
+      // Route observation is best-effort; a picker still works without it.
+    }
     // EVERY FRAME, NOT JUST THE TOP ONE (#104). A click inside a cross-origin
     // iframe never reaches the top document, so a top-only injection armed a
     // picker that could not see the click at all — silently, on every page that
@@ -317,6 +322,64 @@ async function armPicker(tab, via) {
       tab: { url: url.slice(0, 2048), title: (tab.title || '').slice(0, 512) },
     })
   }
+}
+
+/** Watch same-document navigation in the page world without requesting broad
+ * host access. The observer is installed only when Chrome already permits this
+ * tab through activeTab or an explicit host grant. */
+async function installRouteObserver(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => {
+      if (window.__capturepackRouteObserver) return
+      window.__capturepackRouteObserver = true
+
+      let timer = null
+      let titleObserver = null
+      let lastUrl = location.href
+      let lastTitle = document.title
+      const schedule = () => {
+        if (timer !== null) clearTimeout(timer)
+        timer = setTimeout(() => {
+          timer = null
+          const url = location.href
+          const title = document.title
+          if (url === lastUrl && title === lastTitle) return
+          lastUrl = url
+          lastTitle = title
+          window.postMessage({ __capturepackRoute: true }, '*')
+        }, 100)
+      }
+
+      for (const method of ['pushState', 'replaceState']) {
+        const original = history[method]
+        history[method] = function (...args) {
+          const result = original.apply(this, args)
+          schedule()
+          return result
+        }
+      }
+      addEventListener('popstate', schedule)
+      addEventListener('hashchange', schedule)
+      const observeTitle = () => {
+        if (document.head && titleObserver === null) {
+          titleObserver = new MutationObserver(schedule)
+          titleObserver.observe(document.head, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          })
+        }
+      }
+      observeTitle()
+      addEventListener('DOMContentLoaded', observeTitle, { once: true })
+    },
+  })
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['route-content.js'],
+  })
 }
 
 // THREE WAYS IN, ONE PERMISSION STORY.
@@ -434,12 +497,17 @@ async function visibleActiveTabs() {
 
 /** One window's visible document, with the viewport that places it. */
 async function snapshotOneTab(tab) {
-  // The tab object may predate an SPA navigation. Read the live URL/title
-  // immediately before injection so the document and its manifest facts match.
+  // The tab object may predate an SPA navigation. Install the observer under
+  // this user-granted tab access, then read live URL/title for capture metadata.
   try {
     tab = await chrome.tabs.get(tab.id)
   } catch {
     // Keep the enumerated tab; injection below will report if it disappeared.
+  }
+  try {
+    await installRouteObserver(tab.id)
+  } catch {
+    // A restricted or closed page can still fail its document snapshot below.
   }
   // Top frame only: a document snapshot is placed by a viewport a reader can
   // locate, and that is the top one.
@@ -470,7 +538,13 @@ async function snapshotOneTab(tab) {
   })
   const document_ = out && out.result ? out.result.document : null
   if (document_ === null) return { ok: false, reason: 'no-snapshot', tab: tabFacts(tab) }
-  return { ok: true, tab: tabFacts(tab), document: document_, viewport: out.result.viewport }
+  // The page snapshot is the freshest source during a same-document route; the
+  // tabs API may publish its URL/title a beat later.
+  const facts = {
+    url: typeof document_.url === 'string' ? document_.url : tab.url || '',
+    title: typeof document_.title === 'string' ? document_.title : tab.title || '',
+  }
+  return { ok: true, tab: tabFacts(facts), document: document_, viewport: out.result.viewport }
 }
 
 /**
@@ -872,9 +946,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     // Ignore a delayed message from a tab that is no longer the active tab in
     // its window; this is context for the active page used by the next capture.
     chrome.tabs.get(tabId).then((tab) => {
-      if (!tab.active) return
-      tab.url = url
-      tab.title = title
+      if (!tab.active || tab.url !== url) return
       send({
         type: 'url.changed',
         protocol: PROTOCOL,

@@ -21,39 +21,6 @@
 // was not already hosting the element.
 ;(() => {
   const IS_TOP = window.top === window
-  // Client-side navigation does not produce tabs.onUpdated URL events. Patch
-  // the page world's History methods (the isolated content-script world has a
-  // separate Window) and debounce notifications so router redirect chains
-  // settle before the extension samples the new document context.
-  if (IS_TOP) {
-    let routeTimer = null
-    let lastRoute = window.location.href
-    const reportRoute = () => {
-      if (routeTimer !== null) clearTimeout(routeTimer)
-      routeTimer = setTimeout(() => {
-        routeTimer = null
-        const url = window.location.href
-        const title = document.title
-        if (url === lastRoute) return
-        lastRoute = url
-        try {
-          chrome.runtime.sendMessage({ type: 'route-changed', url, title })
-        } catch {
-          // A navigated or discarded tab has no live extension receiver.
-        }
-      }, 100)
-    }
-    for (const method of ['pushState', 'replaceState']) {
-      const original = history[method]
-      history[method] = function (...args) {
-        const result = original.apply(this, args)
-        reportRoute()
-        return result
-      }
-    }
-    window.addEventListener('popstate', reportRoute)
-    window.addEventListener('hashchange', reportRoute)
-  }
   // Shadow roots nested deeper than this are a loop, not a page.
   const MAX_SHADOW_DEPTH = 32
 
