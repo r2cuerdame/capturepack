@@ -796,6 +796,7 @@ const app2 = track(spawn(
     '--no-global-shortcut',
     '--no-login-item',
     '--capture-now=12',
+    '--save-now=120',
   ],
   { stdio: 'ignore', env: bridgeEnv },
 ))
@@ -869,7 +870,7 @@ if (ready) {
       45_000,
     )
     check('the recorder is running before the browser speaks', recording,
-      'no "recorder state: recording" line, so any pick would fall outside the replay')
+      'no "recorder state: recording" line')
     host2.stdin.write(
       frame({
         type: 'dom.element.selected',
