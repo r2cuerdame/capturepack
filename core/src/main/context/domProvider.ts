@@ -173,6 +173,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
     this.surfacesAt = surfacesAt
     this.snapshotPixelsPerDipAt = snapshotPixelsPerDipAt
     this.snapshotDipBoundsAt = snapshotDipBoundsAt
+    this.replace(events)
   }
 
   /** Late-arriving events (the bridge keeps receiving during an open editor). */
