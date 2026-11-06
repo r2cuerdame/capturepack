@@ -308,7 +308,7 @@ export function registerHistoryIpc(live: Settings): void {
         if (isRenderInFlight(entry.path)) {
           return { ok: false, error: t('history.shareErrNotReady') }
         }
-        const plan = await planShareBundle(entry.path)
+        const plan = await planShareBundle(entry.path, { opaqueRedaction: true })
         const historyPlan = await sharePlanForHistory(plan)
         if (!fromHistory(event)) {
           return { ok: false, error: 'history window closed' }
@@ -400,7 +400,7 @@ export function registerHistoryIpc(live: Settings): void {
         if (isRenderInFlight(entry.path)) {
           return { ok: false, error: t('history.shareErrNotReady') }
         }
-        const result = await createShareBundle(entry.path, revision)
+        const result = await createShareBundle(entry.path, revision, { opaqueRedaction: true })
         sharePlanCache.delete(entry.path)
         invalidateStorageUsage()
         return { ok: true, bundlePath: result.zipPath }
@@ -973,6 +973,7 @@ async function sharePlanForHistory(plan: ShareBundlePlan): Promise<HistoryShareP
     hasBlur: plan.hasBlur,
     visibleLabels: plan.visibleLabels,
     blockers: plan.blockers,
+    opaqueRedaction: plan.opaqueRedaction,
   }
 }
 

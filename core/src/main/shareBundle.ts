@@ -55,6 +55,18 @@ export interface ShareMediaPlanEntry {
   decodedRasterBytes: number
   pixelWidth: number
   pixelHeight: number
+  /** Original screenshot used for fresh opaque redaction rendering. */
+  sourceSnapshotPath: string
+  sourceSnapshotSha256: string
+  sourceSnapshotSize: number
+  sourceSnapshotMtimeMs: number
+  annotations: Annotation[]
+  displayAnnotations: Annotation[]
+  opaqueRedaction: boolean
+  frameWidth: number
+  frameHeight: number
+  focusedDisplay: number | null
+  motionSpace?: import('../shared/track').AuthoredMotionSpace
 }
 
 export interface CanonicalShareStill {
@@ -73,6 +85,7 @@ export interface ShareBundlePlan {
   entries: ShareMediaPlanEntry[]
   visibleLabels: string[]
   blockers: ShareBundleBlocker[]
+  opaqueRedaction: boolean
 }
 
 export type ShareBundleErrorCode =
@@ -133,13 +146,17 @@ interface ShareDisplayLayout {
  * Reads the small source declarations, validates/canonicalizes every declared
  * still, and hashes its raw bytes for review binding. No archive is written.
  */
-export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan> {
+export async function planShareBundle(
+  dirPath: string,
+  options: { opaqueRedaction?: boolean } = {},
+): Promise<ShareBundlePlan> {
   const requestedRoot = path.resolve(dirPath)
   await assertUnaliasedDirectory(requestedRoot)
   const root = await realpath(requestedRoot).catch(() => {
     throw new ShareBundleError('invalid-pack')
   })
   const pack = await readPack(root)
+  const opaqueRedaction = options.opaqueRedaction === true
   const layout = shareDisplayLayout(pack.manifest, pack.annotationFrame)
   const annotationLanes = pack.annotations.map((annotation) => annotationDisplays(annotation, layout))
   const candidates = mediaCandidates(pack.manifest, layout)
@@ -171,6 +188,8 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   let totalBytes = 0
   let totalCanonicalBytes = 0
   let totalDecodedRasterBytes = 0
+  let totalOpaqueDecodedRasterBytes = 0
+  let opaqueDecodedRasterBytes = 0
   for (const candidate of candidates) {
     if (destinations.has(candidate.archivePath)) {
       throw new ShareBundleError('invalid-pack', candidate.archivePath)
@@ -202,8 +221,8 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
       throw new ShareBundleError('derived-media-missing', candidate.sourceRel)
     })
     const canonicalBytes = canonicalStill(sourceBytes, candidate.sourceRel)
-    const { width: pixelWidth, height: pixelHeight } = canonicalPngDimensions(canonicalBytes)
-    const decodedRasterBytes = pixelWidth * pixelHeight * 4
+    let { width: pixelWidth, height: pixelHeight } = canonicalPngDimensions(canonicalBytes)
+    let decodedRasterBytes = pixelWidth * pixelHeight * 4
     if (
       canonicalBytes.length > MAX_SHARE_STILL_BYTES ||
       !Number.isSafeInteger(decodedRasterBytes) ||
@@ -211,11 +230,13 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     ) {
       throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
     }
-    totalCanonicalBytes += canonicalBytes.length
-    totalDecodedRasterBytes += decodedRasterBytes
+    totalCanonicalBytes += opaqueRedaction ? 0 : canonicalBytes.length
+    if (opaqueRedaction) totalOpaqueDecodedRasterBytes += decodedRasterBytes
+    else totalDecodedRasterBytes += decodedRasterBytes
     if (
       totalCanonicalBytes > MAX_SHARE_TOTAL_BYTES ||
-      totalDecodedRasterBytes > MAX_SHARE_TOTAL_BYTES
+      totalDecodedRasterBytes > MAX_SHARE_TOTAL_BYTES ||
+      totalOpaqueDecodedRasterBytes > MAX_SHARE_TOTAL_BYTES
     ) {
       throw new ShareBundleError('derived-media-not-ready')
     }
@@ -239,6 +260,51 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     if (stableStat.size !== fileStat.size || stableStat.mtimeMs !== fileStat.mtimeMs) {
       throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
     }
+    let sourceSnapshotPath = sourcePath
+    let sourceSnapshotSha256 = sha256(sourceBytes)
+    let sourceSnapshotSize = fileStat.size
+    let sourceSnapshotMtimeMs = fileStat.mtimeMs
+    let frameWidth = pixelWidth
+    let frameHeight = pixelHeight
+    if (opaqueRedaction) {
+      const snapshotRel = candidate.display === null || candidate.display === layout.focused
+        ? pack.manifest.media.snapshot
+        : layout.displays.find((display) => display.index === candidate.display)?.snapshot
+      if (snapshotRel === undefined) throw new ShareBundleError('invalid-pack')
+      sourceSnapshotPath = await containedRegularFile(root, snapshotRel)
+      const snapshotStat = await lstat(sourceSnapshotPath).catch(() => {
+        throw new ShareBundleError('derived-media-missing', snapshotRel)
+      })
+      const snapshotBytes = await readFile(sourceSnapshotPath).catch(() => {
+        throw new ShareBundleError('derived-media-missing', snapshotRel)
+      })
+      if (snapshotBytes.length > MAX_SHARE_STILL_BYTES || snapshotStat.size !== snapshotBytes.length) {
+        throw new ShareBundleError('derived-media-not-ready', snapshotRel)
+      }
+      const sourceDims = canonicalPngDimensions(canonicalStill(snapshotBytes, snapshotRel))
+      if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || snapshotStat.size !== snapshotBytes.length) {
+        throw new ShareBundleError('derived-media-not-ready', snapshotRel)
+      }
+      frameWidth = sourceDims.width
+      frameHeight = sourceDims.height
+      pixelWidth = frameWidth
+      pixelHeight = frameHeight
+      decodedRasterBytes = frameWidth * frameHeight * 4
+      if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES) {
+        throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
+      }
+      opaqueDecodedRasterBytes += decodedRasterBytes
+      if (opaqueDecodedRasterBytes > MAX_SHARE_TOTAL_BYTES) throw new ShareBundleError('derived-media-not-ready')
+      sourceSnapshotSha256 = sha256(snapshotBytes)
+      sourceSnapshotSize = snapshotStat.size
+      sourceSnapshotMtimeMs = snapshotStat.mtimeMs
+      const stableSnapshot = await lstat(sourceSnapshotPath).catch(() => {
+        throw new ShareBundleError('derived-media-missing', snapshotRel)
+      })
+      if (stableSnapshot.size !== snapshotStat.size || stableSnapshot.mtimeMs !== snapshotStat.mtimeMs) {
+        throw new ShareBundleError('derived-media-not-ready', snapshotRel)
+      }
+    }
     entries.push({
       ...candidate,
       sourcePath,
@@ -246,10 +312,33 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
       mtimeMs: fileStat.mtimeMs,
       contentSha256: sha256(sourceBytes),
       canonicalSha256: sha256(canonicalBytes),
-      canonicalSize: canonicalBytes.length,
+      canonicalSize: opaqueRedaction ? Math.max(canonicalBytes.length, decodedRasterBytes) : canonicalBytes.length,
       decodedRasterBytes,
       pixelWidth,
       pixelHeight,
+      sourceSnapshotPath,
+      sourceSnapshotSha256,
+      sourceSnapshotSize,
+      sourceSnapshotMtimeMs,
+      annotations: pack.annotations,
+      displayAnnotations: candidate.display === null
+        ? pack.annotations
+        : pack.annotations.filter((annotation) => (annotation.display ?? layout.focused) === candidate.display),
+      opaqueRedaction,
+      frameWidth,
+      frameHeight,
+      focusedDisplay: layout.focused,
+      ...(layout.displays.length < 2 || layout.focused === null ? {} : {
+        motionSpace: {
+          focusedIndex: layout.focused ?? 1,
+          displays: layout.displays.map((display) => ({
+            index: display.index,
+            width: display.snapshot_width,
+            height: display.snapshot_height,
+            bounds: display.bounds,
+          })),
+        },
+      }),
     })
   }
 
@@ -266,13 +355,12 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   }
 
   const visibleLabels = pack.annotations
+    .filter((annotation) => !(opaqueRedaction && annotation.blur === true))
     .map((annotation) => (typeof annotation.text === 'string' ? annotation.text.trim() : ''))
     .filter((text) => text !== '')
-  // The current renderer draws a box's label AFTER its blur pass. A semantic
-  // pick commonly fills that label with the same UIA/DOM name the user meant
-  // to hide, so copying those pixels would undo the redaction at the box edge.
-  // Fail closed until the user clears the blur box's label and re-renders.
-  const blockers: ShareBundleBlocker[] = blurAnnotations.some(
+  // Legacy pixelation remains fail-closed. Opaque Share Copy re-renders the
+  // source and suppresses the entire blur annotation including label/badge.
+  const blockers: Array<'blur-label'> = !opaqueRedaction && blurAnnotations.some(
     (annotation) => typeof annotation.text === 'string' && annotation.text.trim() !== '',
   )
     ? ['blur-label']
@@ -281,25 +369,20 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   const revision = createHash('sha256')
     .update(pack.manifestBytes)
     .update(pack.annotationBytes ?? Buffer.alloc(0))
+    .update(opaqueRedaction ? 'opaque-redaction-v1:#1a1a1a' : 'derived-pixels-v1')
     .update(
       JSON.stringify(
-        entries.map(({
+        entries.map(({ sourceRel, size, mtimeMs, contentSha256, canonicalSha256, canonicalSize,
+          decodedRasterBytes, pixelWidth, pixelHeight, sourceSnapshotSha256 }) => ({
           sourceRel,
           size,
           mtimeMs,
           contentSha256,
-          canonicalSha256,
-          canonicalSize,
-          decodedRasterBytes,
-          pixelWidth,
-          pixelHeight,
-        }) => ({
-          sourceRel,
-          size,
-          mtimeMs,
-          contentSha256,
-          canonicalSha256,
-          canonicalSize,
+          ...(
+            opaqueRedaction
+              ? { sourceSnapshotSha256 }
+              : { canonicalSha256, canonicalSize }
+          ),
           decodedRasterBytes,
           pixelWidth,
           pixelHeight,
@@ -319,6 +402,7 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     entries,
     visibleLabels,
     blockers,
+    opaqueRedaction,
   }
 }
 
@@ -331,6 +415,52 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
 export async function readCanonicalShareStill(
   entry: ShareMediaPlanEntry,
 ): Promise<CanonicalShareStill> {
+  if (entry.opaqueRedaction) {
+    const before = await lstat(entry.sourceSnapshotPath).catch(() => {
+      throw new ShareBundleError('pack-changed')
+    })
+    if (!before.isFile() || before.isSymbolicLink() || before.size !== entry.sourceSnapshotSize ||
+      before.mtimeMs !== entry.sourceSnapshotMtimeMs) throw new ShareBundleError('pack-changed')
+    const source = await readFile(entry.sourceSnapshotPath).catch(() => {
+      throw new ShareBundleError('pack-changed')
+    })
+    if (sha256(source) !== entry.sourceSnapshotSha256) throw new ShareBundleError('pack-changed')
+    const after = await lstat(entry.sourceSnapshotPath).catch(() => {
+      throw new ShareBundleError('pack-changed')
+    })
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs ||
+      !after.isFile() || after.isSymbolicLink() || sha256(source) !== entry.sourceSnapshotSha256) {
+      throw new ShareBundleError('pack-changed')
+    }
+    const frame = canonicalStill(source, entry.sourceRel)
+    const derivedBefore = await lstat(entry.sourcePath).catch(() => {
+      throw new ShareBundleError('pack-changed')
+    })
+    if (!derivedBefore.isFile() || derivedBefore.isSymbolicLink() ||
+      derivedBefore.size !== entry.size || derivedBefore.mtimeMs !== entry.mtimeMs) throw new ShareBundleError('pack-changed')
+    const derived = await readFile(entry.sourcePath).catch(() => {
+      throw new ShareBundleError('pack-changed')
+    })
+    const derivedAfter = await lstat(entry.sourcePath).catch(() => {
+      throw new ShareBundleError('pack-changed')
+    })
+    if (derivedAfter.size !== derivedBefore.size || derivedAfter.mtimeMs !== derivedBefore.mtimeMs ||
+      sha256(derived) !== entry.contentSha256) throw new ShareBundleError('pack-changed')
+    const sourceStill = canonicalPng(derived)
+    const sourceDimensions = canonicalPngDimensions(sourceStill)
+    const snapshotDimensions = canonicalPngDimensions(frame)
+    if (sourceDimensions.width !== snapshotDimensions.width || sourceDimensions.height !== snapshotDimensions.height) {
+      throw new ShareBundleError('pack-changed')
+    }
+    const canonical = opaqueRedactPng(sourceStill, entry.displayAnnotations)
+    const dimensions = canonicalPngDimensions(canonical)
+    const decodedRasterBytes = dimensions.width * dimensions.height * 4
+    if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES ||
+      decodedRasterBytes !== entry.decodedRasterBytes || dimensions.width !== entry.pixelWidth || dimensions.height !== entry.pixelHeight) {
+      throw new ShareBundleError('pack-changed')
+    }
+    return { bytes: canonical, ...dimensions }
+  }
   const before = await lstat(entry.sourcePath).catch(() => {
     throw new ShareBundleError('pack-changed')
   })
@@ -412,8 +542,9 @@ async function assertUnaliasedDirectory(resolvedPath: string): Promise<void> {
 export async function createShareBundle(
   dirPath: string,
   expectedRevision: string,
+  options: { opaqueRedaction?: boolean } = {},
 ): Promise<{ zipPath: string; plan: ShareBundlePlan }> {
-  const plan = await planShareBundle(dirPath).catch(() => {
+  const plan = await planShareBundle(dirPath, options).catch(() => {
     // Creation is reachable only through a successful local review. If that
     // reviewed source can no longer even be planned, the useful truth is that
     // it changed underneath the confirmation, not whichever new defect the
@@ -437,7 +568,7 @@ export async function createShareBundle(
   // Catch a re-edit or late render that landed while the (potentially large)
   // annotated stills were being read. The user reviews that new revision on a
   // second click instead of receiving a mixture of two pack states.
-  const afterRead = await planShareBundle(dirPath).catch(() => {
+  const afterRead = await planShareBundle(dirPath, options).catch(() => {
     throw new ShareBundleError('pack-changed')
   })
   if (afterRead.revision !== plan.revision) {
@@ -1191,6 +1322,67 @@ function canonicalPngDimensions(bytes: Buffer): { width: number; height: number 
   const height = bytes.readUInt32BE(20)
   if (width < 1 || height < 1) throw new Error('canonical PNG dimensions')
   return { width, height }
+}
+
+function canonicalRgbaFromPng(bytes: Buffer): Buffer {
+  let offset = 8
+  let width = 0
+  let height = 0
+  const compressed: Buffer[] = []
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset)
+    const type = bytes.toString('ascii', offset + 4, offset + 8)
+    if (type === 'IHDR') {
+      width = bytes.readUInt32BE(offset + 8)
+      height = bytes.readUInt32BE(offset + 12)
+    } else if (type === 'IDAT') compressed.push(bytes.subarray(offset + 8, offset + 8 + length))
+    offset += length + 12
+    if (type === 'IEND') break
+  }
+  const stride = width * 4 + 1
+  const raw = inflateSync(Buffer.concat(compressed), { maxOutputLength: stride * height + 1 })
+  const rgba = Buffer.allocUnsafe(width * height * 4)
+  for (let y = 0; y < height; y += 1) raw.copy(rgba, y * width * 4, y * stride + 1, y * stride + 1 + width * 4)
+  return rgba
+}
+
+/** Apply a fixed opaque fill to each blur rectangle on the completed still. */
+function opaqueRedactPng(bytes: Buffer, annotations: readonly Annotation[]): Buffer {
+  if (annotations.length === 0) return bytes
+  const { width, height } = canonicalPngDimensions(bytes)
+  const rgba = canonicalRgbaFromPng(bytes)
+  for (const annotation of annotations) {
+    if (!annotation.blur) continue
+    const x0 = Math.max(0, Math.floor(annotation.bounds.x))
+    const y0 = Math.max(0, Math.floor(annotation.bounds.y))
+    const x1 = Math.min(width, Math.ceil(annotation.bounds.x + annotation.bounds.width))
+    const y1 = Math.min(height, Math.ceil(annotation.bounds.y + annotation.bounds.height))
+    for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) {
+      const offset = (y * width + x) * 4
+      rgba[offset] = 0x1a
+      rgba[offset + 1] = 0x1a
+      rgba[offset + 2] = 0x1a
+      rgba[offset + 3] = 0xff
+    }
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  const raster = Buffer.allocUnsafe((width * 4 + 1) * height)
+  for (let y = 0; y < height; y += 1) {
+    const row = y * (width * 4 + 1)
+    raster[row] = 0
+    rgba.copy(raster, row + 1, y * width * 4, (y + 1) * width * 4)
+  }
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  return Buffer.concat([
+    signature,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raster, { level: 9 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ])
 }
 
 /**

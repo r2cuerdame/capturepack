@@ -95,6 +95,7 @@ export interface Overlay {
   scaleX: number
   scaleY: number
   motionSpace: AuthoredMotionSpace | undefined
+  opaqueRedaction: boolean
 }
 
 /**
@@ -148,6 +149,7 @@ export function makeOverlay(job: RenderStartPayload, outputWidth: number, output
     scaleX,
     scaleY,
     motionSpace: job.motionSpace,
+    opaqueRedaction: job.opaqueRedaction === true,
   }
 }
 
@@ -188,11 +190,26 @@ export function drawOverlay(
           // coordinates into this one.
           .filter((a) => onThisDisplay(a, overlay))
   for (const a of alive) {
-    if (a.blur) pixelate(ctx, canvas, a)
+    if (a.blur) {
+      if (overlay.opaqueRedaction) fillOpaque(ctx, a)
+      else pixelate(ctx, canvas, a)
+    }
   }
   for (const a of alive) {
+    if (overlay.opaqueRedaction && a.blur) continue
     drawBox(ctx, a, overlay.numbers.get(a.annotation_id), overlay.ui)
   }
+}
+
+/** A source-independent solid fill for privacy-safe Share Copy output. */
+function fillOpaque(ctx: CanvasRenderingContext2D, a: Annotation): void {
+  const x = Math.max(0, Math.floor(a.bounds.x))
+  const y = Math.max(0, Math.floor(a.bounds.y))
+  const right = Math.min(ctx.canvas.width, Math.ceil(a.bounds.x + a.bounds.width))
+  const bottom = Math.min(ctx.canvas.height, Math.ceil(a.bounds.y + a.bounds.height))
+  if (right <= x || bottom <= y) return
+  ctx.fillStyle = '#1a1a1a'
+  ctx.fillRect(x, y, right - x, bottom - y)
 }
 
 function renderedLabelStyle(text: string, ui: number): AnnotationLabelStyle {
@@ -248,7 +265,7 @@ export function scaleAnnotation(
  * interval (SPEC §8.4) and have nothing to anchor to without a replay, so every
  * box is drawn.
  */
-async function renderStill(job: RenderStartPayload): Promise<{ frameCount: number }> {
+async function renderStill(job: RenderStartPayload): Promise<{ frameCount: number; stillPng?: ArrayBuffer }> {
   const snapshotPng = job.snapshotPng
   if (snapshotPng === undefined) throw new Error('still render job carries no snapshot')
   // createImageBitmap decodes the bytes directly — no object URL, so the
@@ -272,6 +289,10 @@ async function renderStill(job: RenderStartPayload): Promise<{ frameCount: numbe
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(bitmap, 0, 0, mediaWidth, mediaHeight)
     drawOverlay(ctx, canvas, overlay, null)
+    if (job.opaqueRedaction === true) {
+      const png = await capturePng(canvas, 0)
+      return { frameCount: 1, stillPng: png.png }
+    }
     const shipped = await shipFrame(capturePng(canvas, 0))
     return { frameCount: shipped ? 1 : 0 }
   } finally {
