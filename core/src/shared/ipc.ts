@@ -1264,6 +1264,8 @@ export interface RenderStartPayload {
   // annotation state change. Absent/false on the plain-trim job, which renders
   // no overlays and produces no stills.
   keyframes?: boolean
+  /** Enables fixed opaque fill for blur annotations. */
+  opaqueRedaction?: boolean
 }
 
 /** One annotated still handed back by the render window (SPEC §7.3). */
@@ -1284,6 +1286,8 @@ export interface RenderResultPayload {
   // never travel in this message). A still that failed to encode is dropped and
   // not counted, and is never fatal to the render.
   frameCount?: number
+  /** One PNG returned by an opaque Share Copy still render. */
+  stillPng?: ArrayBuffer
   error?: string
 }
 
@@ -1782,6 +1786,7 @@ export interface HistorySharePlan {
   // review but is never copied as structured data into the Share Copy.
   visibleLabels: string[]
   blockers: Array<'blur-label'>
+  opaqueRedaction: boolean
 }
 
 export interface HistorySharePlanResult {

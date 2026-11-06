@@ -875,7 +875,9 @@ function buildShareReview(p: HistoryPackSummary): HTMLElement {
   }
   review.append(inventory)
   review.append(elc('div', 'shareExcluded', t('history.shareExcluded')))
-  review.append(elc('div', 'shareWarning', t('history.shareVisualWarning')))
+  review.append(elc('div', 'shareWarning', plan.opaqueRedaction
+    ? 'Blur regions are replaced with a solid opaque fill; labels on those boxes are removed.'
+    : t('history.shareVisualWarning')))
 
   if (plan.visibleLabels.length > 0) {
     review.append(

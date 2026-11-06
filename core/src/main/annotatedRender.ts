@@ -76,6 +76,17 @@ export interface KeyframeStillJob {
   display?: number
 }
 
+export interface OpaqueShareStillJob {
+  snapshotPng: Buffer
+  annotations: Annotation[]
+  motionSpace?: AuthoredMotionSpace
+  displayNumbers?: Array<[string, number]>
+  focusedDisplay?: number
+  width: number
+  height: number
+  display?: number
+}
+
 export interface KeyframeStillCallbacks {
   /** Runs only after the final PNG and manifest declaration are durable. */
   onRendered?: (png: Buffer) => Promise<void> | void
@@ -378,6 +389,30 @@ export function startKeyframeStill(
         )
       }
     })
+}
+
+/** Render one source snapshot for Share Copy; never writes into the pack. */
+export async function renderOpaqueShareStill(job: OpaqueShareStillJob): Promise<Buffer> {
+  return await enqueueRender(async (signal) => {
+    const payload: RenderStartPayload = {
+      replayWebm: null,
+      snapshotPng: await copyBufferResponsively(job.snapshotPng, signal),
+      annotations: job.annotations,
+      ...(job.motionSpace === undefined ? {} : { motionSpace: job.motionSpace }),
+      ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+      ...(job.display === undefined ? {} : { display: job.display }),
+      ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
+      width: job.width,
+      height: job.height,
+      fps: 1,
+      durationMs: 0,
+      opaqueRedaction: true,
+    }
+    const { result } = await runRenderWindow(payload, STILL_RENDER_TIMEOUT_MS, undefined, signal)
+    throwIfRenderAborted(signal)
+    if (result.stillPng === undefined) throw new Error('opaque Share Copy render produced no still')
+    return Buffer.from(result.stillPng)
+  })
 }
 
 async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): Promise<Buffer> {

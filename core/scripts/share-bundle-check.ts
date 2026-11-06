@@ -889,6 +889,73 @@ try {
   await expectError('blocked', () => createShareBundle(blocked.dir, blockedPlan.revision))
   check('blocked blur-label export creates no ZIP', !existsSync(blocked.share))
 
+  const opaqueA = makeFixture('opaque-a', true, solidPatternPng(4, 4, 0x11))
+  const opaqueB = makeFixture('opaque-b', true, solidPatternPng(4, 4, 0xe7))
+  for (const fixture of [opaqueA, opaqueB]) {
+    const annotationPath = path.join(fixture.dir, 'annotations.json')
+    const annotations = JSON.parse(readFileSync(annotationPath, 'utf8'))
+    annotations.reference_width = 4
+    annotations.reference_height = 4
+    annotations.annotations[0].bounds = { x: 0, y: 0, width: 2, height: 2 }
+    annotations.annotations = [annotations.annotations[0]]
+    writeFileSync(annotationPath, `${JSON.stringify(annotations, null, 2)}\n`)
+    const manifestPath = path.join(fixture.dir, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.capture_kind = 'image'
+    manifest.media.image_scope = 'fullscreen'
+    manifest.media.replay = null
+    manifest.media.replay_duration_ms = null
+    delete manifest.media.replay_annotated
+    delete manifest.media.displays
+    manifest.environment.screens = [{ width: 4, height: 4, scale: 1 }]
+    manifest.media.keyframes = [{ file: 'frames/frame-01_00-00.000.png', t_ms: 0, width: 4, height: 4 }]
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    writeFileSync(path.join(fixture.dir, 'snapshot.png'), solidPatternPng(4, 4, fixture === opaqueA ? 0x11 : 0xe7))
+    writeFileSync(path.join(fixture.dir, 'frames', 'frame-01_00-00.000.png'), solidPatternPng(4, 4, fixture === opaqueA ? 0x11 : 0xe7))
+  }
+  const opaquePlanA = await planShareBundle(opaqueA.dir, { opaqueRedaction: true })
+  const opaquePlanB = await planShareBundle(opaqueB.dir, { opaqueRedaction: true })
+  const opaqueStillA = await readCanonicalShareStill(opaquePlanA.entries[0]!)
+  const opaqueStillB = await readCanonicalShareStill(opaquePlanB.entries[0]!)
+  check('opaque mode removes blur-label blocker and sensitive review label',
+    opaquePlanA.blockers.length === 0 && !opaquePlanA.visibleLabels.includes('SECRET_BLUR_LABEL_251a'))
+  const opaqueCreatedA = await createShareBundle(opaqueA.dir, opaquePlanA.revision, { opaqueRedaction: true })
+  const opaqueCreatedB = await createShareBundle(opaqueB.dir, opaquePlanB.revision, { opaqueRedaction: true })
+  const opaquePngA = new AdmZip(opaqueCreatedA.zipPath).getEntry('media/capture/annotated-still-01.png')!.getData()
+  const opaquePngB = new AdmZip(opaqueCreatedB.zipPath).getEntry('media/capture/annotated-still-01.png')!.getData()
+  const opaquePixelsA = canonicalRgbaPixels(opaqueStillA.bytes)
+  const opaquePixelsB = canonicalRgbaPixels(opaqueStillB.bytes)
+  const zipPixelsA = canonicalRgbaPixels(opaquePngA)
+  const maskedPixelsAreSolid = (pixels: Buffer): boolean => {
+    const width = 4
+    for (let y = 0; y < 2; y += 1) for (let x = 0; x < 2; x += 1) {
+      const at = (y * width + x) * 4
+      if (pixels[at] !== 0x1a || pixels[at + 1] !== 0x1a ||
+        pixels[at + 2] !== 0x1a || pixels[at + 3] !== 0xff) return false
+    }
+    return true
+  }
+  const maskedBytesEqual = (): boolean => {
+    for (let y = 0; y < 2; y += 1) for (let x = 0; x < 2; x += 1) {
+      const at = (y * 4 + x) * 4
+      if (!opaquePixelsA.subarray(at, at + 4).equals(opaquePixelsB.subarray(at, at + 4))) return false
+    }
+    return true
+  }
+  const outsideBytesEqualOriginal = (): boolean => {
+    const original = canonicalRgbaPixels(solidPatternPng(4, 4, 0x11))
+    for (let y = 0; y < 4; y += 1) for (let x = 0; x < 4; x += 1) {
+      if (x < 2 && y < 2) continue
+      const at = (y * 4 + x) * 4
+      if (!opaquePixelsA.subarray(at, at + 4).equals(original.subarray(at, at + 4))) return false
+    }
+    return true
+  }
+  check('opaque mask pixels are fixed solid RGBA throughout the full 2x2 blur region',
+    maskedPixelsAreSolid(opaquePixelsA) && maskedPixelsAreSolid(opaquePixelsB))
+  check('opaque output is independent inside the mask and preserves keyframe pixels outside it',
+    maskedBytesEqual() && outsideBytesEqualOriginal() && zipPixelsA.equals(opaquePixelsA))
+
   const traversal = makeFixture('traversal')
   const traversalManifest = JSON.parse(readFileSync(path.join(traversal.dir, 'manifest.json'), 'utf8'))
   traversalManifest.media.keyframes[0].file = '../frame-01_00-01.000.png'
@@ -915,6 +982,10 @@ try {
   check('derived symlink is rejected when the host permits the fixture', !symlinkMade || !existsSync(linked.share))
 
   const history = readFileSync(path.join(process.cwd(), 'src', 'main', 'historyWindow.ts'), 'utf8')
+  const historyWindow = history
+  check('Share Copy review and final creation both explicitly select opaque mode',
+    history.includes('planShareBundle(entry.path, { opaqueRedaction: true })') &&
+      history.includes('createShareBundle(entry.path, revision, { opaqueRedaction: true })'))
   const shareBundle = readFileSync(path.join(process.cwd(), 'src', 'main', 'shareBundle.ts'), 'utf8')
   const annotatedRender = readFileSync(path.join(process.cwd(), 'src', 'main', 'annotatedRender.ts'), 'utf8')
   const preload = readFileSync(path.join(process.cwd(), 'src', 'preload', 'history.ts'), 'utf8')
@@ -967,7 +1038,8 @@ try {
       history.includes('entryFor(ref)'))
   check('History review passes an opaque revision into creation',
     preload.includes('createShare(packPath: string, revision: string)') &&
-      renderer.includes('bridge.createShare(p.path, plan.revision)'))
+      renderer.includes('bridge.createShare(p.path, plan.revision)') &&
+      historyWindow.includes('planShareBundle(entry.path, { opaqueRedaction: true })'))
   check('Share publication, backup, restore and recovery use no-replace moves',
     shareBundle.includes("from './moveNoReplace'") &&
       !shareBundle.includes('await rename(') &&
@@ -1169,10 +1241,10 @@ function makeFixture(name: string, blurLabel = false, stillPng = PNG): Fixture {
     writeFileSync(file, text)
   }
   for (const rel of ['snapshot.png', 'snapshot-d2.png']) {
-    writeFileSync(path.join(dir, rel), `SECRET_RAW_PIXELS_7bc1:${rel}`)
+    writeFileSync(path.join(dir, rel), stillPng)
   }
   for (const rel of ['replay.webm', 'replay-d2.webm']) {
-    writeFileSync(path.join(dir, rel), `SECRET_RAW_PIXELS_7bc1:${rel}`)
+    writeFileSync(path.join(dir, rel), WEBM)
   }
   writeFileSync(path.join(dir, 'replay_annotated.webm'), WEBM)
   writeFileSync(path.join(dir, 'replay_annotated-d2.webm'), WEBM)
@@ -1310,6 +1382,29 @@ function filteredRgbaPng(): { png: Buffer; pixels: Buffer } {
     ]),
     pixels,
   }
+}
+
+function solidPatternPng(width: number, height: number, seed: number): Buffer {
+  const rgba = Buffer.alloc(width * height * 4)
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    rgba[pixel * 4] = (seed + pixel * 17) & 0xff
+    rgba[pixel * 4 + 1] = (seed * 3 + pixel * 29) & 0xff
+    rgba[pixel * 4 + 2] = (seed * 7 + pixel * 43) & 0xff
+    rgba[pixel * 4 + 3] = 0xff
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  const raw = Buffer.alloc((width * 4 + 1) * height)
+  for (let y = 0; y < height; y += 1) rgba.copy(raw, y * (width * 4 + 1) + 1, y * width * 4, (y + 1) * width * 4)
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    testPngChunk('IHDR', ihdr),
+    testPngChunk('IDAT', deflateSync(raw)),
+    testPngChunk('IEND', Buffer.alloc(0)),
+  ])
 }
 
 function declaredGreyPng(width: number, height: number): Buffer {
