@@ -974,7 +974,7 @@ try {
   gutterAnnotations.reference_width = 4
   gutterAnnotations.reference_height = 4
   gutterAnnotations.annotations = [gutterAnnotations.annotations[0]]
-  gutterAnnotations.annotations[0].text = ''
+  gutterAnnotations.annotations[0].text = 'SECRET_GUTTER_BLUR_LABEL_8d2f'
   gutterAnnotations.annotations[0].bounds = { x: 0, y: 2, width: 2, height: 1 }
   writeFileSync(gutterAnnotationPath, `${JSON.stringify(gutterAnnotations, null, 2)}\n`)
   writeFileSync(path.join(gutter.dir, 'frames', 'frame-01_00-00.000.png'), solidPatternPng(4, 6, 0x51))
@@ -988,14 +988,19 @@ try {
   const gutterMaskSolid = [8, 9].every((pixel) =>
     gutterPixels[pixel * 4] === 0x1a && gutterPixels[pixel * 4 + 1] === 0x1a &&
     gutterPixels[pixel * 4 + 2] === 0x1a && gutterPixels[pixel * 4 + 3] === 0xff)
-  const gutterPixelsPreserved = [0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+  const gutterPixelsPreserved = [0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15]
     .every((pixel) => gutterPixels.subarray(pixel * 4, pixel * 4 + 4)
       .equals(gutterOriginal.subarray(pixel * 4, pixel * 4 + 4)))
+  const gutterLabelRemoved = Array.from({ length: 8 }, (_, index) => index + 16).every((pixel) => {
+    const at = pixel * 4
+    return gutterPixels[at] === 0x1a && gutterPixels[at + 1] === 0x1a &&
+      gutterPixels[at + 2] === 0x1a && gutterPixels[at + 3] === 0xff
+  })
   check('opaque redaction plan retains rendered keyframe height including label gutter',
     gutterPlan.entries[0]?.pixelHeight === 6 && gutterPlan.entries[0]?.decodedRasterBytes === 96 &&
       gutterStill.height === 6)
-  check('opaque Share Copy ZIP keeps gutter and masks only original-frame coordinates',
-    gutterMaskSolid && gutterPixelsPreserved && gutterPng.readUInt32BE(20) === 6)
+  check('opaque Share Copy ZIP keeps gutter dimensions, masks the blur, and removes its sensitive gutter label',
+    gutterMaskSolid && gutterPixelsPreserved && gutterLabelRemoved && gutterPng.readUInt32BE(20) === 6)
 
   const traversal = makeFixture('traversal')
   const traversalManifest = JSON.parse(readFileSync(path.join(traversal.dir, 'manifest.json'), 'utf8'))

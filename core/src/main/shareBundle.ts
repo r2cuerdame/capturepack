@@ -1374,6 +1374,19 @@ function opaqueRedactPng(
       rgba[offset + 2] = 0x1a
       rgba[offset + 3] = 0xff
     }
+    // Opaque mode omits blur labels from the review UI, but existing derived
+    // stills may already contain those label pixels in the bottom gutter.
+    // The label's exact text bounds are renderer/font dependent, so clear the
+    // entire result-only gutter whenever a sensitive blur label is present.
+    if (typeof annotation.text === 'string' && annotation.text.trim() !== '' && height > frameHeight) {
+      for (let y = frameHeight; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4
+        rgba[offset] = 0x1a
+        rgba[offset + 1] = 0x1a
+        rgba[offset + 2] = 0x1a
+        rgba[offset + 3] = 0xff
+      }
+    }
   }
   const ihdr = Buffer.alloc(13)
   ihdr.writeUInt32BE(width, 0)
