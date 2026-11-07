@@ -250,7 +250,8 @@ export async function planShareBundle(
       candidate.sourceFrame !== undefined &&
       (Math.abs(candidate.sourceFrame.width - pixelWidth) >
         candidate.sourceFrame.widthTolerance ||
-        candidate.sourceFrame.height - pixelHeight > candidate.sourceFrame.heightTolerance)
+        (!opaqueRedaction &&
+          candidate.sourceFrame.height - pixelHeight > candidate.sourceFrame.heightTolerance))
     ) {
       throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
     }
@@ -286,10 +287,13 @@ export async function planShareBundle(
         throw new ShareBundleError('derived-media-not-ready', snapshotRel)
       }
       frameWidth = sourceDims.width
+      if (pixelWidth !== sourceDims.width || pixelHeight < sourceDims.height) {
+        throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
+      }
+      // Keep the complete rendered still, including the label gutter. Blur
+      // annotation coordinates remain in the original snapshot's pixel space.
       frameHeight = sourceDims.height
-      pixelWidth = frameWidth
-      pixelHeight = frameHeight
-      decodedRasterBytes = frameWidth * frameHeight * 4
+      decodedRasterBytes = pixelWidth * pixelHeight * 4
       if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES) {
         throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
       }
@@ -449,10 +453,12 @@ export async function readCanonicalShareStill(
     const sourceStill = canonicalPng(derived)
     const sourceDimensions = canonicalPngDimensions(sourceStill)
     const snapshotDimensions = canonicalPngDimensions(frame)
-    if (sourceDimensions.width !== snapshotDimensions.width || sourceDimensions.height !== snapshotDimensions.height) {
+    if (sourceDimensions.width !== snapshotDimensions.width ||
+      (sourceDimensions.height !== snapshotDimensions.height &&
+        (sourceDimensions.height < snapshotDimensions.height || !entry.opaqueRedaction))) {
       throw new ShareBundleError('pack-changed')
     }
-    const canonical = opaqueRedactPng(sourceStill, entry.displayAnnotations)
+    const canonical = opaqueRedactPng(sourceStill, entry.displayAnnotations, snapshotDimensions.height)
     const dimensions = canonicalPngDimensions(canonical)
     const decodedRasterBytes = dimensions.width * dimensions.height * 4
     if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES ||
@@ -1347,7 +1353,11 @@ function canonicalRgbaFromPng(bytes: Buffer): Buffer {
 }
 
 /** Apply a fixed opaque fill to each blur rectangle on the completed still. */
-function opaqueRedactPng(bytes: Buffer, annotations: readonly Annotation[]): Buffer {
+function opaqueRedactPng(
+  bytes: Buffer,
+  annotations: readonly Annotation[],
+  frameHeight: number,
+): Buffer {
   if (annotations.length === 0) return bytes
   const { width, height } = canonicalPngDimensions(bytes)
   const rgba = canonicalRgbaFromPng(bytes)
@@ -1356,13 +1366,26 @@ function opaqueRedactPng(bytes: Buffer, annotations: readonly Annotation[]): Buf
     const x0 = Math.max(0, Math.floor(annotation.bounds.x))
     const y0 = Math.max(0, Math.floor(annotation.bounds.y))
     const x1 = Math.min(width, Math.ceil(annotation.bounds.x + annotation.bounds.width))
-    const y1 = Math.min(height, Math.ceil(annotation.bounds.y + annotation.bounds.height))
+    const y1 = Math.min(frameHeight, height, Math.ceil(annotation.bounds.y + annotation.bounds.height))
     for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) {
       const offset = (y * width + x) * 4
       rgba[offset] = 0x1a
       rgba[offset + 1] = 0x1a
       rgba[offset + 2] = 0x1a
       rgba[offset + 3] = 0xff
+    }
+    // Opaque mode omits blur labels from the review UI, but existing derived
+    // stills may already contain those label pixels in the bottom gutter.
+    // The label's exact text bounds are renderer/font dependent, so clear the
+    // entire result-only gutter whenever a sensitive blur label is present.
+    if (typeof annotation.text === 'string' && annotation.text.trim() !== '' && height > frameHeight) {
+      for (let y = frameHeight; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4
+        rgba[offset] = 0x1a
+        rgba[offset + 1] = 0x1a
+        rgba[offset + 2] = 0x1a
+        rgba[offset + 3] = 0xff
+      }
     }
   }
   const ihdr = Buffer.alloc(13)
