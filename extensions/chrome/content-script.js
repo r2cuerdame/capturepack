@@ -151,7 +151,31 @@
   }
 
   function childFrames() {
-    return Array.from(document.querySelectorAll('iframe, frame'))
+    const frames = []
+    const seenRoots = new Set()
+    const visit = (root, depth) => {
+      if (!root || depth > MAX_SHADOW_DEPTH || seenRoots.has(root)) return
+      seenRoots.add(root)
+      let elements
+      try {
+        elements = root.querySelectorAll('*')
+      } catch {
+        return
+      }
+      for (const element of elements) {
+        if (element.tagName === 'IFRAME' || element.tagName === 'FRAME') frames.push(element)
+        if (depth === MAX_SHADOW_DEPTH) continue
+        let shadowRoot = null
+        try {
+          shadowRoot = element.shadowRoot
+        } catch {
+          // An inaccessible root is not an open shadow tree we can traverse.
+        }
+        if (shadowRoot) visit(shadowRoot, depth + 1)
+      }
+    }
+    visit(document, 0)
+    return frames
   }
 
   function postDown(message) {

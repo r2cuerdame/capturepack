@@ -151,6 +151,11 @@ console.log('\nThe picker actually uses it, in every frame')
     contentScript.includes("__capturepack: 'pick'") && contentScript.includes('window.parent.postMessage'))
   check('a pick is only accepted from a frame this document hosts',
     contentScript.includes('frame.contentWindow === e.source'))
+  check('child frames are collected across bounded open shadow roots',
+    contentScript.includes("root.querySelectorAll('*')")
+      && contentScript.includes('element.shadowRoot')
+      && contentScript.includes('depth === MAX_SHADOW_DEPTH')
+      && contentScript.includes('visit(document, 0)'))
   check('a pick is only accepted while the picker is armed',
     /if \(!window\.__capturepackPickerActive\) return/.test(contentScript))
   check('a failed hop reports itself', contentScript.includes("type: 'picker.failed'"))
@@ -165,13 +170,75 @@ console.log('\nThe picker actually uses it, in every frame')
   // `page.captured` / `page.chunk` and expects `page.received` back (#157);
   // 0.4.1 keeps that wire and fixes the HiDPI full-page plan, so a shipped
   // worker can be told apart from the one QA rejected; 0.4.2 keeps it again and
-  // picks and walks through open shadow roots (#345) — the app only recopies
+  // picks and walks through open shadow roots (#345); 0.4.3 reaches frames
+  // nested in those roots and propagates disarm — the app only recopies
   // the extension folder when this number moves, so without it the new
   // picker would never reach an installed browser.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.4.2', manifest.version)
+    manifest.version === '0.4.3', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
+
+  console.log('\nFrames nested inside open shadow roots')
+  {
+    const sent = []
+    const documentListeners = new Map()
+    const windowListeners = new Map()
+    const lightDomFrames = []
+    const listeners = (map) => ({
+      addEventListener: (type, fn) => map.set(type, fn),
+      removeEventListener: (type, fn) => { if (map.get(type) === fn) map.delete(type) },
+    })
+    const makeFrame = (source, rect) => ({
+      tagName: 'IFRAME',
+      contentWindow: source,
+      getBoundingClientRect: () => ({ ...rect, left: rect.x, top: rect.y }),
+    })
+    const innerWindow = { messages: [], postMessage(message) { this.messages.push(message) } }
+    const nestedWindow = { messages: [], postMessage(message) { this.messages.push(message) } }
+    const nestedFrame = makeFrame(nestedWindow, { x: 30, y: 40, width: 200, height: 100 })
+    const shadowRoot = {
+      querySelectorAll: (selector) => selector === '*' ? [nestedFrame] : [],
+    }
+    const host = { tagName: 'WIDGET-HOST', shadowRoot }
+    const outerFrame = makeFrame(innerWindow, { x: 100, y: 50, width: 400, height: 300 })
+    const document = {
+      querySelectorAll: (selector) => selector === '*' ? [outerFrame, host, ...lightDomFrames] : [],
+      documentElement: { appendChild() {} },
+      createElement: () => ({ style: {}, remove() { this.removed = true } }),
+      addEventListener: (type, fn) => documentListeners.set(type, fn),
+      removeEventListener: (type, fn) => { if (documentListeners.get(type) === fn) documentListeners.delete(type) },
+    }
+    const parentMessages = []
+    const window = {
+      top: {},
+      parent: { postMessage: (message) => parentMessages.push(message) },
+      __capturepackFrameGeometry: geometry,
+      innerWidth: 800,
+      getComputedStyle: () => ({ borderLeftWidth: '0', paddingLeft: '0', borderRightWidth: '0', paddingRight: '0', borderTopWidth: '0', paddingTop: '0', borderBottomWidth: '0', paddingBottom: '0' }),
+      ...listeners(windowListeners),
+    }
+    const sandbox = { window, document, chrome: { runtime: { sendMessage: (message) => sent.push(message) } } }
+    runInNewContext(readFileSync(resolve(EXTENSION, 'content-script.js'), 'utf8'), sandbox)
+    window.__capturepackPickerActive = true
+    const onMessage = windowListeners.get('message')
+    check('document queries do not cross into the shadow root', !lightDomFrames.includes(nestedFrame))
+    const payload = {
+      element: { tag: 'button' },
+      frameDepth: 1,
+      viewportWidth: 800,
+      bounds: { x: 100, y: 40, width: 80, height: 20 },
+    }
+    onMessage({ data: { __capturepack: 'pick', payload }, source: nestedWindow })
+    check('a pick source hosted in an open shadow root is accepted', parentMessages.some((message) => message.__capturepack === 'pick'), JSON.stringify({ sent, parentMessages }))
+    check('the shadow-hosted frame pick is translated to parent coordinates',
+      parentMessages.find((message) => message.__capturepack === 'pick')?.payload?.bounds?.x === 55
+        && parentMessages.find((message) => message.__capturepack === 'pick')?.payload?.bounds?.y === 50,
+      JSON.stringify(parentMessages.find((message) => message.__capturepack === 'pick')?.payload?.bounds))
+    onMessage({ data: { __capturepack: 'disarm' }, source: nestedWindow })
+    check('disarm reaches frames inside open shadow roots', nestedWindow.messages.some((message) => message.__capturepack === 'disarm'))
+    check('a shadow-hosted frame also forwards disarm to its nested frame', nestedWindow.messages.some((message) => message.__capturepack === 'disarm'), JSON.stringify({ nested: nestedWindow.messages, inner: innerWindow.messages }))
+  }
 
   // A KEYBOARD SHORTCUT IS A GESTURE TOO.
   //
