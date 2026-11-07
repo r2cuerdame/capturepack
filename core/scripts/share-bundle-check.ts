@@ -956,6 +956,47 @@ try {
   check('opaque output is independent inside the mask and preserves keyframe pixels outside it',
     maskedBytesEqual() && outsideBytesEqualOriginal() && zipPixelsA.equals(opaquePixelsA))
 
+  const gutter = makeFixture('opaque-label-gutter', true, solidPatternPng(4, 6, 0x51))
+  const gutterManifestPath = path.join(gutter.dir, 'manifest.json')
+  const gutterManifest = JSON.parse(readFileSync(gutterManifestPath, 'utf8'))
+  gutterManifest.capture_kind = 'image'
+  gutterManifest.media.image_scope = 'fullscreen'
+  gutterManifest.media.replay = null
+  gutterManifest.media.replay_duration_ms = null
+  delete gutterManifest.media.replay_annotated
+  delete gutterManifest.media.displays
+  gutterManifest.environment.screens = [{ width: 4, height: 4, scale: 1 }]
+  gutterManifest.media.keyframes = [{ file: 'frames/frame-01_00-00.000.png', t_ms: 0, width: 4, height: 6 }]
+  writeFileSync(gutterManifestPath, `${JSON.stringify(gutterManifest, null, 2)}\n`)
+  writeFileSync(path.join(gutter.dir, 'snapshot.png'), solidPatternPng(4, 4, 0x51))
+  const gutterAnnotationPath = path.join(gutter.dir, 'annotations.json')
+  const gutterAnnotations = JSON.parse(readFileSync(gutterAnnotationPath, 'utf8'))
+  gutterAnnotations.reference_width = 4
+  gutterAnnotations.reference_height = 4
+  gutterAnnotations.annotations = [gutterAnnotations.annotations[0]]
+  gutterAnnotations.annotations[0].text = ''
+  gutterAnnotations.annotations[0].bounds = { x: 0, y: 2, width: 2, height: 1 }
+  writeFileSync(gutterAnnotationPath, `${JSON.stringify(gutterAnnotations, null, 2)}\n`)
+  writeFileSync(path.join(gutter.dir, 'frames', 'frame-01_00-00.000.png'), solidPatternPng(4, 6, 0x51))
+  const gutterPlan = await planShareBundle(gutter.dir, { opaqueRedaction: true })
+  const gutterStill = await readCanonicalShareStill(gutterPlan.entries[0]!)
+  const gutterCreated = await createShareBundle(gutter.dir, gutterPlan.revision, { opaqueRedaction: true })
+  const gutterZip = new AdmZip(gutterCreated.zipPath)
+  const gutterPng = gutterZip.getEntry('media/capture/annotated-still-01.png')!.getData()
+  const gutterPixels = canonicalRgbaPixels(gutterPng)
+  const gutterOriginal = canonicalRgbaPixels(solidPatternPng(4, 6, 0x51))
+  const gutterMaskSolid = [8, 9].every((pixel) =>
+    gutterPixels[pixel * 4] === 0x1a && gutterPixels[pixel * 4 + 1] === 0x1a &&
+    gutterPixels[pixel * 4 + 2] === 0x1a && gutterPixels[pixel * 4 + 3] === 0xff)
+  const gutterPixelsPreserved = [0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    .every((pixel) => gutterPixels.subarray(pixel * 4, pixel * 4 + 4)
+      .equals(gutterOriginal.subarray(pixel * 4, pixel * 4 + 4)))
+  check('opaque redaction plan retains rendered keyframe height including label gutter',
+    gutterPlan.entries[0]?.pixelHeight === 6 && gutterPlan.entries[0]?.decodedRasterBytes === 96 &&
+      gutterStill.height === 6)
+  check('opaque Share Copy ZIP keeps gutter and masks only original-frame coordinates',
+    gutterMaskSolid && gutterPixelsPreserved && gutterPng.readUInt32BE(20) === 6)
+
   const traversal = makeFixture('traversal')
   const traversalManifest = JSON.parse(readFileSync(path.join(traversal.dir, 'manifest.json'), 'utf8'))
   traversalManifest.media.keyframes[0].file = '../frame-01_00-01.000.png'
