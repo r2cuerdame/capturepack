@@ -46,12 +46,22 @@ export async function collectGitState(
     const branch = branchResult.stdout.trim()
     const commit = headResult.stdout.trim()
     if (!root || !branch || !/^[0-9a-f]{40,64}$/iu.test(commit)) return null
-    const changedFiles = statusResult.stdout
-      .split('\0')
-      .filter(Boolean)
-      .map((entry) => entry.slice(3))
-      .filter(Boolean)
-      .sort()
+    // Porcelain v1 with -z is deliberately NUL-delimited: filenames may
+    // contain spaces, tabs, or newlines. Rename/copy records carry a second
+    // NUL-delimited source path, which must not be mistaken for a status row.
+    const statusEntries = statusResult.stdout.split('\0')
+    const changedFiles: string[] = []
+    for (let index = 0; index < statusEntries.length; index += 1) {
+      const entry = statusEntries[index]
+      if (!entry) continue
+      changedFiles.push(entry.slice(3))
+      if (entry.slice(0, 2).includes('R') || entry.slice(0, 2).includes('C')) {
+        const sourcePath = statusEntries[index + 1]
+        if (sourcePath) changedFiles.push(sourcePath)
+        index += 1
+      }
+    }
+    changedFiles.sort()
     return {
       repository: root.split(/[\\/]/u).filter(Boolean).at(-1) ?? root,
       branch,

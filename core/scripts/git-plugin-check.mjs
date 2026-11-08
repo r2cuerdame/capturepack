@@ -33,11 +33,13 @@ try {
   execFileSync('git', ['-C', repo, 'commit', '-qm', 'initial'])
   writeFileSync(path.join(repo, 'tracked.txt'), 'changed\n')
   writeFileSync(path.join(repo, 'new file.txt'), 'untracked\n')
+  execFileSync('git', ['-C', repo, 'mv', 'tracked.txt', 'renamed file.txt'])
   const state = await collectGitState(repo, 2_000)
   check('collects repository and branch', state?.repository === 'repo'
     && ['master', 'main'].includes(state.branch))
   check('includes commit hash and tracked/untracked names', Boolean(state?.commit)
     && state?.dirty === true
+    && state.changed_files.includes('renamed file.txt')
     && state.changed_files.includes('tracked.txt')
     && state.changed_files.includes('new file.txt'))
   check('no-optional-locks was used for all Git reads', true)
