@@ -60,6 +60,7 @@ export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
+import { collectGitState, gitPluginDeclaration, writeGitPlugin } from './plugins/git'
 import { copyTextToClipboard } from './clipboard'
 import { isShareBundleArchive } from './packArchive'
 import {
@@ -1462,6 +1463,18 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   const dirPath = uniquePackDir(input.outputDir, input.capturedAt)
   try {
     await mkdir(dirPath)
+    // Git context is optional and strictly budgeted so a slow/non-Git cwd can
+    // never prevent the normal capture pack from being saved.
+    let gitDeclaration: NonNullable<Manifest['plugins']>[number] | undefined
+    try {
+      const gitState = await collectGitState(process.cwd())
+      if (gitState) {
+        await writeGitPlugin(dirPath, gitState)
+        gitDeclaration = gitPluginDeclaration()
+      }
+    } catch {
+      // Optional plugin failure must not fail the capture.
+    }
     // Optional context lands before the manifest that declares it. Its writer
     // swallows every failure, so save-first remains a media-first guarantee.
     const contextDisposition = await reconcileWindowsContextPlugin(
@@ -1494,7 +1507,10 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       replayFile: input.replayFile,
       replayDurationMs: input.replayDurationMs,
       snapshotTMs: null,
-      plugins: withWindowsContextPlugin(undefined, contextDisposition),
+      plugins: withWindowsContextPlugin(
+        gitDeclaration ? [gitDeclaration] : undefined,
+        contextDisposition,
+      ),
       displays: writtenDisplays,
       cadence: imageCapture ? undefined : input.cadence,
       // Save-first already carries the capture's input events — they were
