@@ -1080,6 +1080,7 @@ try {
     history.includes('planShareBundle(entry.path, { opaqueRedaction: true })') &&
       history.includes('createShareBundle(entry.path, revision, { opaqueRedaction: true })'))
   const shareBundle = readFileSync(path.join(process.cwd(), 'src', 'main', 'shareBundle.ts'), 'utf8')
+  const renderSource = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'render', 'render.ts'), 'utf8')
   const annotatedRender = readFileSync(path.join(process.cwd(), 'src', 'main', 'annotatedRender.ts'), 'utf8')
   const preload = readFileSync(path.join(process.cwd(), 'src', 'preload', 'history.ts'), 'utf8')
   const renderer = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'history', 'history.ts'), 'utf8')
@@ -1129,6 +1130,17 @@ try {
       history.includes('IPC.historyCreateShare') &&
       history.includes('fromHistory(event)') &&
       history.includes('entryFor(ref)'))
+  check('keyframe still timestamps describe the composited frame, including decode overshoot',
+    renderSource.includes('pending.push(shipFrame(capturePng(canvas, tMs)))') &&
+      !renderSource.includes('pending.push(shipFrame(capturePng(canvas, target)))'))
+  const opaqueRedactionSource = shareBundle.slice(
+    shareBundle.indexOf('function opaqueRedactPng('),
+    shareBundle.indexOf('function visibleAt('),
+  )
+  check('opaque motion masks resolve destination display before selecting a still lane',
+    opaqueRedactionSource.indexOf('const resolved = annotationAt(annotation, tMs, motionSpace)') >= 0 &&
+      opaqueRedactionSource.indexOf('(resolved.display ?? focusedDisplay) !== display') >
+        opaqueRedactionSource.indexOf('const resolved = annotationAt(annotation, tMs, motionSpace)'))
   check('History review passes an opaque revision into creation',
     preload.includes('createShare(packPath: string, revision: string)') &&
       renderer.includes('bridge.createShare(p.path, plan.revision)') &&

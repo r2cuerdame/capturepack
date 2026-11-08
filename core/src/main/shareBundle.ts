@@ -463,8 +463,8 @@ export async function readCanonicalShareStill(
         (sourceDimensions.height < snapshotDimensions.height || !entry.opaqueRedaction))) {
       throw new ShareBundleError('pack-changed')
     }
-    const canonical = opaqueRedactPng(sourceStill, entry.displayAnnotations, snapshotDimensions.height,
-      entry.t_ms, entry.motionSpace)
+    const canonical = opaqueRedactPng(sourceStill, entry.annotations, snapshotDimensions.height,
+      entry.t_ms, entry.motionSpace, entry.display, entry.focusedDisplay)
     const dimensions = canonicalPngDimensions(canonical)
     const decodedRasterBytes = dimensions.width * dimensions.height * 4
     if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES ||
@@ -1366,6 +1366,8 @@ function opaqueRedactPng(
   frameHeight: number,
   tMs: number,
   motionSpace?: import('../shared/track').AuthoredMotionSpace,
+  display: number | null = null,
+  focusedDisplay: number | null = null,
 ): Buffer {
   if (annotations.length === 0) return bytes
   const { width, height } = canonicalPngDimensions(bytes)
@@ -1374,6 +1376,9 @@ function opaqueRedactPng(
     if (!annotation.blur) continue
     if (!visibleAt(annotation, tMs)) continue
     const resolved = annotationAt(annotation, tMs, motionSpace)
+    // Motion can carry a blur onto another display. Resolve its destination
+    // before selecting the still lane, matching the renderer's draw order.
+    if (display !== null && (resolved.display ?? focusedDisplay) !== display) continue
     const x0 = Math.max(0, Math.floor(resolved.bounds.x))
     const y0 = Math.max(0, Math.floor(resolved.bounds.y))
     const x1 = Math.min(width, Math.ceil(resolved.bounds.x + resolved.bounds.width))

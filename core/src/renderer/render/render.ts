@@ -355,7 +355,10 @@ async function renderAnnotated(
       const target = targets[nextTarget]
       if (target === undefined || target > tMs) return
       nextTarget += 1
-      pending.push(shipFrame(capturePng(canvas, target)))
+      // `canvas` contains the frame drawn at tMs, which can be later than the
+      // target when decode/presentation cadence skips over that instant. The
+      // still's clock must describe its pixels, not the requested threshold.
+      pending.push(shipFrame(capturePng(canvas, tMs)))
     }
   }
 
