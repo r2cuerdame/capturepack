@@ -1049,6 +1049,26 @@ try {
       [0, 1, 4, 5, 8, 9, 12, 13, 16, 19, 20, 21, 22, 23].every((pixel) => temporalSecond[pixel * 4] !== 0x1a) &&
       Array.from({ length: 16 }, (_, index) => index + 32).every((pixel) => temporalSecond[pixel * 4] === 0x1a))
 
+  // Screenshot-only lanes use stored bounds and every annotation, just like
+  // renderStill's null clock, even when imported metadata has lifetimes/motion.
+  temporalManifest.media.replay = null
+  delete temporalManifest.media.replay_duration_ms
+  temporalManifest.media.displays[0].replay = null
+  delete temporalManifest.media.displays[0].replay_duration_ms
+  temporalManifest.media.keyframes = [
+    { file: 'frames/frame-01_00-00.000.png', t_ms: 0, width: 8, height: 6 },
+  ]
+  writeFileSync(temporalManifestPath, JSON.stringify(temporalManifest))
+  writeFileSync(path.join(temporal.dir, 'frames/frame-01_00-00.000.png'), solidPatternPng(8, 6, 0x51))
+  const noClockPlan = await planShareBundle(temporal.dir, { opaqueRedaction: true })
+  const noClockPixels = canonicalRgbaPixels((await readCanonicalShareStill(noClockPlan.entries[0]!)).bytes)
+  check('screenshot-only stills retain no-clock labels, stored blur bounds, and gutter cleanup',
+    noClockPlan.entries[0]!.t_ms === null &&
+      noClockPlan.entries[0]!.displayAnnotations.length === temporalAnnotations.annotations.length &&
+      [0, 1, 8, 9, 16, 17].every((pixel) => noClockPixels[pixel * 4] === 0x1a) &&
+      [2, 3, 10, 11, 18, 19].every((pixel) => noClockPixels[pixel * 4] !== 0x1a) &&
+      Array.from({ length: 16 }, (_, index) => index + 32).every((pixel) => noClockPixels[pixel * 4] === 0x1a))
+
   const traversal = makeFixture('traversal')
   const traversalManifest = JSON.parse(readFileSync(path.join(traversal.dir, 'manifest.json'), 'utf8'))
   traversalManifest.media.keyframes[0].file = '../frame-01_00-01.000.png'
@@ -1138,9 +1158,9 @@ try {
     shareBundle.indexOf('function visibleAt('),
   )
   check('opaque motion masks resolve destination display before selecting a still lane',
-    opaqueRedactionSource.indexOf('const resolved = annotationAt(annotation, tMs, motionSpace)') >= 0 &&
+    opaqueRedactionSource.indexOf('const resolved = tMs === null ? annotation : annotationAt(annotation, tMs, motionSpace)') >= 0 &&
       opaqueRedactionSource.indexOf('(resolved.display ?? focusedDisplay) !== display') >
-        opaqueRedactionSource.indexOf('const resolved = annotationAt(annotation, tMs, motionSpace)'))
+        opaqueRedactionSource.indexOf('const resolved = tMs === null ? annotation : annotationAt(annotation, tMs, motionSpace)'))
   check('History review passes an opaque revision into creation',
     preload.includes('createShare(packPath: string, revision: string)') &&
       renderer.includes('bridge.createShare(p.path, plan.revision)') &&

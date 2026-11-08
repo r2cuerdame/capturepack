@@ -41,8 +41,8 @@ export interface ShareMediaPlanEntry {
   kind: ShareMediaKind
   /** null is the single composed image of an explicit image capture. */
   display: number | null
-  /** Replay-clock instant represented by this keyframe still. */
-  t_ms: number
+  /** Replay-clock instant, or null for a screenshot-only lane with no clock. */
+  t_ms: number | null
   /** Private to the local planning/creation path; never written into the ZIP. */
   sourcePath: string
   /** Pack-relative and used only for revision checks and error reporting. */
@@ -125,7 +125,7 @@ interface MediaCandidate {
   archivePath: string
   kind: ShareMediaKind
   display: number | null
-  t_ms: number
+  t_ms: number | null
   declaredWidth?: number
   declaredHeight?: number
   sourceFrame?: ShareSourceFrame
@@ -916,7 +916,7 @@ function addLaneCandidates(
       archivePath: `${lane}/annotated-still-${String(index + 1).padStart(2, '0')}.png`,
       kind: 'annotated-still',
       display,
-      t_ms: frame.t_ms,
+      t_ms: replay === null ? null : frame.t_ms,
       ...(frame.width === undefined ? {} : { declaredWidth: frame.width }),
       ...(frame.height === undefined ? {} : { declaredHeight: frame.height }),
       ...(sourceFrame === undefined ? {} : { sourceFrame }),
@@ -1364,7 +1364,7 @@ function opaqueRedactPng(
   bytes: Buffer,
   annotations: readonly Annotation[],
   frameHeight: number,
-  tMs: number,
+  tMs: number | null,
   motionSpace?: import('../shared/track').AuthoredMotionSpace,
   display: number | null = null,
   focusedDisplay: number | null = null,
@@ -1375,7 +1375,7 @@ function opaqueRedactPng(
   for (const annotation of annotations) {
     if (!annotation.blur) continue
     if (!visibleAt(annotation, tMs)) continue
-    const resolved = annotationAt(annotation, tMs, motionSpace)
+    const resolved = tMs === null ? annotation : annotationAt(annotation, tMs, motionSpace)
     // Motion can carry a blur onto another display. Resolve its destination
     // before selecting the still lane, matching the renderer's draw order.
     if (display !== null && (resolved.display ?? focusedDisplay) !== display) continue
@@ -1424,8 +1424,8 @@ function opaqueRedactPng(
   ])
 }
 
-function visibleAt(annotation: Annotation, tMs: number): boolean {
-  return annotation.start_ms === undefined || annotation.end_ms === undefined ||
+function visibleAt(annotation: Annotation, tMs: number | null): boolean {
+  return tMs === null || annotation.start_ms === undefined || annotation.end_ms === undefined ||
     (tMs >= annotation.start_ms && tMs <= annotation.end_ms)
 }
 
