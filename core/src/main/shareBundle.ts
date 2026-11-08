@@ -23,6 +23,7 @@ import type {
   ManifestDisplayMedia,
   ManifestKeyframe,
 } from '../shared/types'
+import { annotationAt } from '../shared/track'
 import { moveNoReplace, MoveNoReplaceError } from './moveNoReplace'
 import { isShareBundleArchive, shareBundlePath } from './packArchive'
 
@@ -40,6 +41,8 @@ export interface ShareMediaPlanEntry {
   kind: ShareMediaKind
   /** null is the single composed image of an explicit image capture. */
   display: number | null
+  /** Replay-clock instant, or null for a screenshot-only lane with no clock. */
+  t_ms: number | null
   /** Private to the local planning/creation path; never written into the ZIP. */
   sourcePath: string
   /** Pack-relative and used only for revision checks and error reporting. */
@@ -122,6 +125,7 @@ interface MediaCandidate {
   archivePath: string
   kind: ShareMediaKind
   display: number | null
+  t_ms: number | null
   declaredWidth?: number
   declaredHeight?: number
   sourceFrame?: ShareSourceFrame
@@ -326,8 +330,9 @@ export async function planShareBundle(
       sourceSnapshotMtimeMs,
       annotations: pack.annotations,
       displayAnnotations: candidate.display === null
-        ? pack.annotations
-        : pack.annotations.filter((annotation) => (annotation.display ?? layout.focused) === candidate.display),
+        ? pack.annotations.filter((annotation) => visibleAt(annotation, candidate.t_ms))
+        : pack.annotations.filter((annotation) =>
+          (annotation.display ?? layout.focused) === candidate.display && visibleAt(annotation, candidate.t_ms)),
       opaqueRedaction,
       frameWidth,
       frameHeight,
@@ -458,7 +463,8 @@ export async function readCanonicalShareStill(
         (sourceDimensions.height < snapshotDimensions.height || !entry.opaqueRedaction))) {
       throw new ShareBundleError('pack-changed')
     }
-    const canonical = opaqueRedactPng(sourceStill, entry.displayAnnotations, snapshotDimensions.height)
+    const canonical = opaqueRedactPng(sourceStill, entry.annotations, snapshotDimensions.height,
+      entry.t_ms, entry.motionSpace, entry.display, entry.focusedDisplay)
     const dimensions = canonicalPngDimensions(canonical)
     const decodedRasterBytes = dimensions.width * dimensions.height * 4
     if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES ||
@@ -910,6 +916,7 @@ function addLaneCandidates(
       archivePath: `${lane}/annotated-still-${String(index + 1).padStart(2, '0')}.png`,
       kind: 'annotated-still',
       display,
+      t_ms: replay === null ? null : frame.t_ms,
       ...(frame.width === undefined ? {} : { declaredWidth: frame.width }),
       ...(frame.height === undefined ? {} : { declaredHeight: frame.height }),
       ...(sourceFrame === undefined ? {} : { sourceFrame }),
@@ -1357,16 +1364,25 @@ function opaqueRedactPng(
   bytes: Buffer,
   annotations: readonly Annotation[],
   frameHeight: number,
+  tMs: number | null,
+  motionSpace?: import('../shared/track').AuthoredMotionSpace,
+  display: number | null = null,
+  focusedDisplay: number | null = null,
 ): Buffer {
   if (annotations.length === 0) return bytes
   const { width, height } = canonicalPngDimensions(bytes)
   const rgba = canonicalRgbaFromPng(bytes)
   for (const annotation of annotations) {
     if (!annotation.blur) continue
-    const x0 = Math.max(0, Math.floor(annotation.bounds.x))
-    const y0 = Math.max(0, Math.floor(annotation.bounds.y))
-    const x1 = Math.min(width, Math.ceil(annotation.bounds.x + annotation.bounds.width))
-    const y1 = Math.min(frameHeight, height, Math.ceil(annotation.bounds.y + annotation.bounds.height))
+    if (!visibleAt(annotation, tMs)) continue
+    const resolved = tMs === null ? annotation : annotationAt(annotation, tMs, motionSpace)
+    // Motion can carry a blur onto another display. Resolve its destination
+    // before selecting the still lane, matching the renderer's draw order.
+    if (display !== null && (resolved.display ?? focusedDisplay) !== display) continue
+    const x0 = Math.max(0, Math.floor(resolved.bounds.x))
+    const y0 = Math.max(0, Math.floor(resolved.bounds.y))
+    const x1 = Math.min(width, Math.ceil(resolved.bounds.x + resolved.bounds.width))
+    const y1 = Math.min(frameHeight, height, Math.ceil(resolved.bounds.y + resolved.bounds.height))
     for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) {
       const offset = (y * width + x) * 4
       rgba[offset] = 0x1a
@@ -1406,6 +1422,11 @@ function opaqueRedactPng(
     pngChunk('IDAT', deflateSync(raster, { level: 9 })),
     pngChunk('IEND', Buffer.alloc(0)),
   ])
+}
+
+function visibleAt(annotation: Annotation, tMs: number | null): boolean {
+  return tMs === null || annotation.start_ms === undefined || annotation.end_ms === undefined ||
+    (tMs >= annotation.start_ms && tMs <= annotation.end_ms)
 }
 
 /**

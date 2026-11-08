@@ -15,10 +15,32 @@
 //   outright.
 //
 // Run: npm run check:keyframes
-import { computeKeyframes, KEYFRAME_MERGE_MS, MAX_KEYFRAMES } from '../src/shared/keyframes'
+import { computeKeyframes, createKeyframeCapture, keyframeFileName, KEYFRAME_MERGE_MS, MAX_KEYFRAMES } from '../src/shared/keyframes'
 import type { Annotation } from '../src/shared/types'
 
 let failures = 0
+
+// Hosted CI's replay ended just before the wall-clock target (2908 ms).
+// Flush the remaining target with the final canvas time, never Infinity.
+{
+  const captured: number[] = []
+  const captureDue = createKeyframeCapture([0, 1000, 2908], (t) => captured.push(t))
+  captureDue(0)
+  captureDue(1100)
+  captureDue(2841)
+  const beforeFlush = captured.length
+  captureDue(2841, true)
+  captureDue(2841, true)
+  const serialized = JSON.parse(JSON.stringify(captured)) as number[]
+  const ok = beforeFlush === 2 && serialized.join(',') === '0,1100,2841' &&
+    keyframeFileName(3, captured[2]!) === 'frames/frame-03_00-02.841.png'
+  if (!ok) failures += 1
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  final still uses the finite canvas clock, drains once, and names valid media`)
+  let rejected = false
+  try { captureDue(Infinity, true) } catch { rejected = true }
+  if (!rejected) failures += 1
+  console.log(`  ${rejected ? 'PASS' : 'FAIL'}  non-finite pixel clocks are rejected`)
+}
 
 function box(id: string, start: number | undefined, end: number | undefined): Annotation {
   return {

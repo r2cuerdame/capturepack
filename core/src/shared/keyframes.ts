@@ -28,6 +28,24 @@ export const KEYFRAME_MERGE_MS = 300
  */
 export const MAX_KEYFRAMES = 24
 
+/** Drain requested stills against the pixels currently on the canvas.
+ * End-of-playback drains outstanding targets without replacing the pixel clock
+ * with an Infinity sentinel (which JSON serializes as null).
+ */
+export function createKeyframeCapture(
+  targets: readonly number[],
+  capture: (tMs: number) => void,
+): (tMs: number, flush?: boolean) => void {
+  let next = 0
+  return (tMs, flush = false) => {
+    if (!Number.isFinite(tMs) || tMs < 0) throw new Error('invalid keyframe pixel clock')
+    while (next < targets.length && (flush || targets[next]! <= tMs)) {
+      next += 1
+      capture(tMs)
+    }
+  }
+}
+
 /**
  * The replay-clock instants that get an annotated still, ascending.
  *

@@ -1002,6 +1002,73 @@ try {
   check('opaque Share Copy ZIP keeps gutter dimensions, masks the blur, and removes its sensitive gutter label',
     gutterMaskSolid && gutterPixelsPreserved && gutterLabelRemoved && gutterPng.readUInt32BE(20) === 6)
 
+  const temporal = makeFixture('opaque-video-lifetime-motion', true, solidPatternPng(8, 6, 0x51))
+  const temporalManifestPath = path.join(temporal.dir, 'manifest.json')
+  const temporalManifest = JSON.parse(readFileSync(temporalManifestPath, 'utf8'))
+  temporalManifest.environment.screens = [{ width: 8, height: 6, scale: 1 }]
+  temporalManifest.media.displays = [temporalManifest.media.displays[0]]
+  temporalManifest.media.displays[0].snapshot_width = 8
+  temporalManifest.media.displays[0].snapshot_height = 4
+  temporalManifest.media.replay_duration_ms = 1_000
+  temporalManifest.media.displays[0].replay_duration_ms = 1_000
+  temporalManifest.media.displays[0].bounds = { x: 0, y: 0, width: 8, height: 4 }
+  temporalManifest.media.keyframes = [
+    { file: 'frames/frame-01_00-00.100.png', t_ms: 100, width: 8, height: 6 },
+    { file: 'frames/frame-02_00-00.500.png', t_ms: 500, width: 8, height: 6 },
+  ]
+  writeFileSync(temporalManifestPath, `${JSON.stringify(temporalManifest, null, 2)}\n`)
+  const temporalAnnotationPath = path.join(temporal.dir, 'annotations.json')
+  const temporalAnnotations = JSON.parse(readFileSync(temporalAnnotationPath, 'utf8'))
+  temporalAnnotations.reference_width = 8
+  temporalAnnotations.reference_height = 4
+  temporalAnnotations.annotations = [
+    { ...temporalAnnotations.annotations[0], annotation_id: 'ann_000003', text: 'SECRET_ACTIVE_BLUR_LABEL', bounds: { x: 0, y: 0, width: 2, height: 2 }, start_ms: 300, end_ms: 900 },
+    { ...temporalAnnotations.annotations[0], annotation_id: 'ann_000006', text: '', bounds: { x: 0, y: 2, width: 2, height: 1 }, start_ms: 300, end_ms: 900, keyframes: [{ t_ms: 300, x: 0, y: 2, width: 2, height: 1 }, { t_ms: 900, x: 4, y: 2, width: 2, height: 1 }] },
+    { ...temporalAnnotations.annotations[1], annotation_id: 'ann_000004', display: 1, text: 'NORMAL_CALLOUT', bounds: { x: 0, y: 2, width: 1, height: 1 }, start_ms: 0, end_ms: 200 },
+    { ...temporalAnnotations.annotations[0], annotation_id: 'ann_000005', text: 'SECRET_PAST_BLUR_LABEL', bounds: { x: 0, y: 0, width: 1, height: 1 }, start_ms: 0, end_ms: 50 },
+  ]
+  temporalAnnotations.annotations[0].tracking = { enabled: true, samples: [{ t_ms: 100, x: 0, y: 0, width: 2, height: 2 }, { t_ms: 300, x: 2, y: 0, width: 2, height: 2 }] }
+  writeFileSync(temporalAnnotationPath, `${JSON.stringify(temporalAnnotations, null, 2)}\n`)
+  writeFileSync(path.join(temporal.dir, 'snapshot.png'), solidPatternPng(8, 4, 0x51))
+  for (const file of ['frames/frame-01_00-00.100.png', 'frames/frame-02_00-00.500.png']) {
+    writeFileSync(path.join(temporal.dir, file), solidPatternPng(8, 6, 0x51))
+  }
+  const temporalPlan = await planShareBundle(temporal.dir, { opaqueRedaction: true })
+  const temporalFirst = canonicalRgbaPixels((await readCanonicalShareStill(temporalPlan.entries[0]!)).bytes)
+  const temporalSecond = canonicalRgbaPixels((await readCanonicalShareStill(temporalPlan.entries[1]!)).bytes)
+  const temporalOriginal = canonicalRgbaPixels(solidPatternPng(8, 6, 0x51))
+  check('video keyframe share entries retain their timestamps',
+    temporalPlan.entries.map((entry) => entry.t_ms).join(',') === '100,500')
+  check('future blur does not mask an earlier still or clear its normal gutter label',
+    Array.from({ length: 48 }, (_, pixel) => pixel).every((pixel) => {
+      const at = pixel * 4
+      return temporalFirst.subarray(at, at + 4).equals(temporalOriginal.subarray(at, at + 4))
+    }))
+  check('active tracked and keyframed blurs mask their resolved positions and active sensitive label clears gutter',
+    [2, 3, 10, 11, 17, 18].every((pixel) => temporalSecond[pixel * 4] === 0x1a) &&
+      [0, 1, 4, 5, 8, 9, 12, 13, 16, 19, 20, 21, 22, 23].every((pixel) => temporalSecond[pixel * 4] !== 0x1a) &&
+      Array.from({ length: 16 }, (_, index) => index + 32).every((pixel) => temporalSecond[pixel * 4] === 0x1a))
+
+  // Screenshot-only lanes use stored bounds and every annotation, just like
+  // renderStill's null clock, even when imported metadata has lifetimes/motion.
+  temporalManifest.media.replay = null
+  delete temporalManifest.media.replay_duration_ms
+  temporalManifest.media.displays[0].replay = null
+  delete temporalManifest.media.displays[0].replay_duration_ms
+  temporalManifest.media.keyframes = [
+    { file: 'frames/frame-01_00-00.000.png', t_ms: 0, width: 8, height: 6 },
+  ]
+  writeFileSync(temporalManifestPath, JSON.stringify(temporalManifest))
+  writeFileSync(path.join(temporal.dir, 'frames/frame-01_00-00.000.png'), solidPatternPng(8, 6, 0x51))
+  const noClockPlan = await planShareBundle(temporal.dir, { opaqueRedaction: true })
+  const noClockPixels = canonicalRgbaPixels((await readCanonicalShareStill(noClockPlan.entries[0]!)).bytes)
+  check('screenshot-only stills retain no-clock labels, stored blur bounds, and gutter cleanup',
+    noClockPlan.entries[0]!.t_ms === null &&
+      noClockPlan.entries[0]!.displayAnnotations.length === temporalAnnotations.annotations.length &&
+      [0, 1, 8, 9, 16, 17].every((pixel) => noClockPixels[pixel * 4] === 0x1a) &&
+      [2, 3, 10, 11, 18, 19].every((pixel) => noClockPixels[pixel * 4] !== 0x1a) &&
+      Array.from({ length: 16 }, (_, index) => index + 32).every((pixel) => noClockPixels[pixel * 4] === 0x1a))
+
   const traversal = makeFixture('traversal')
   const traversalManifest = JSON.parse(readFileSync(path.join(traversal.dir, 'manifest.json'), 'utf8'))
   traversalManifest.media.keyframes[0].file = '../frame-01_00-01.000.png'
@@ -1033,6 +1100,7 @@ try {
     history.includes('planShareBundle(entry.path, { opaqueRedaction: true })') &&
       history.includes('createShareBundle(entry.path, revision, { opaqueRedaction: true })'))
   const shareBundle = readFileSync(path.join(process.cwd(), 'src', 'main', 'shareBundle.ts'), 'utf8')
+  const renderSource = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'render', 'render.ts'), 'utf8')
   const annotatedRender = readFileSync(path.join(process.cwd(), 'src', 'main', 'annotatedRender.ts'), 'utf8')
   const preload = readFileSync(path.join(process.cwd(), 'src', 'preload', 'history.ts'), 'utf8')
   const renderer = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'history', 'history.ts'), 'utf8')
@@ -1082,6 +1150,17 @@ try {
       history.includes('IPC.historyCreateShare') &&
       history.includes('fromHistory(event)') &&
       history.includes('entryFor(ref)'))
+  check('keyframe still timestamps describe the composited frame, including decode overshoot',
+    renderSource.includes('pending.push(shipFrame(capturePng(canvas, tMs)))') &&
+      !renderSource.includes('pending.push(shipFrame(capturePng(canvas, target)))'))
+  const opaqueRedactionSource = shareBundle.slice(
+    shareBundle.indexOf('function opaqueRedactPng('),
+    shareBundle.indexOf('function visibleAt('),
+  )
+  check('opaque motion masks resolve destination display before selecting a still lane',
+    opaqueRedactionSource.indexOf('const resolved = tMs === null ? annotation : annotationAt(annotation, tMs, motionSpace)') >= 0 &&
+      opaqueRedactionSource.indexOf('(resolved.display ?? focusedDisplay) !== display') >
+        opaqueRedactionSource.indexOf('const resolved = tMs === null ? annotation : annotationAt(annotation, tMs, motionSpace)'))
   check('History review passes an opaque revision into creation',
     preload.includes('createShare(packPath: string, revision: string)') &&
       renderer.includes('bridge.createShare(p.path, plan.revision)') &&

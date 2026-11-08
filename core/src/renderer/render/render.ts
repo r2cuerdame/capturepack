@@ -14,7 +14,7 @@
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../../shared/ipc'
 import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
-import { computeKeyframeTimes } from '../../shared/keyframes'
+import { computeKeyframeTimes, createKeyframeCapture } from '../../shared/keyframes'
 import { annotationColor } from '../../shared/annotationStyle'
 import {
   annotationLabelBottomOutset,
@@ -346,18 +346,15 @@ async function renderAnnotated(
   // in-flight promises are tracked, so the loop below can wait for them before
   // reporting how many actually made it.
   const pending: Array<Promise<boolean>> = []
-  let nextTarget = 0
   // Copies the composited canvas off whenever the playhead has reached the next
   // target. toBlob snapshots the bitmap synchronously and encodes off-thread,
   // so the real-time recording is never stalled by PNG compression.
-  const captureDue = (tMs: number): void => {
-    for (;;) {
-      const target = targets[nextTarget]
-      if (target === undefined || target > tMs) return
-      nextTarget += 1
-      pending.push(shipFrame(capturePng(canvas, target)))
-    }
-  }
+  const captureDue = createKeyframeCapture(targets, (tMs) => {
+    // `canvas` contains the frame drawn at tMs, which can be later than the
+    // target when decode/presentation cadence skips over that instant. The
+    // still's clock must describe its pixels, not the requested threshold.
+    pending.push(shipFrame(capturePng(canvas, tMs)))
+  })
 
   // Throttled so a 30 s render sends a few dozen progress messages, not a
   // thousand: the bar cannot show more than the eye can read anyway (#96).
@@ -478,10 +475,10 @@ async function renderAnnotated(
   }
   // Final frame. A plain trim must not append the old 200 ms still-frame tail:
   // the saved replay's upper bound is the configured window, never N + 200 ms.
-  drawFrame()
+  const finalFrameMs = drawFrame()
   // Targets the playhead never reached (the decoded clock can end just short of
   // the recorder's wall clock) resolve against this last composited frame.
-  captureDue(Number.POSITIVE_INFINITY)
+  captureDue(finalFrameMs, true)
   const plainTrim =
     job.annotations.length === 0 &&
     job.keyframes !== true &&
