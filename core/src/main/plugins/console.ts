@@ -10,6 +10,8 @@ export interface ConsoleOutput {
   stderr?: string
 }
 
+export const CONSOLE_PLUGIN_MAX_OUTPUT_BYTES = 256 * 1024
+
 export interface ConsolePayload {
   output: string
   capturedAt: string
@@ -44,12 +46,29 @@ export async function collectConsoleOutput(
       }),
     ])
     const combined = [
-      ...(typeof result.stdout === 'string' ? result.stdout.split(/\r?\n/u).map((line) => `[stdout] ${line}`) : []),
-      ...(typeof result.stderr === 'string' ? result.stderr.split(/\r?\n/u).map((line) => `[stderr] ${line}`) : []),
+      ...(typeof result?.stdout === 'string' ? result.stdout.split(/\r?\n/u).map((line) => `[stdout] ${line}`) : []),
+      ...(typeof result?.stderr === 'string' ? result.stderr.split(/\r?\n/u).map((line) => `[stderr] ${line}`) : []),
     ].filter((line) => line.trim() !== '')
-    const output = combined.slice(-CONSOLE_PLUGIN_MAX_LINES).map(redactConsoleOutput).join('\n')
+    const selected = combined.slice(-CONSOLE_PLUGIN_MAX_LINES)
+    // Bound bytes as well as line count: a terminal can emit a single enormous
+    // line, and optional context must not turn a normal capture into a large pack.
+    let remaining = CONSOLE_PLUGIN_MAX_OUTPUT_BYTES
+    const bounded: string[] = []
+    for (let index = selected.length - 1; index >= 0 && remaining > 0; index -= 1) {
+      const selectedLine = selected[index]
+      if (selectedLine === undefined) continue
+      const line = redactConsoleOutput(selectedLine)
+      const suffix = bounded.length ? 1 : 0
+      const available = remaining - suffix
+      if (available <= 0) break
+      const bytes = Buffer.from(line, 'utf8')
+      const clipped = bytes.length > available ? bytes.subarray(bytes.length - available).toString('utf8') : line
+      bounded.unshift(clipped)
+      remaining -= Buffer.byteLength(clipped) + suffix
+    }
+    const output = bounded.join('\n')
     if (!output) return null
-    return { output: `${output}\n`, capturedAt: new Date().toISOString(), lineCount: Math.min(combined.length, CONSOLE_PLUGIN_MAX_LINES) }
+    return { output: `${output}\n`, capturedAt: new Date().toISOString(), lineCount: bounded.length }
   } catch {
     return null
   } finally {
