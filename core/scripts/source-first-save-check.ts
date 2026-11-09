@@ -227,6 +227,12 @@ async function main(): Promise<void> {
       docLanguage: 'en',
     }
     const handle = await observeManifestPublication('savePack', () => savePack(initial))
+    const initialManifest = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const initialPluginCount = Array.isArray(initialManifest.plugins)
+      ? initialManifest.plugins.length
+      : 0
     const failedDisplayRoot = path.join(outputDir, 'secondary-display-failure')
     const mediaFsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
     const originalWriteFile = mediaFsPromises.writeFile
@@ -337,7 +343,7 @@ async function main(): Promise<void> {
     )
     check(
       'a late plugin declaration refreshes the generated plugin count',
-      lateOverview.includes('1 plugins.'),
+      lateOverview.includes(`${initialPluginCount + 1} plugins.`),
     )
 
     const focusedFrame = 'frames/frame-01_00-01.000.png'
