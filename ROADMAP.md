@@ -354,7 +354,9 @@ a password field renders dots, which is the case the DOM walker already refuses
       cross-origin regression coverage (`check:chrome-route-change`)
 - [x] Chromium-family registration (Chrome, Edge, Brave and Chromium)
 - [x] Built-in Windows UI Automation context provider
-- [ ] Git plugin · Console plugin
+- [x] Git plugin: captures repository, branch, commit, dirty state and changed paths
+      in the saved pack (`check:git-plugin`)
+- [ ] Console plugin
 - [ ] Unreal plugin · Unity plugin
 
 ---
