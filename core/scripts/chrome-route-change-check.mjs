@@ -31,6 +31,40 @@ await context.self.capturepackRouteChanged(
 )
 assert.equal(forwarded.length, 1, 'cross-origin late hints are discarded')
 
+for (const [msg, sender, description] of [
+  [undefined, { tab: { id: 7 } }, 'missing message is discarded'],
+  [{}, undefined, 'missing sender is discarded'],
+  [{ url: activeTab.url }, {}, 'missing sender tab is discarded'],
+  [{ url: activeTab.url }, { tab: {} }, 'missing sender tab id is discarded'],
+]) {
+  await assert.doesNotReject(
+    context.self.capturepackRouteChanged(msg, sender, tabs, send, 1), description,
+  )
+  assert.equal(forwarded.length, 1, description)
+}
+
+await context.self.capturepackRouteChanged(
+  { url: activeTab.url }, { tab: { id: 7 } }, { get: async () => { throw new Error('closed tab') } }, send, 1,
+)
+assert.equal(forwarded.length, 1, 'closed tabs are discarded')
+
+for (const url of ['', 'not a URL']) {
+  await context.self.capturepackRouteChanged(
+    { url }, { tab: { id: 7 } }, { get: async () => ({ active: true, url, title: 'Unreadable' }) }, send, 1,
+  )
+  assert.equal(forwarded.length, 1, `unreadable current URL is discarded (${url || 'empty'})`)
+}
+
+const longUrl = `https://example.test/${'x'.repeat(3000)}`
+const longTitle = 'T'.repeat(700)
+await context.self.capturepackRouteChanged(
+  { url: longUrl }, { tab: { id: 7 } },
+  { get: async () => ({ active: true, url: longUrl, title: longTitle }) }, send, 1,
+)
+assert.equal(forwarded.length, 2, 'a valid long route hint is delivered')
+assert.equal(forwarded[1].tab.url.length, 2048, 'forwarded URL is capped at 2,048 characters')
+assert.equal(forwarded[1].tab.title.length, 512, 'forwarded title is capped at 512 characters')
+
 // The app recopies the extension folder only when the manifest version moves
 // (syncExtensionIfChanged), so a fix the version leaves alone never reaches an
 // installed browser. 0.4.3 shipped the worker that dropped the raced hint.
@@ -44,4 +78,4 @@ const [major, minor, patch] = manifest.version.split('.').map(Number)
 assert.ok(major > 0 || minor > 4 || (minor === 4 && patch > 3),
   `the manifest version moved past 0.4.3 so installed copies resync (found ${manifest.version})`)
 
-console.log('Chrome SPA route change regression: 3 scenarios and delivery passed')
+console.log('Chrome SPA route change regression: invalid inputs, closed tabs, URL/title bounds, and existing delivery cases passed')
