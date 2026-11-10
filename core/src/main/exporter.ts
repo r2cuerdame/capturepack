@@ -2082,10 +2082,13 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // Otherwise Save As New could turn plugins/hidden.png from a malformed
     // source into an undeclared full-screen image in a newly trusted pack.
     const srcPlugins = join(sourceDir, 'plugins')
-    let copiedPlugins = input.plugins
+    // Save As New normally receives the edited capture inputs, which may not
+    // carry plugin declarations. In that case the source manifest is the
+    // authority for payloads copied from the source pack.
+    let copiedPlugins = input.plugins ?? sourceManifest?.plugins
     if (existsSync(srcPlugins)) {
       if (imageCapture) {
-        copiedPlugins = await copyImagePluginMetadata(sourceDir, dirPath, input.plugins)
+        copiedPlugins = await copyImagePluginMetadata(sourceDir, dirPath, copiedPlugins)
       } else {
         await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
       }
