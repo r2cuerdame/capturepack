@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { writeFile } from 'node:fs/promises'
 
 const execFileAsync = promisify(execFile)
 export const GIT_PLUGIN_VERSION = '0.1.0'
@@ -84,9 +84,21 @@ export function gitPluginDeclaration() {
   return { name: 'git', version: GIT_PLUGIN_VERSION, path: 'plugins/git/' }
 }
 
+async function writeAtomicFile(filePath: string, contents: string): Promise<void> {
+  const temporaryPath = `${filePath}.${String(process.pid)}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, contents, 'utf8')
+    await rename(temporaryPath, filePath)
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => {})
+  }
+}
+
 export async function writeGitPlugin(dirPath: string, state: GitState): Promise<void> {
   const pluginDir = join(dirPath, 'plugins', 'git')
   await mkdir(pluginDir, { recursive: true })
-  await writeFile(join(pluginDir, 'meta.json'), `${JSON.stringify({ name: 'git', version: GIT_PLUGIN_VERSION }, null, 2)}\n`)
-  await writeFile(join(pluginDir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
+  // Publish metadata last so readers never discover a plugin before its state
+  // file has been written successfully.
+  await writeAtomicFile(join(pluginDir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
+  await writeAtomicFile(join(pluginDir, 'meta.json'), `${JSON.stringify({ name: 'git', version: GIT_PLUGIN_VERSION }, null, 2)}\n`)
 }
