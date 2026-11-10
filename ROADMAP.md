@@ -168,8 +168,7 @@ verification history. These are the current additions and next gates:
   can honestly reach and cannot stand in for the machine. Beyond that: code
   signing ([#21](https://github.com/r2cuerdame/capturepack/issues/21)), continued
   physical mixed-DPI/long-running recording, save/reopen, installer/update and
-  Chrome reconnection QA, plus stronger share-specific opaque redaction whose
-  pixels are proven independent of the covered source region.
+  Chrome reconnection QA.
 
 ---
 
@@ -235,7 +234,10 @@ usage habit that the whole project is measured by.
       keyframe stills as media through a closed media allowlist, accompanied by
       a generated README, offline viewer and minimal inventory; it canonicalizes
       the PNG pixels, excludes originals, all videos and structured context, and
-      remains distinct from the CapturePack evidence contract
+      remains distinct from the CapturePack evidence contract. Opaque redaction
+      re-renders covered pixels as a fixed solid color independent of the source
+      pixels and removes sensitive labels from the shared image; people must
+      still review unmarked pixels before sharing.
 - [x] `viewer.html`, `README.md`, `report.md` and `skills/` generated from the
       source contract
 - [x] Video packs may contain `timeline.json`; explicit image packs never do
@@ -389,10 +391,6 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 
 ## Later — noted, not scheduled
 
-- **Share-specific opaque redaction** — re-render Share Copy media so covered
-  pixels are input-independent, rather than reusing the pack's editable
-  pixelation view; retain mandatory human review because unmarked pixels can
-  still contain secrets.
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
   findByApplication/URL/WindowTitle; true replay-frame extraction for `frame(time_s)`
