@@ -89,7 +89,9 @@ is a plan, not an implementation or release claim. The provider must write a
 SPEC-compatible `plugins/console/` payload and metadata within 100 ms when
 available; absent, inaccessible, slow, or failed collection must be omitted
 without preventing the pack from saving. Deterministic checks must cover those
-outcomes, followed by the full QA gate and SPEC validation. The operational
+outcomes, followed by the full QA gate and SPEC validation. The design baseline
+— file layout, time budget, masking rules and write order — is
+[CONSOLE_PLUGIN.md](CONSOLE_PLUGIN.md). The operational
 observation remains in progress until a full month has elapsed; record actual
 dates and reinstall events. Planned additional cost is 0, using existing local
 resources only.

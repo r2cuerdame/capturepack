@@ -370,7 +370,9 @@ the observation has passed.
 
 - A supported console produces a SPEC-compatible `plugins/console/` payload
   and metadata. Collection completes within 100 ms; missing, inaccessible, or
-  slow console data is omitted and the pack still saves normally.
+  slow console data is omitted and the pack still saves normally. The layout,
+  budget, masking rules and write order are fixed in
+  [docs/CONSOLE_PLUGIN.md](docs/CONSOLE_PLUGIN.md) before code is written.
 - Deterministic checks cover successful collection, absent/denied console
   access, timeout, and write failure; the full QA gate and SPEC validation pass.
 - The one-month observation records actual install/update dates and any manual

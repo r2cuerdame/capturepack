@@ -72,6 +72,7 @@ work does not settle remains open: a real three-screen capture
 |---|---|
 | [MCP](MCP.md) | Loopback, read-only tools for already-saved packs |
 | [Temporal provider API](temporal-provider-api.md) | Provider contract and timing rules |
+| [Console context provider](CONSOLE_PLUGIN.md) | Planned 2026-12 design baseline: `plugins/console/` layout, 100 ms budget, masking and write order |
 | [Manifest schema](schemas/manifest.schema.json) | Machine-readable manifest validation |
 | [Annotations schema](schemas/annotations.schema.json) | Machine-readable annotation validation |
 | [Timeline schema](schemas/timeline.schema.json) | Machine-readable event timeline validation |
