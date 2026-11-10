@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -232,6 +232,36 @@ try {
   check('writes SPEC plugin metadata and captured state', meta.name === 'git'
     && meta.version === '0.1.0' && saved.commit === state.commit)
   check('provides a matching manifest declaration', gitPluginDeclaration().path === 'plugins/git/')
+
+  const failedPack = path.join(work, 'failed-pack')
+  const failedPluginDir = path.join(failedPack, 'plugins', 'git')
+  mkdirSync(path.join(failedPluginDir, 'state.json'), { recursive: true })
+  let writeFailed = false
+  try {
+    await writeGitPlugin(failedPack, state)
+  } catch {
+    writeFailed = true
+  }
+  check('a state-file publish failure is propagated', writeFailed)
+  check('a failed state-file publish leaves no metadata that advertises a partial plugin',
+    !readdirSync(failedPluginDir).includes('meta.json'))
+  check('a failed state-file publish removes its staged temporary file',
+    !readdirSync(failedPluginDir).some((name) => name.endsWith('.tmp')))
+
+  const failedMetaPack = path.join(work, 'failed-meta-pack')
+  const failedMetaDir = path.join(failedMetaPack, 'plugins', 'git')
+  mkdirSync(path.join(failedMetaDir, 'meta.json'), { recursive: true })
+  let metaWriteFailed = false
+  try {
+    await writeGitPlugin(failedMetaPack, state)
+  } catch {
+    metaWriteFailed = true
+  }
+  const publishedState = JSON.parse(readFileSync(path.join(failedMetaDir, 'state.json'), 'utf8'))
+  check('a metadata publish failure is propagated after the complete state is written',
+    metaWriteFailed && publishedState.commit === state.commit)
+  check('a failed metadata publish removes its staged temporary file',
+    !readdirSync(failedMetaDir).some((name) => name.endsWith('.tmp')))
 } finally {
   rmSync(work, { recursive: true, force: true })
 }
