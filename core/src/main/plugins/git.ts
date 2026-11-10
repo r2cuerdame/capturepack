@@ -16,6 +16,24 @@ export interface GitState {
   changed_files: string[]
 }
 
+/** Parse NUL-delimited porcelain v1 status paths without emitting empty or duplicate paths. */
+export function parseChangedFiles(statusOutput: string): string[] {
+  const statusEntries = statusOutput.split('\0')
+  const changedFiles = new Set<string>()
+  for (let index = 0; index < statusEntries.length; index += 1) {
+    const entry = statusEntries[index]
+    if (!entry) continue
+    const filePath = entry.slice(3)
+    if (filePath) changedFiles.add(filePath)
+    if (entry.slice(0, 2).includes('R') || entry.slice(0, 2).includes('C')) {
+      const sourcePath = statusEntries[index + 1]
+      if (sourcePath) changedFiles.add(sourcePath)
+      index += 1
+    }
+  }
+  return [...changedFiles].sort()
+}
+
 /** Best-effort capture-time repository context; timeout and all Git errors fail open. */
 export async function collectGitState(
   cwd: string,
@@ -49,19 +67,7 @@ export async function collectGitState(
     // Porcelain v1 with -z is deliberately NUL-delimited: filenames may
     // contain spaces, tabs, or newlines. Rename/copy records carry a second
     // NUL-delimited source path, which must not be mistaken for a status row.
-    const statusEntries = statusResult.stdout.split('\0')
-    const changedFiles: string[] = []
-    for (let index = 0; index < statusEntries.length; index += 1) {
-      const entry = statusEntries[index]
-      if (!entry) continue
-      changedFiles.push(entry.slice(3))
-      if (entry.slice(0, 2).includes('R') || entry.slice(0, 2).includes('C')) {
-        const sourcePath = statusEntries[index + 1]
-        if (sourcePath) changedFiles.push(sourcePath)
-        index += 1
-      }
-    }
-    changedFiles.sort()
+    const changedFiles = parseChangedFiles(statusResult.stdout)
     return {
       repository: root.split(/[\\/]/u).filter(Boolean).at(-1) ?? root,
       branch,

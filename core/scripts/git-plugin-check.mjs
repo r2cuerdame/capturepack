@@ -21,6 +21,7 @@ try {
   ], { stdio: 'inherit' })
   const require = createRequire(import.meta.url)
   const { collectGitState, writeGitPlugin, gitPluginDeclaration } = require(bundle)
+  const gitSource = readFileSync(path.join(here, '..', 'src', 'main', 'plugins', 'git.ts'), 'utf8')
   const repo = path.join(work, 'repo')
   const outside = path.join(work, 'outside')
   const nested = path.join(repo, 'nested', 'deeper')
@@ -46,7 +47,9 @@ try {
     && state.changed_files.includes('renamed file.txt')
     && state.changed_files.includes('tracked.txt')
     && state.changed_files.includes('new file.txt'))
-  check('no-optional-locks was used for all Git reads', true)
+  const gitReads = [...gitSource.matchAll(/execFileAsync\('git', \[([^\]]*)\]/gu)]
+  check('no-optional-locks is used on every Git read', gitReads.length === 4
+    && gitReads.every(([, args]) => args.includes("'--no-optional-locks'")))
   // A capture started below the repository root still names the top-level
   // repository and reports every change root-relative, including changes
   // outside the sub-folder the capture started in.
@@ -90,7 +93,28 @@ try {
     && JSON.stringify(commitState.changed_files) === JSON.stringify(['docs/release.txt']))
 
   check('non-Git directories fail open', await collectGitState(outside, 2_000) === null)
+  const unborn = path.join(work, 'unborn')
+  mkdirSync(unborn)
+  execFileSync('git', ['init', '-q', unborn])
+  check('repositories without an initial commit fail open', await collectGitState(unborn, 2_000) === null)
   check('short deadlines fail open', await collectGitState(repo, 1) === null)
+
+  const deleted = path.join(work, 'deleted')
+  mkdirSync(deleted)
+  execFileSync('git', ['init', '-q', deleted])
+  execFileSync('git', ['-C', deleted, 'config', 'user.email', 'check@example.invalid'])
+  execFileSync('git', ['-C', deleted, 'config', 'user.name', 'Check'])
+  writeFileSync(path.join(deleted, 'removed.txt'), 'present\n')
+  execFileSync('git', ['-C', deleted, 'add', 'removed.txt'])
+  execFileSync('git', ['-C', deleted, 'commit', '-qm', 'initial'])
+  rmSync(path.join(deleted, 'removed.txt'))
+  const deletedState = await collectGitState(deleted, 2_000)
+  check('deleted files remain in changed paths', deletedState?.dirty === true
+    && deletedState.changed_files.includes('removed.txt'))
+
+  check('empty porcelain paths are dropped and duplicate paths are deduplicated',
+    JSON.stringify(require(bundle).parseChangedFiles(' M \0?? repeated.txt\0 M repeated.txt\0'))
+      === JSON.stringify(['repeated.txt']))
   const pack = path.join(work, 'pack')
   await writeGitPlugin(pack, state)
   const meta = JSON.parse(readFileSync(path.join(pack, 'plugins', 'git', 'meta.json'), 'utf8'))
