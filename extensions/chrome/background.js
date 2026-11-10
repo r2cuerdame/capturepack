@@ -7,7 +7,6 @@
 // defined before anything below can be called.
 importScripts('full-page-plan.js', 'full-page-capture.js')
 importScripts('route-change.js')
-importScripts('route-change.js')
 
 const HOST = 'com.capturepack.host'
 const PROTOCOL = 1

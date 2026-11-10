@@ -31,4 +31,17 @@ await context.self.capturepackRouteChanged(
 )
 assert.equal(forwarded.length, 1, 'cross-origin late hints are discarded')
 
-console.log('Chrome SPA route change regression: 3 scenarios passed')
+// The app recopies the extension folder only when the manifest version moves
+// (syncExtensionIfChanged), so a fix the version leaves alone never reaches an
+// installed browser. 0.4.3 shipped the worker that dropped the raced hint.
+const background = readFileSync(path.join(root, 'extensions/chrome/background.js'), 'utf8')
+assert.equal(background.match(/importScripts\('route-change\.js'\)/gu)?.length, 1,
+  'the worker loads the route resolver exactly once')
+assert.match(background, /self\.capturepackRouteChanged\(msg, sender, chrome\.tabs, send, PROTOCOL\)/u,
+  'the worker hands route hints to the resolver under test')
+const manifest = JSON.parse(readFileSync(path.join(root, 'extensions/chrome/manifest.json'), 'utf8'))
+const [major, minor, patch] = manifest.version.split('.').map(Number)
+assert.ok(major > 0 || minor > 4 || (minor === 4 && patch > 3),
+  `the manifest version moved past 0.4.3 so installed copies resync (found ${manifest.version})`)
+
+console.log('Chrome SPA route change regression: 3 scenarios and delivery passed')
