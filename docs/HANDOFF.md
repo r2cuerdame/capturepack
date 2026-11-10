@@ -81,6 +81,19 @@ publication still follow [RELEASING.md](RELEASING.md). The website deploy
 remains the `pages.yml` path; the Windows release workflow is manually
 dispatched.
 
+## Next milestone — 2026-12 (0.6.2 candidate; planning only)
+
+The next planned milestone is a no-cost V2 console context provider prototype
+plus continued observation of one month of use without manual reinstall. This
+is a plan, not an implementation or release claim. The provider must write a
+SPEC-compatible `plugins/console/` payload and metadata within 100 ms when
+available; absent, inaccessible, slow, or failed collection must be omitted
+without preventing the pack from saving. Deterministic checks must cover those
+outcomes, followed by the full QA gate and SPEC validation. The operational
+observation remains in progress until a full month has elapsed; record actual
+dates and reinstall events. Planned additional cost is 0, using existing local
+resources only.
+
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
