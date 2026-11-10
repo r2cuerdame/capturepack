@@ -2,7 +2,17 @@
 //
 // This exercises the registered tools, not only the shared classifier. A region
 // pack has no API path by which MCP can ask for pixels outside snapshot.png.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { openPack } from '../src/main/mcp/store'
 import { registerTools } from '../src/main/mcp/tools'
+import {
+  GIT_PLUGIN_VERSION,
+  gitPluginDeclaration,
+  writeGitPlugin,
+  type GitState,
+} from '../src/main/plugins/git'
 import type { Annotation } from '../src/shared/types'
 import { z } from 'zod'
 
@@ -16,6 +26,8 @@ type ToolDefinition = {
   description?: string
   inputSchema?: Record<string, unknown>
 }
+
+const gitPackRoot = mkdtempSync(path.join(tmpdir(), 'capturepack-mcp-git-'))
 
 let failed = 0
 function check(ok: boolean, message: string): void {
@@ -395,6 +407,33 @@ async function main(): Promise<void> {
     timeline: () => null,
     readText: () => null,
   }
+  // A git plugin exactly as a capture saves it: the real writer lays down
+  // plugins/git/state.json and meta.json, the manifest carries the real
+  // declaration, and the MCP store reopens the folder from disk — so the tools
+  // read the files an assistant reads rather than a stubbed PackHandle.
+  const gitState: GitState = {
+    repository: 'capturepack-mcp-fixture',
+    branch: 'feature/mcp-git-lookup',
+    commit: '89abcdef0123456789abcdef0123456789abcdef',
+    dirty: true,
+    changed_files: ['src/main/mcp/tools.ts', 'src/main/plugins/git.ts'],
+  }
+  const gitPackDir = path.join(gitPackRoot, 'git-plugin-pack')
+  mkdirSync(gitPackDir)
+  writeFileSync(
+    path.join(gitPackDir, 'manifest.json'),
+    JSON.stringify({
+      format: '0.8.0',
+      id: 'git-plugin-pack',
+      capture_kind: 'image',
+      title: 'Git context capture',
+      created_at: '2026-11-11T09:00:00+09:00',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      plugins: [gitPluginDeclaration()],
+    }),
+  )
+  await writeGitPlugin(gitPackDir, gitState)
+  const gitPack = openPack(gitPackDir, 'dir', 'git-plugin-pack')
   const store = {
     outputDir: 'C:\\packs',
     latest: () => pack,
@@ -414,6 +453,7 @@ async function main(): Promise<void> {
       if (id === videoOmittedTimelinePack.id) return videoOmittedTimelinePack
       if (id === videoMalformedTimelinePack.id) return videoMalformedTimelinePack
       if (id === legacyNoTimelinePack.id) return legacyNoTimelinePack
+      if (id === gitPack.id) return gitPack
       return pack
     },
     list: () => ({
@@ -745,6 +785,86 @@ async function main(): Promise<void> {
     'capturepack_windows explains when both window metadata and events are absent',
   )
 
+  console.log('GIT PLUGIN')
+  const gitSummary = textJson(
+    await callbacks.get('capturepack_summary')?.({ id: gitPack.id }) as ToolResult,
+  )
+  check(
+    JSON.stringify(gitSummary.plugins) === JSON.stringify(['git']),
+    'capturepack_summary lists the saved git plugin',
+  )
+  const gitDom = await callbacks.get('capturepack_dom')?.({ id: gitPack.id })
+  const gitDomJson = textJson(gitDom as ToolResult)
+  const gitDomPlugins = (gitDomJson.plugins ?? []) as Array<Record<string, unknown>>
+  const gitDomFiles = (gitDomPlugins[0]?.files ?? []) as Array<Record<string, unknown>>
+  check(
+    gitDom?.isError !== true &&
+      gitDomPlugins.length === 1 &&
+      gitDomPlugins[0]?.name === 'git' &&
+      gitDomPlugins[0]?.version === GIT_PLUGIN_VERSION &&
+      JSON.stringify(gitDomFiles.map((file) => file.file)) ===
+        JSON.stringify(['plugins/git/meta.json', 'plugins/git/state.json']) &&
+      gitDomFiles.every((file) => !('error' in file)),
+    'capturepack_dom returns the declared git plugin version and both of its JSON files',
+  )
+  check(
+    JSON.stringify(gitDomFiles[0]?.json) === JSON.stringify({ name: 'git', version: GIT_PLUGIN_VERSION }),
+    'capturepack_dom returns git meta.json as written',
+  )
+  check(
+    JSON.stringify(gitDomFiles[1]?.json) === JSON.stringify(gitState),
+    'capturepack_dom returns git state.json repository, branch, commit, dirty flag and changed files as written',
+  )
+  const gitMarkdown = await callbacks.get('capturepack_export_markdown')?.({ id: gitPack.id })
+  const gitMarkdownText = gitMarkdown?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    gitMarkdown?.isError !== true &&
+      gitMarkdownText.includes(
+        `- **git** v${GIT_PLUGIN_VERSION}: plugins/git/meta.json, plugins/git/state.json`,
+      ),
+    'capturepack_export_markdown lists the git plugin and its files',
+  )
+  const gitSearchCases: Array<[keyword: string, jsonPath: string, value: string]> = [
+    ['capturepack-mcp-fixture', 'repository', gitState.repository],
+    ['FEATURE/MCP-GIT-LOOKUP', 'branch', gitState.branch],
+    ['89abcdef01', 'commit', gitState.commit],
+    ['plugins/git.ts', 'changed_files[1]', 'src/main/plugins/git.ts'],
+  ]
+  for (const [keyword, jsonPath, value] of gitSearchCases) {
+    const gitSearch = await callbacks.get('capturepack_search')?.({ id: gitPack.id, keyword })
+    const gitSearchJson = textJson(gitSearch as ToolResult)
+    const gitSearchHits = (gitSearchJson.hits as Record<string, unknown>).plugins as Array<Record<string, unknown>>
+    check(
+      gitSearch?.isError !== true &&
+        gitSearchJson.total_hits === 1 &&
+        gitSearchHits.length === 1 &&
+        gitSearchHits[0]?.plugin === 'git' &&
+        gitSearchHits[0]?.file === 'plugins/git/state.json' &&
+        gitSearchHits[0]?.json_path === jsonPath &&
+        gitSearchHits[0]?.value === value,
+      `capturepack_search finds the git ${jsonPath} by "${keyword}"`,
+    )
+  }
+  const gitMiss = textJson(
+    await callbacks.get('capturepack_search')?.({ id: gitPack.id, keyword: 'no-such-branch' }) as ToolResult,
+  )
+  check(
+    gitMiss.total_hits === 0 && !('plugin_warnings' in gitMiss),
+    'capturepack_search reports a git miss without plugin warnings',
+  )
+  const gitFindDom = textJson(
+    await callbacks.get('capturepack_find_dom')?.({ id: gitPack.id, selector: 'mcp-git-lookup' }) as ToolResult,
+  )
+  const gitFindMatches = (gitFindDom.matches ?? []) as Array<Record<string, unknown>>
+  check(
+    gitFindDom.count === 1 &&
+      gitFindMatches[0]?.plugin === 'git' &&
+      gitFindMatches[0]?.file === 'plugins/git/state.json' &&
+      gitFindMatches[0]?.json_path === 'branch' &&
+      gitFindMatches[0]?.value === gitState.branch,
+    'capturepack_find_dom finds the git branch in plugin metadata',
+  )
+
   console.log('FRAME')
   check(
     definitions.get('capturepack_frame')?.inputSchema?.display !== undefined,
@@ -949,7 +1069,9 @@ async function main(): Promise<void> {
   process.exitCode = failed === 0 ? 0 : 1
 }
 
-void main().catch((err: unknown) => {
-  console.error(err)
-  process.exitCode = 1
-})
+void main()
+  .catch((err: unknown) => {
+    console.error(err)
+    process.exitCode = 1
+  })
+  .finally(() => rmSync(gitPackRoot, { recursive: true, force: true }))
