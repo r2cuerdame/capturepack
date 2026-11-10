@@ -19,8 +19,17 @@ try {
     path.join(here, '..', 'src', 'main', 'plugins', 'git.ts'),
     '--bundle', '--platform=node', '--format=cjs', `--outfile=${bundle}`,
   ], { stdio: 'inherit' })
+  // The pack reader the MCP server serves saved packs through, so a saved
+  // plugin is re-read the way a consumer reads it, not by this check's own fs.
+  const storeBundle = path.join(work, 'store.cjs')
+  execFileSync(process.execPath, [
+    path.join(here, '..', 'node_modules', 'esbuild', 'bin', 'esbuild'),
+    path.join(here, '..', 'src', 'main', 'mcp', 'store.ts'),
+    '--bundle', '--platform=node', '--format=cjs', `--outfile=${storeBundle}`,
+  ], { stdio: 'inherit' })
   const require = createRequire(import.meta.url)
   const { collectGitState, writeGitPlugin, gitPluginDeclaration } = require(bundle)
+  const { openPack } = require(storeBundle)
   const gitSource = readFileSync(path.join(here, '..', 'src', 'main', 'plugins', 'git.ts'), 'utf8')
   const repo = path.join(work, 'repo')
   const outside = path.join(work, 'outside')
@@ -111,6 +120,55 @@ try {
   const deletedState = await collectGitState(deleted, 2_000)
   check('deleted files remain in changed paths', deletedState?.dirty === true
     && deletedState.changed_files.includes('removed.txt'))
+
+  // Hangul paths (#405). core.quotePath — Git's default, pinned here so a
+  // machine's global config cannot weaken the fixture — octal-escapes every
+  // non-ASCII byte in human-readable status. Porcelain -z is exempt, so each
+  // Korean name must reach changed_files, and a re-read pack, exactly as the
+  // file was named: modified, untracked, both sides of a rename, deleted, and
+  // in a Korean sub-folder of a Korean-named repository.
+  const hangul = path.join(work, '한글 저장소')
+  const hangulDocs = path.join(hangul, '문서')
+  mkdirSync(hangulDocs, { recursive: true })
+  execFileSync('git', ['init', '-q', hangul])
+  execFileSync('git', ['-C', hangul, 'config', 'user.email', 'check@example.invalid'])
+  execFileSync('git', ['-C', hangul, 'config', 'user.name', 'Check'])
+  execFileSync('git', ['-C', hangul, 'config', 'core.quotePath', 'true'])
+  writeFileSync(path.join(hangulDocs, '회의록.md'), 'base\n')
+  writeFileSync(path.join(hangul, '원본 이름.txt'), 'base\n')
+  writeFileSync(path.join(hangul, '지울 파일.txt'), 'base\n')
+  execFileSync('git', ['-C', hangul, 'add', '문서/회의록.md', '원본 이름.txt', '지울 파일.txt'])
+  execFileSync('git', ['-C', hangul, 'commit', '-qm', 'initial'])
+  writeFileSync(path.join(hangulDocs, '회의록.md'), 'changed\n')
+  writeFileSync(path.join(hangulDocs, '새 메모.txt'), 'untracked\n')
+  execFileSync('git', ['-C', hangul, 'mv', '원본 이름.txt', '바꾼 이름.txt'])
+  rmSync(path.join(hangul, '지울 파일.txt'))
+  const hangulPaths = ['문서/회의록.md', '문서/새 메모.txt', '바꾼 이름.txt', '원본 이름.txt', '지울 파일.txt']
+  const quotedStatus = execFileSync('git', ['-C', hangul, 'status', '--porcelain=v1'], { encoding: 'utf8' })
+  check('the Hangul fixture is octal-escaped in quoted status output', /\\3\d\d/u.test(quotedStatus)
+    && !hangulPaths.some((name) => quotedStatus.includes(name)))
+  const hangulState = await collectGitState(hangul, 2_000)
+  check('Hangul changed paths are collected exactly as named', hangulState?.repository === '한글 저장소'
+    && hangulState.dirty === true
+    && JSON.stringify(hangulState.changed_files) === JSON.stringify([...hangulPaths].sort()))
+  const hangulNestedState = await collectGitState(hangulDocs, 2_000)
+  check('a Hangul sub-folder capture lists the same root-relative Hangul paths',
+    hangulNestedState?.repository === '한글 저장소'
+    && JSON.stringify(hangulNestedState.changed_files) === JSON.stringify(hangulState?.changed_files))
+  const hangulPack = path.join(work, '저장된 팩', 'CapturePack_2026-11-11_090000')
+  await writeGitPlugin(hangulPack, hangulState)
+  const reopened = openPack(hangulPack, 'dir', 'hangul')
+  const savedBytes = reopened.readBinary('plugins/git/state.json')
+  const savedText = reopened.readText('plugins/git/state.json')
+  const reread = savedText === null ? null : JSON.parse(savedText)
+  check('a re-read pack keeps every Hangul path exactly as collected', reread?.repository === '한글 저장소'
+    && reread.dirty === true
+    && JSON.stringify(reread.changed_files) === JSON.stringify(hangulState?.changed_files)
+    && reopened.plugins().some((plugin) => plugin.name === 'git'
+      && plugin.files.includes('plugins/git/state.json')))
+  check('saved state.json holds Hangul paths as literal UTF-8, not escapes', savedBytes !== null
+    && hangulPaths.every((name) => savedBytes.includes(Buffer.from(JSON.stringify(name), 'utf8')))
+    && !/\\u[0-9a-f]{4}|\\3\d\d/iu.test(savedText ?? ''))
 
   check('empty porcelain paths are dropped and duplicate paths are deduplicated',
     JSON.stringify(require(bundle).parseChangedFiles(' M \0?? repeated.txt\0 M repeated.txt\0'))
