@@ -21,6 +21,14 @@
 // remove a directory their failed write left unpublished — while a payload an
 // earlier write already published, and the manifest already declares, stays.
 //
+// SAVE AS NEW MUST CARRY THE GIT PLUGIN INTO THE NEW PACK.
+//
+// Re-edit hands saveAsNewPack the edited capture, which normally carries no
+// plugin declarations. The source manifest is then the authority for what the
+// new pack declares. Both copy paths — the byte-for-byte video copy and the
+// image metadata-only copy — must keep the git declaration and its meta.json
+// and state.json bytes, with and without an explicit input.plugins.
+//
 // Run: npm run check:plugins
 import {
   existsSync,
@@ -40,6 +48,7 @@ import {
   buildManifest,
   DOM_PLUGIN_NAME,
   domPluginDeclaration,
+  saveAsNewPack,
   tryWriteDomPlugin,
   UIA_PLUGIN_NAME,
   uiaPluginDeclaration,
@@ -146,7 +155,32 @@ function packInput(uia: UiaPluginPayload): ExportInput {
   }
 }
 
-function writePackManifest(dir: string, plugins: Manifest['plugins']): void {
+function imagePackInput(): ExportInput {
+  return {
+    snapshotPng: Buffer.from('image snapshot'),
+    width: 100,
+    height: 80,
+    captureKind: 'image',
+    imageScope: 'fullscreen',
+    capturedAt,
+    replayWebm: null,
+    replayDurationMs: 0,
+    annotations: [],
+    title: '',
+    note: '',
+    snapshotTMs: null,
+    timeline: { t0: capturedAt.toISOString(), events: [] },
+    screens: [{ width: 100, height: 80, scale: 1 }],
+    clipboardAfterSave: 'off',
+    docLanguage: 'en',
+  }
+}
+
+function writePackManifest(
+  dir: string,
+  plugins: Manifest['plugins'],
+  captureKind: 'video' | 'image' = 'video',
+): void {
   mkdirSync(dir, { recursive: true })
   const manifest = buildManifest({
     id: path.basename(dir),
@@ -156,6 +190,7 @@ function writePackManifest(dir: string, plugins: Manifest['plugins']): void {
     note: '',
     osVersion: 'check',
     screens: [{ width: 100, height: 80, scale: 1 }],
+    ...(captureKind === 'image' ? { captureKind, imageScope: 'fullscreen' as const } : {}),
     hasReplay: false,
     replayDurationMs: 0,
     snapshotTMs: null,
@@ -315,19 +350,28 @@ async function checkUiaCleanup(): Promise<void> {
   )
 }
 
+const gitState: GitState = {
+  repository: 'capturepack-fixture',
+  branch: 'issue/git-plugin-preservation',
+  commit: '0123456789abcdef0123456789abcdef01234567',
+  dirty: true,
+  changed_files: ['src/editor.ts', 'src/save.ts'],
+}
+
+function isCompleteGitDeclaration(
+  plugin: NonNullable<Manifest['plugins']>[number] | undefined,
+): boolean {
+  return plugin?.name === 'git'
+    && plugin.version === '0.1.0'
+    && plugin.path === 'plugins/git/'
+}
+
 async function checkGitPreservation(): Promise<void> {
   console.log('\nFINAL SAVE KEEPS SAVE-FIRST GIT PLUGIN')
   const pack = path.join(cases, 'git-save-published')
   const dir = path.join(pack, 'plugins', 'git')
-  const state: GitState = {
-    repository: 'capturepack-fixture',
-    branch: 'issue/git-plugin-preservation',
-    commit: '0123456789abcdef0123456789abcdef01234567',
-    dirty: true,
-    changed_files: ['src/editor.ts', 'src/save.ts'],
-  }
   writePackManifest(pack, [gitPluginDeclaration()])
-  await writeGitPlugin(pack, state)
+  await writeGitPlugin(pack, gitState)
   const metaBefore = readFileSync(path.join(dir, 'meta.json'), 'utf8')
   const stateBefore = readFileSync(path.join(dir, 'state.json'), 'utf8')
 
@@ -339,12 +383,9 @@ async function checkGitPreservation(): Promise<void> {
   )
 
   const manifest = JSON.parse(readFileSync(path.join(pack, 'manifest.json'), 'utf8')) as Manifest
-  const gitDeclaration = (manifest.plugins ?? []).find((plugin) => plugin.name === 'git')
   check(
     'the final manifest keeps the complete git plugin declaration',
-    gitDeclaration?.name === 'git'
-      && gitDeclaration.version === '0.1.0'
-      && gitDeclaration.path === 'plugins/git/',
+    isCompleteGitDeclaration((manifest.plugins ?? []).find((plugin) => plugin.name === 'git')),
   )
   check(
     'the final save preserves the git meta.json bytes',
@@ -356,6 +397,80 @@ async function checkGitPreservation(): Promise<void> {
     isFile(path.join(dir, 'state.json'))
       && readFileSync(path.join(dir, 'state.json'), 'utf8') === stateBefore,
   )
+}
+
+async function checkSaveAsNewGitPreservation(): Promise<void> {
+  console.log('\nSAVE AS NEW KEEPS THE GIT PLUGIN')
+  const kinds = [
+    { kind: 'video', input: () => packInput(uiaPayload(1_234)) },
+    { kind: 'image', input: imagePackInput },
+  ] as const
+  const declarations = [
+    { label: 'input.plugins omitted', plugins: undefined },
+    { label: 'explicit input.plugins', plugins: [gitPluginDeclaration()] },
+  ] as const
+  for (const { kind, input } of kinds) {
+    for (const { label, plugins } of declarations) {
+      const name = `${kind} Save As New (${label})`
+      const source = path.join(
+        cases,
+        `git-save-as-new-${kind}-${plugins === undefined ? 'fallback' : 'explicit'}`,
+        'source',
+      )
+      const sourceDir = path.join(source, 'plugins', 'git')
+      writePackManifest(source, [gitPluginDeclaration()], kind)
+      await writeGitPlugin(source, gitState)
+      const sourceManifestBefore = readFileSync(path.join(source, 'manifest.json'), 'utf8')
+      const metaBefore = readFileSync(path.join(sourceDir, 'meta.json'))
+      const stateBefore = readFileSync(path.join(sourceDir, 'state.json'))
+
+      const exportInput: ExportInput =
+        plugins === undefined ? input() : { ...input(), plugins: [...plugins] }
+      if (plugins === undefined) {
+        check(`${name}: the edited input carries no plugin declarations`, !('plugins' in exportInput))
+      }
+      let copied: { id: string; dirPath: string } | null = null
+      try {
+        copied = await saveAsNewPack(source, exportInput)
+      } catch (err) {
+        console.error(err)
+      }
+      check(`${name}: completes with a published git plugin`, copied !== null)
+      if (copied === null) continue
+      const copiedDir = path.join(copied.dirPath, 'plugins', 'git')
+      const manifest = JSON.parse(
+        readFileSync(path.join(copied.dirPath, 'manifest.json'), 'utf8'),
+      ) as Manifest
+      check(
+        `${name}: writes a new pack beside the source`,
+        copied.dirPath !== source
+          && path.dirname(copied.dirPath) === path.dirname(source)
+          && manifest.id === copied.id
+          && manifest.id !== path.basename(source),
+      )
+      const gitDeclarations = (manifest.plugins ?? []).filter((plugin) => plugin.name === 'git')
+      check(
+        `${name}: the new manifest declares the complete git plugin exactly once`,
+        gitDeclarations.length === 1 && isCompleteGitDeclaration(gitDeclarations[0]),
+      )
+      check(
+        `${name}: copies the git meta.json bytes`,
+        isFile(path.join(copiedDir, 'meta.json'))
+          && readFileSync(path.join(copiedDir, 'meta.json')).equals(metaBefore),
+      )
+      check(
+        `${name}: copies the complete git state.json bytes`,
+        isFile(path.join(copiedDir, 'state.json'))
+          && readFileSync(path.join(copiedDir, 'state.json')).equals(stateBefore),
+      )
+      check(
+        `${name}: leaves the source pack's manifest and git payload untouched`,
+        readFileSync(path.join(source, 'manifest.json'), 'utf8') === sourceManifestBefore
+          && readFileSync(path.join(sourceDir, 'meta.json')).equals(metaBefore)
+          && readFileSync(path.join(sourceDir, 'state.json')).equals(stateBefore),
+      )
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -452,6 +567,7 @@ async function main(): Promise<void> {
     await checkDomCleanup()
     await checkUiaCleanup()
     await checkGitPreservation()
+    await checkSaveAsNewGitPreservation()
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(cases, { recursive: true, force: true })
