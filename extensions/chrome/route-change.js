@@ -1,9 +1,9 @@
 // Resolve a content-script route hint against the current tab before forwarding
 // it. Tab updates can race the message, so the current URL is authoritative.
 self.capturepackRouteChanged = async function capturepackRouteChanged(msg, sender, tabs, send, protocol) {
-  const tabId = sender.tab && sender.tab.id
-  const hintedUrl = typeof msg.url === 'string' ? msg.url.slice(0, 2048) : ''
-  if (tabId === undefined || !hintedUrl) return
+  const tabId = sender?.tab?.id
+  const hintedUrl = typeof msg?.url === 'string' ? msg.url.slice(0, 2048) : ''
+  if (tabId === undefined || tabId === null || !hintedUrl || typeof tabs?.get !== 'function' || typeof send !== 'function') return
 
   try {
     const tab = await tabs.get(tabId)
