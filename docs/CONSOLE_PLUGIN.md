@@ -65,7 +65,7 @@ CapturePack_2026-12-03_101500/
 
 | File | Required | Written | Contents | Limit |
 |---|---|---|---|---|
-| `plugins/console/output.log` | REQUIRED when the directory exists | First | UTF-8 text without BOM, `\n` line endings, terminal control sequences removed, every secret masked ([§4](#4-masking-rules)). Oldest kept line first, newest last. | At most 100 lines **and** at most 256 KiB (262,144 bytes) |
+| `plugins/console/output.log` | REQUIRED when the directory exists | First | UTF-8 text without BOM, `\n` line endings (the last line included), terminal escape sequences removed, every secret masked ([§4](#4-masking-rules)). Oldest kept line first, newest last. | At most 100 lines **and** at most 256 KiB (262,144 bytes) |
 | `plugins/console/meta.json` | REQUIRED ([SPEC §11.1](../SPEC.md#111-rules)) | Last | The fields below | Small fixed object |
 
 `meta.json` carries the two fields SPEC §11.1 requires plus provider-defined
@@ -79,7 +79,7 @@ fields that readers may ignore:
 | `source` | string | The kind of console the text came from, named by the provider (for example the terminal family). Never a window title, path or command line. |
 | `line_count` | integer | Lines actually written to `output.log` after masking and bounding. |
 | `byte_count` | integer | Bytes actually written to `output.log`. |
-| `truncated` | boolean | `true` when older output was dropped to fit the line or byte limit. |
+| `truncated` | boolean | `true` when older output was dropped: an incomplete oldest line ([§4](#4-masking-rules)), or output over the line or byte limit. |
 | `redaction_count` | integer | How many values were replaced by `[REDACTED]`. A count only — never which rule matched where. |
 | `collected_ms` | integer | Measured collection time; always at most the 100 ms budget, because a slower collection writes nothing. |
 
@@ -141,13 +141,23 @@ applied, so a limit can never cut a secret in half and leave the half that the
 pattern no longer recognises. Unmasked text is never written to disk — not to a
 temporary file, not to a log, not as a fallback when masking fails.
 
+The read itself is bounded: a provider reads a window of recent output, never
+the console's whole history, so masking fits inside the budget
+([§3](#3-time-limit--the-100-ms-budget)).
+
 Order of processing:
 
-1. Normalise line endings to `\n` and strip terminal control sequences (ANSI
-   colour and cursor codes), so a colour code cannot split a token away from
-   its pattern.
-2. Apply every rule below to the whole collected text.
-3. Apply the bounds ([§4.2](#42-size-bounds)).
+1. Align the window to whole lines. Unless the source shows that the window
+   starts at a line boundary, the window's first line is dropped and
+   `truncated` is set. A window that starts mid-line holds the tail of a line
+   whose key name, scheme or token prefix lies outside it — `…f81c9e` cut from
+   `API_KEY=…f81c9e` — and no rule below can recognise such a fragment.
+2. Normalise line endings to `\n` and strip terminal escape sequences — CSI
+   colour and cursor codes, and OSC sequences such as a window title or a
+   hyperlink's hidden target — so a colour code cannot split a token away from
+   its pattern and no text the console never displayed is kept.
+3. Apply every rule below to the whole aligned text.
+4. Apply the bounds ([§4.2](#42-size-bounds)).
 
 ### 4.1 Rules
 
@@ -160,7 +170,9 @@ unless the rule says otherwise.
 |---|---|---|
 | Bearer token | `Bearer` followed by a token: `\bbearer\s+[A-Za-z0-9\-._~+/]+=*` | `Bearer [REDACTED]` |
 | Authorization header | `authorization` followed by `:` or `=` and the rest of the value, any scheme (`Basic`, `Token`, …) | `Authorization: [REDACTED]` |
+| Cookie header | `cookie` or `set-cookie` followed by `:` and the rest of the line — a session cookie signs in as well as a token does | `Cookie: [REDACTED]` |
 | Named secret | A key whose name contains `api_key`, `apikey`, `api-key`, `secret`, `token`, `password`, `passwd`, `pwd`, `access_key`, `private_key` or `client_secret`, followed by `:` or `=` and a value — quoted (`"…"`, `'…'`) or up to the next whitespace | The key name and separator, e.g. `API_KEY=[REDACTED]` |
+| Credential option | A long command-line option (`--…`) whose name contains one of the Named secret words, followed by whitespace and a value: `--password hunter2`, `--api-key abc`. Single-letter options (`-p`) are not matched — their meaning differs per tool | The option name, e.g. `--password [REDACTED]` |
 | URL credentials | `scheme://user:password@host` | `scheme://[REDACTED]@host` |
 | Secret query parameters | `?` or `&` followed by `access_token`, `token`, `api_key`, `apikey`, `key`, `sig`, `signature` or `password` and `=` | The parameter name, e.g. `&token=[REDACTED]` |
 | Well-known token shapes (case-sensitive) | `gh[pousr]_[A-Za-z0-9]{36,}`, `github_pat_[A-Za-z0-9_]{22,}`, `\b(?:AKIA\|ASIA)[0-9A-Z]{16}\b`, `xox[abprs]-[A-Za-z0-9-]{10,}`, `\bsk-[A-Za-z0-9_-]{20,}`, `AIza[0-9A-Za-z_-]{35}` | Nothing of the token |
@@ -178,20 +190,26 @@ After masking, keep the **newest** output:
 
 1. Keep at most the last 100 lines.
 2. If those lines exceed 256 KiB, drop whole lines from the oldest end until
-   the text fits.
-3. If a single remaining line alone exceeds 256 KiB, keep its last 256 KiB,
+   the text fits or only the newest line is left.
+3. If that newest line alone still exceeds 256 KiB, keep its last 256 KiB,
    cut on a UTF-8 code-point boundary so the file never holds a broken
-   character.
+   character. Masking has already run on the whole line, so the cut can split a
+   `[REDACTED]` marker but never expose part of a secret.
 
-`truncated` in `meta.json` is `true` whenever step 1, 2 or 3 dropped anything.
+`truncated` in `meta.json` is `true` whenever the window alignment in
+[§4](#4-masking-rules) or any step above dropped anything.
 
 ### 4.3 What masking does not promise
 
 These rules are a deny-list. They remove the shapes listed above; they cannot
 prove the remaining text is free of personal data or secrets, and nothing in
 the product may call the result sanitized — the same position the Share Copy
-takes ([SPEC §9.4](../SPEC.md#94-share-copy-distribution)). Where the masked
-text can travel today:
+takes ([SPEC §9.4](../SPEC.md#94-share-copy-distribution)). One gap is known
+and accepted: a token still being printed at the instant of collection can be
+shorter than its shape's minimum length and pass unmasked. The newest line is
+masked like every other line; it is not held back to wait for the rest.
+
+Where the masked text can travel today:
 
 - **Share Copy** (`.share.zip`) excludes all structured plugin context, so the
   console payload never leaves through it.
@@ -270,8 +288,10 @@ asserts every case below without a real console:
 - **Timeout:** a source that answers after 100 ms, and one that never answers;
   no directory, no manifest entry, and the save is not held past the budget.
 - **Masking:** one input per rule in [§4.1](#41-rules), including a private key
-  block split at either end of the window and a token wrapped in colour codes;
-  no input secret appears in `output.log`.
+  block split at either end of the window, a token wrapped in colour codes, a
+  token inside an OSC hyperlink target, and a window that starts mid-line
+  inside a named secret; no input secret, and no fragment of one, appears in
+  `output.log`.
 - **Bounds:** 101 lines, more than 256 KiB of short lines, one line over
   256 KiB, and a multi-byte character at the cut; the newest text is kept and
   the file is valid UTF-8.
