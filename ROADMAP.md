@@ -361,6 +361,23 @@ a password field renders dots, which is the case the DOM walker already refuses
 - [ ] Console plugin
 - [ ] Unreal plugin · Unity plugin
 
+## Next milestone — 2026-12 (0.6.2 candidate; planning only)
+
+**Goal:** prototype the V2 console context provider without changing the
+five-second capture workflow, and continue the one-month no-manual-reinstall
+observation. This is a milestone plan, not a version release or a claim that
+the observation has passed.
+
+- A supported console produces a SPEC-compatible `plugins/console/` payload
+  and metadata. Collection completes within 100 ms; missing, inaccessible, or
+  slow console data is omitted and the pack still saves normally.
+- Deterministic checks cover successful collection, absent/denied console
+  access, timeout, and write failure; the full QA gate and SPEC validation pass.
+- The one-month observation records actual install/update dates and any manual
+  reinstall. It remains in progress until a full month has elapsed without one.
+- Cost: 0; use existing local development and QA resources. No new service,
+  infrastructure, or paid API is part of this milestone.
+
 ---
 
 ## V3 — Semantic layer
