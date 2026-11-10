@@ -34,6 +34,33 @@ The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
 values when checking 0.6.0.
 
+## 0.6.1 candidate baseline — not released
+
+The following behaviors are present in the current source baseline and have
+focused regression checks. They are release-candidate scope, not a claim that
+0.6.1 has been published; **0.6.0 remains the current stable release**.
+
+- **Git capture context** (`check:git-plugin`) records the repository name,
+  branch, commit, dirty state, and root-relative changed paths under
+  `plugins/git/`. Collection is best-effort and fails open on Git errors or a
+  100 ms timeout. It records repository state, not file contents.
+- **Opaque Share Copy redaction** (`check:share-bundle`) renders each active
+  blur region as a fixed solid `#1a1a1a` fill, independent of the pixels beneath
+  it, and removes the corresponding visible label. Share Copy still contains
+  only declared annotated stills, re-encoded from pixels; original media and
+  structured capture context are excluded. Review every image before sending:
+  visual redaction is risk reduction, not proof that every sensitive pixel is
+  covered.
+- **Chrome SPA route updates** (`check:chrome-route-change`) resolve a route
+  hint against the current active tab before forwarding it. The current tab URL
+  and title are authoritative; inactive tabs, stale cross-origin hints, closed
+  tabs, and unavailable URLs are discarded. URL and title inputs are bounded.
+
+These contracts are pinned by the named checks. The complete candidate gate is
+`npm run qa:checks`; release preparation and publication still follow
+[RELEASING.md](RELEASING.md). The website deploy remains the `pages.yml` path;
+the Windows release workflow is manually dispatched.
+
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
