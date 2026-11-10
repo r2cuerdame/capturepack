@@ -476,19 +476,39 @@ export function uiaPluginDeclaration(): NonNullable<Manifest['plugins']>[number]
 }
 
 /**
- * Writes plugins/windows-uia/{meta.json,elements.json}. Plugins only APPEND
+ * Writes plugins/windows-uia/{elements.json,meta.json}. Plugins only APPEND
  * metadata (SPEC §11.1): nothing here touches a core file. The declaration is
  * the caller's job — see uiaPluginDeclaration()/addManifestPlugin() — so a
  * declaration is only ever written for a payload that exists.
+ *
+ * meta.json is what readers take as "this plugin exists", so it is published
+ * last: a write that fails part-way never advertises a payload it did not land.
  */
 export async function writeUiaPlugin(dirPath: string, payload: UiaPluginPayload): Promise<void> {
   const dir = join(dirPath, 'plugins', UIA_PLUGIN_NAME)
   await mkdir(dir, { recursive: true })
+  await writeSourceFile(join(dir, 'elements.json'), toJson(sealUiaPayload(payload) ?? payload))
   await writeSourceFile(
     join(dir, 'meta.json'),
     toJson({ name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION }),
   )
-  await writeSourceFile(join(dir, 'elements.json'), toJson(sealUiaPayload(payload) ?? payload))
+}
+
+/**
+ * Cleanup after a failed plugin write. meta.json is published last, so a
+ * directory without an ordinary meta.json never finished: whatever it holds is
+ * incomplete, and is removed rather than left for a reader that lists plugins/
+ * by directory (the MCP store does) to find. A directory an earlier write
+ * already published is left alone — each of its files is replaced atomically,
+ * so it still holds a complete payload the manifest may already declare.
+ */
+async function removeUnpublishedPluginDir(dir: string): Promise<void> {
+  try {
+    if ((await lstat(join(dir, 'meta.json'))).isFile()) return
+  } catch {
+    // No metadata at all: this write never published the plugin.
+  }
+  await rm(dir, { recursive: true, force: true }).catch(() => {})
 }
 
 
@@ -718,26 +738,29 @@ export function domEventForPack(
 }
 
 /**
- * Writes plugins/chrome-dom/{meta.json,elements.json}.
+ * Writes plugins/chrome-dom/{elements.json,meta.json}.
  *
  * Same contract as the UIA payload beside it: a plugin only APPENDS (SPEC
- * §11.1), and the manifest declaration is the caller's job so that a
- * declaration is only ever written for a payload that exists. A pack made
- * while no browser was talking simply has no chrome-dom directory — which
- * SPEC §11.3 already says is the difference between "nothing happened" and
- * "nobody was watching".
+ * §11.1), the payload lands before the meta.json that publishes it, and the
+ * manifest declaration is the caller's job so that a declaration is only ever
+ * written for a payload that exists. A pack made while no browser was talking
+ * simply has no chrome-dom directory — which SPEC §11.3 already says is the
+ * difference between "nothing happened" and "nobody was watching".
  */
 export async function writeDomPlugin(dirPath: string, payload: DomPluginPayload): Promise<void> {
   const dir = join(dirPath, 'plugins', DOM_PLUGIN_NAME)
   await mkdir(dir, { recursive: true })
+  await writeSourceFile(join(dir, 'elements.json'), toJson(payload))
   await writeSourceFile(
     join(dir, 'meta.json'),
     toJson({ name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION }),
   )
-  await writeSourceFile(join(dir, 'elements.json'), toJson(payload))
 }
 
-/** writeDomPlugin() that can never fail a save. */
+/**
+ * writeDomPlugin() that can never fail a save. A write that did not finish
+ * leaves no half-made chrome-dom directory behind.
+ */
 export async function tryWriteDomPlugin(
   dirPath: string,
   payload: DomPluginPayload | undefined,
@@ -751,6 +774,7 @@ export async function tryWriteDomPlugin(
       'capturepack: writing plugins/chrome-dom failed:',
       err instanceof Error ? err.message : String(err),
     )
+    await removeUnpublishedPluginDir(join(dirPath, 'plugins', DOM_PLUGIN_NAME))
     return false
   }
 }
@@ -961,13 +985,17 @@ export function windowsContextPluginDeclaration(): NonNullable<Manifest['plugins
   }
 }
 
-/** Writes the already-validated compact checkpoint/delta timeline. */
+/**
+ * Writes the already-validated compact checkpoint/delta timeline, then the
+ * meta.json that publishes it — never the other way round.
+ */
 export async function writeWindowsContextPlugin(
   dirPath: string,
   timeline: WindowsContextTimelineV1,
 ): Promise<void> {
   const dir = join(dirPath, 'plugins', WINDOWS_CONTEXT_PLUGIN_NAME)
   await mkdir(dir, { recursive: true })
+  await writeSourceFile(join(dir, 'timeline.json'), toJson(timeline))
   await writeSourceFile(
     join(dir, 'meta.json'),
     toJson({
@@ -978,12 +1006,12 @@ export async function writeWindowsContextPlugin(
       timeline: 'timeline.json',
     }),
   )
-  await writeSourceFile(join(dir, 'timeline.json'), toJson(timeline))
 }
 
 /**
  * writeUiaPlugin() that can never fail a save: returns whether the payload
- * actually landed, which is exactly when it may be declared.
+ * actually landed, which is exactly when it may be declared. A write that did
+ * not finish leaves no half-made windows-uia directory behind.
  */
 async function tryWriteUiaPlugin(
   dirPath: string,
@@ -998,6 +1026,7 @@ async function tryWriteUiaPlugin(
       'capturepack: writing plugins/windows-uia failed:',
       err instanceof Error ? err.message : String(err),
     )
+    await removeUnpublishedPluginDir(join(dirPath, 'plugins', UIA_PLUGIN_NAME))
     return false
   }
 }
