@@ -34,6 +34,50 @@ The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
 values when checking 0.6.0.
 
+## 0.6.1 candidate baseline — not released
+
+The following behaviors are present in the current source baseline and have
+focused regression checks. They are release-candidate scope, not a claim that
+0.6.1 has been published; **0.6.0 remains the current stable release**.
+
+- **Git capture context** (`check:git-plugin`). At save, before the manifest is
+  written, `exporter.ts` reads the repository containing the CapturePack
+  process's working directory — not the captured window's — and writes
+  `plugins/git/meta.json` and `plugins/git/state.json`: repository folder name,
+  branch (`HEAD` when detached), commit, dirty flag and root-relative changed
+  paths, both sides of a rename included. Every Git read passes
+  `--no-optional-locks`. It records repository state, never file contents. A
+  Git error, a folder outside any repository, or the 100 ms deadline leaves no
+  `plugins/git/` and no manifest declaration; the pack still saves.
+- **Opaque Share Copy redaction** (`check:share-bundle`). History plans and
+  creates Share Copy with `opaqueRedaction: true`. Each blur visible at a
+  still's time, at its resolved tracked or keyframed position, is filled with
+  solid `#1a1a1a`, the same bytes whatever lay beneath; pixels outside it are
+  kept. A labeled blur no longer blocks the copy and its text leaves the review
+  list. Where it is active, the whole label gutter below that still's frame is
+  filled too, because rendered label bounds depend on the font; a blur that is
+  not yet active leaves an earlier still and its gutter untouched. Share Copy
+  still contains only declared annotated stills, re-encoded from pixels;
+  original media and structured capture context are excluded. Review every
+  image before sending: visual redaction is risk reduction, not proof that
+  every sensitive pixel is covered.
+- **Chrome SPA route updates** (`check:chrome-route-change`). The hook that
+  `background.js` injects into the page's main world watches `pushState`,
+  `replaceState`, `popstate`, `hashchange` and title mutations; once the URL or
+  title has changed and 100 ms pass without another change, `route-content.js`
+  relays a hint to the worker. `route-change.js` then reads the tab again: the
+  tab's current URL and title are forwarded, not the hint's, and a hint from an
+  inactive tab or for a different origin is dropped. The check pins those three
+  cases, that the worker loads and calls this resolver, and that the extension
+  manifest version moved past 0.4.3 so installed copies resync. Dropping a hint
+  for a closed tab or an unreadable URL, and the 2,048-character URL and
+  512-character title bounds, are in the code but not asserted by the check.
+
+The complete candidate gate is `npm run qa:checks`; release preparation and
+publication still follow [RELEASING.md](RELEASING.md). The website deploy
+remains the `pages.yml` path; the Windows release workflow is manually
+dispatched.
+
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
