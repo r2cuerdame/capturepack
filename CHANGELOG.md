@@ -47,6 +47,39 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - MCP exposes frames and replays for every display, windows without UI
   Automation controls, and bounded timelines in Markdown export.
 
+## 0.6.1 — Candidate (not released)
+
+### Added
+
+- Chrome element picking and document snapshots now traverse open Shadow DOM
+  trees, so controls inside an open shadow root can be selected and included in
+  captured page context ([#345](https://github.com/r2cuerdame/capturepack/issues/345)).
+- The Chrome extension reports same-origin single-page route changes using the
+  tab's current URL and title, while dropping stale or cross-origin hints.
+- Git context is saved as a plugin with repository, branch, commit, dirty state
+  and changed paths. Collection is bounded to 100 ms and fails open: unavailable
+  context is omitted and capture can continue.
+
+### Changed
+
+- Share Copy can render blur regions as a solid opaque fill and clear the label
+  gutter when needed. This reduces accidental disclosure; users still need to
+  review each image before sharing.
+- Git plugin state and metadata are written to temporary files and atomically
+  replaced, with temporary-file cleanup on failure.
+
+### Fixed
+
+- UI Automation, Chrome DOM and Windows context plugin metadata is published
+  only after its payload is written. Failed writes clean up unpublished plugin
+  data while preserving a previously complete plugin.
+
+### Documentation
+
+- The roadmap and handoff now describe the planned 2026-12 milestone as a
+  0.6.2 candidate. This is planning information, not a release or implementation
+  claim.
+
 ## 0.5.1 — 2026-09-16
 
 ### Fixed
