@@ -50,6 +50,8 @@ import {
   writeWindowsContextPlugin,
 } from '../src/main/exporter'
 import type { DomPluginPayload, ExportInput } from '../src/main/exporter'
+import { gitPluginDeclaration, writeGitPlugin } from '../src/main/plugins/git'
+import type { GitState } from '../src/main/plugins/git'
 import {
   WINDOWS_CONTEXT_TIMELINE_SCHEMA,
   WINDOWS_CONTEXT_TIMELINE_VERSION,
@@ -313,6 +315,49 @@ async function checkUiaCleanup(): Promise<void> {
   )
 }
 
+async function checkGitPreservation(): Promise<void> {
+  console.log('\nFINAL SAVE KEEPS SAVE-FIRST GIT PLUGIN')
+  const pack = path.join(cases, 'git-save-published')
+  const dir = path.join(pack, 'plugins', 'git')
+  const state: GitState = {
+    repository: 'capturepack-fixture',
+    branch: 'issue/git-plugin-preservation',
+    commit: '0123456789abcdef0123456789abcdef01234567',
+    dirty: true,
+    changed_files: ['src/editor.ts', 'src/save.ts'],
+  }
+  writePackManifest(pack, [gitPluginDeclaration()])
+  await writeGitPlugin(pack, state)
+  const metaBefore = readFileSync(path.join(dir, 'meta.json'), 'utf8')
+  const stateBefore = readFileSync(path.join(dir, 'state.json'), 'utf8')
+
+  check(
+    'a final save completes with an already-published git plugin',
+    !(await rejects(() =>
+      updatePack({ id: path.basename(pack), dirPath: pack }, packInput(uiaPayload(1_234))),
+    )),
+  )
+
+  const manifest = JSON.parse(readFileSync(path.join(pack, 'manifest.json'), 'utf8')) as Manifest
+  const gitDeclaration = (manifest.plugins ?? []).find((plugin) => plugin.name === 'git')
+  check(
+    'the final manifest keeps the complete git plugin declaration',
+    gitDeclaration?.name === 'git'
+      && gitDeclaration.version === '0.1.0'
+      && gitDeclaration.path === 'plugins/git/',
+  )
+  check(
+    'the final save preserves the git meta.json bytes',
+    isFile(path.join(dir, 'meta.json'))
+      && readFileSync(path.join(dir, 'meta.json'), 'utf8') === metaBefore,
+  )
+  check(
+    'the final save preserves the complete git state.json bytes',
+    isFile(path.join(dir, 'state.json'))
+      && readFileSync(path.join(dir, 'state.json'), 'utf8') === stateBefore,
+  )
+}
+
 async function main(): Promise<void> {
   try {
     await mkdir(root, { recursive: true })
@@ -406,6 +451,7 @@ async function main(): Promise<void> {
     await checkPublishOrder()
     await checkDomCleanup()
     await checkUiaCleanup()
+    await checkGitPreservation()
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(cases, { recursive: true, force: true })
