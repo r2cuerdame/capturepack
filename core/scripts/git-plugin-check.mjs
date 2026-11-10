@@ -170,6 +170,58 @@ try {
     && hangulPaths.every((name) => savedBytes.includes(Buffer.from(JSON.stringify(name), 'utf8')))
     && !/\\u[0-9a-f]{4}|\\3\d\d/iu.test(savedText ?? ''))
 
+  // Tab and newline paths (#407). Human-readable status C-quotes a name holding
+  // either ("line\nbreak.txt"); porcelain -z passes it through raw, so each
+  // name must reach changed_files, and a re-read pack, byte for byte. NTFS
+  // forbids both characters in a filename, so the fixture lives in the index
+  // only — Git for Windows silently ignores such index paths unless
+  // core.protectNTFS is off in this throwaway repository — and Git also reports
+  // every one of them as missing from the worktree, on every platform alike.
+  const controlChars = path.join(work, 'control-character-paths')
+  mkdirSync(controlChars)
+  execFileSync('git', ['init', '-q', controlChars])
+  execFileSync('git', ['-C', controlChars, 'config', 'user.email', 'check@example.invalid'])
+  execFileSync('git', ['-C', controlChars, 'config', 'user.name', 'Check'])
+  execFileSync('git', ['-C', controlChars, 'config', 'core.protectNTFS', 'false'])
+  const blobOf = (text) => execFileSync('git', ['-C', controlChars, 'hash-object', '-w', '--stdin'],
+    { input: text, encoding: 'utf8' }).trim()
+  const stage = (entries) => execFileSync('git', ['-C', controlChars, 'update-index', '--add', '-z', '--index-info'],
+    { input: entries.map(([name, text]) => `100644 ${blobOf(text)}\t${name}\0`).join('') })
+  const tabPath = 'tab\tname.txt'
+  const renamedFrom = 'old\tname.txt'
+  const renamedTo = 'new\tname\nline.txt'
+  const newlinePath = 'line\nbreak.txt'
+  const edgePath = '\tleading tab and trailing newline\n'
+  stage([[tabPath, 'tab base\n'], [renamedFrom, 'renamed\n']])
+  execFileSync('git', ['-C', controlChars, 'commit', '-qm', 'initial'])
+  // Modified, both sides of a rename, and two staged additions — one whose
+  // name starts with a tab and ends with a newline, so no trim may touch it.
+  stage([[tabPath, 'tab changed\n'], [renamedTo, 'renamed\n'], [newlinePath, 'newline\n'], [edgePath, 'edge\n']])
+  execFileSync('git', ['-C', controlChars, 'update-index', '--force-remove', '-z', '--stdin'],
+    { input: `${renamedFrom}\0` })
+  const controlPaths = [tabPath, renamedFrom, renamedTo, newlinePath, edgePath]
+  const quotedControl = execFileSync('git', ['-C', controlChars, 'status', '--porcelain=v1'], { encoding: 'utf8' })
+  check('the tab/newline fixture is C-quoted in human-readable status', quotedControl.includes('"line\\nbreak.txt"')
+    && quotedControl.includes('"old\\tname.txt" -> "new\\tname\\nline.txt"')
+    && !controlPaths.some((name) => quotedControl.includes(name)))
+  const controlState = await collectGitState(controlChars, 2_000)
+  check('tab and newline changed paths are collected exactly as named',
+    controlState?.repository === 'control-character-paths'
+    && controlState.dirty === true
+    && JSON.stringify(controlState.changed_files) === JSON.stringify([...controlPaths].sort()))
+  const controlPack = path.join(work, 'control-pack')
+  await writeGitPlugin(controlPack, controlState)
+  const controlReopened = openPack(controlPack, 'dir', 'control-paths')
+  const controlText = controlReopened.readText('plugins/git/state.json')
+  const controlSaved = controlText === null ? null : JSON.parse(controlText)
+  check('a re-read pack keeps every tab and newline path exactly as collected',
+    JSON.stringify(controlSaved?.changed_files) === JSON.stringify(controlState?.changed_files)
+    && controlPaths.every((name) => controlSaved?.changed_files?.includes(name))
+    && controlReopened.plugins().some((plugin) => plugin.name === 'git'
+      && plugin.files.includes('plugins/git/state.json')))
+  check('saved state.json holds tabs and newlines as JSON escapes',
+    controlPaths.every((name) => (controlText ?? '').includes(JSON.stringify(name))))
+
   check('empty porcelain paths are dropped and duplicate paths are deduplicated',
     JSON.stringify(require(bundle).parseChangedFiles(' M \0?? repeated.txt\0 M repeated.txt\0'))
       === JSON.stringify(['repeated.txt']))
