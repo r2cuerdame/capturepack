@@ -255,6 +255,84 @@ console.log('\nThe documents name the version this repository builds')
   )
 }
 
+console.log('\nThe handoff describes what the Chrome route check actually asserts')
+{
+  // The handoff once said the closed-tab, unreadable-URL and length-bound cases
+  // were "in the code but not asserted by the check" for a release after the
+  // check had started asserting every one of them. That sentence tells the next
+  // engineer to add coverage that already exists, or to trust none that does.
+  // The bounds are read from the resolver, so a changed cap fails here until the
+  // handoff and the check both say the new number.
+  const handoff = readFileSync(join(ROOT, 'docs', 'HANDOFF.md'), 'utf8')
+  const bullet = (handoff.match(/^- \*\*Chrome SPA route updates\*\*[\s\S]*?(?=\n- \*\*|\n\s*\n)/mu)?.[0] ?? '')
+    .replace(/\s+/gu, ' ')
+  const resolver = readFileSync(join(ROOT, 'extensions', 'chrome', 'route-change.js'), 'utf8')
+  const routeCheck = readFileSync(join(CORE, 'scripts', 'chrome-route-change-check.mjs'), 'utf8')
+  // The forwarded URL is the tab's, not the hint's, so its slice is the bound.
+  const urlBound = Number(resolver.match(/tab\.url\.slice\(0, (\d+)\)/u)?.[1])
+  const titleBound = Number(resolver.match(/tab\.title : ''\)\.slice\(0, (\d+)\)/u)?.[1])
+  const spelled = (n) => n.toLocaleString('en-US')
+
+  check(
+    'the handoff has a Chrome SPA route updates entry naming check:chrome-route-change',
+    bullet.includes('(`check:chrome-route-change`)'),
+    'docs/HANDOFF.md lost its "Chrome SPA route updates" bullet',
+  )
+  check(
+    'the handoff no longer says the route boundaries are unasserted',
+    bullet !== '' && !/not asserted by the check|in the code but not/u.test(bullet),
+    'docs/HANDOFF.md says the route check does not assert boundaries it does assert',
+  )
+
+  const cases = [
+    {
+      name: 'a missing message, sender, sender tab or tab id',
+      documented: /missing message, sender, sender tab or tab id is dropped/u,
+      asserted: [
+        'missing message is discarded',
+        'missing sender is discarded',
+        'missing sender tab is discarded',
+        'missing sender tab id is discarded',
+      ],
+    },
+    {
+      name: 'a closed tab',
+      documented: /closed tab, whose tab lookup fails, is dropped/u,
+      asserted: ["throw new Error('closed tab')", 'closed tabs are discarded'],
+    },
+    {
+      name: 'an empty or invalid current URL',
+      documented: /current URL is empty or not a valid URL is dropped/u,
+      asserted: ["for (const url of ['', 'not a URL'])", 'unreadable current URL is discarded'],
+    },
+    {
+      name: `the ${spelled(urlBound)}-character URL bound`,
+      documented: new RegExp(`URL capped at ${spelled(urlBound)} characters`, 'u'),
+      asserted: [`forwarded[1].tab.url.length, ${String(urlBound)}`],
+    },
+    {
+      name: `the ${spelled(titleBound)}-character title bound`,
+      documented: new RegExp(`its title at ${spelled(titleBound)}\\b`, 'u'),
+      asserted: [`forwarded[1].tab.title.length, ${String(titleBound)}`],
+    },
+  ]
+  check(
+    'the route resolver still declares both length bounds',
+    Number.isInteger(urlBound) && Number.isInteger(titleBound),
+    'extensions/chrome/route-change.js no longer slices tab.url and tab.title to a fixed length',
+  )
+  for (const { name, documented, asserted } of cases) {
+    const unasserted = asserted.filter((needle) => !routeCheck.includes(needle))
+    check(
+      `the handoff and check:chrome-route-change both cover ${name}`,
+      documented.test(bullet) && unasserted.length === 0,
+      !documented.test(bullet)
+        ? `docs/HANDOFF.md does not describe ${name}`
+        : `chrome-route-change-check.mjs no longer asserts: ${unasserted.join('; ')}`,
+    )
+  }
+}
+
 console.log('\nThe current handoff is the only one that reads as instructions')
 {
   const docsDirectory = join(ROOT, 'docs')

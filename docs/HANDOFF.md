@@ -68,10 +68,13 @@ focused regression checks. They are release-candidate scope, not a claim that
   relays a hint to the worker. `route-change.js` then reads the tab again: the
   tab's current URL and title are forwarded, not the hint's, and a hint from an
   inactive tab or for a different origin is dropped. The check pins those three
-  cases, that the worker loads and calls this resolver, and that the extension
-  manifest version moved past 0.4.3 so installed copies resync. Dropping a hint
-  for a closed tab or an unreadable URL, and the 2,048-character URL and
-  512-character title bounds, are in the code but not asserted by the check.
+  cases and the boundaries around them: a hint with a missing message, sender,
+  sender tab or tab id is dropped without throwing; a hint for a closed tab,
+  whose tab lookup fails, is dropped; a tab whose current URL is empty or not a
+  valid URL is dropped; and a long route is still delivered with its URL capped
+  at 2,048 characters and its title at 512. It also pins that the worker loads
+  and calls this resolver, and that the extension manifest version moved past
+  0.4.3 so installed copies resync.
 
 The complete candidate gate is `npm run qa:checks`; release preparation and
 publication still follow [RELEASING.md](RELEASING.md). The website deploy
