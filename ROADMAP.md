@@ -349,7 +349,9 @@ a password field renders dots, which is the case the DOM walker already refuses
       inside open shadow roots, a picked element is named through each shadow
       boundary (`host >>> inner`), and closed roots are skipped as their host
       ([#345](https://github.com/r2cuerdame/capturepack/issues/345))
-- [ ] Extension Phase 2, the rest: SPA route detection
+- [x] Extension Phase 2, SPA route detection: same-origin route hints resolve
+      against the latest active tab URL, with isolated race, inactive-tab and
+      cross-origin regression coverage (`check:chrome-route-change`)
 - [x] Chromium-family registration (Chrome, Edge, Brave and Chromium)
 - [x] Built-in Windows UI Automation context provider
 - [ ] Git plugin · Console plugin
@@ -419,7 +421,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 5 | Annotation editor | V1 | Done — unified box editor with scrub timeline and lifetimes (shipped) |
 | 6 | Export CapturePack | V1 | Done — folder-first packs with README/skills/annotated replay (shipped) |
 | 7 | Plugin API | V2 | Done — After Save Actions host and pipeline shipped in 0.5.0; temporal provider protocol v1 documented; on-disk plugin contract (SPEC §11) implemented |
-| 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration, open Shadow DOM. SPA routes pending |
+| 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration, open Shadow DOM and SPA route detection (`check:chrome-route-change`) |
 | 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
 | 10 | Public release | V1 | Done (0.6.0 live; auto-update chain proven from 0.1.0) |
 
