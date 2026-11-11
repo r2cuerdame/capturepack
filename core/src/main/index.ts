@@ -44,6 +44,7 @@ import { uiLanguage, uiT } from './locale'
 import { initForensics, logError, logInfo, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
 import { isRenderInFlight, onRenderStateChange } from './annotatedRender'
+import { scheduleCaptureNow } from './captureNow'
 import {
   armSaveNow,
   awaitedRenderDirPath,
@@ -617,12 +618,21 @@ function main(): void {
       if (captureNow !== undefined) {
         const seconds = Number(captureNow.split('=')[1] ?? '0')
         const delayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0
-        if (delayMs === 0) capture()
-        else {
-          logInfo(`[capture] --capture-now: capturing in ${String(seconds)}s`)
-          setTimeout(() => {
-            void capture()
-          }, delayMs)
+        if (delayMs === 0) {
+          capture()
+        } else {
+          const readinessTimeoutMs = 12_000
+          logInfo(
+            `[capture] --capture-now: waiting for recorder frame evidence (up to ` +
+              `${String(readinessTimeoutMs)} ms), then capturing in ${String(seconds)}s`,
+          )
+          scheduleCaptureNow(
+            delayMs,
+            readinessTimeoutMs,
+            getRecorderState,
+            onRecorderStateChanged,
+            capture,
+          )
         }
       }
       // `--save-now[=SECONDS]` (#63): the half of an unattended capture nobody

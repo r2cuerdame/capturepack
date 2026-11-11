@@ -11,6 +11,7 @@
 // never — that the main process and the capture flow actually call into it.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { scheduleCaptureNow, type CaptureNowRecorderState } from '../src/main/captureNow'
 import {
   AWAIT_RENDER_DEFAULT_DEADLINE_MS,
   SAVE_NOW_DEFAULT_DEADLINE_MS,
@@ -42,6 +43,50 @@ function source(relativePath: string): string {
 
 function verdictOf(...events: SaveNowEvent[]): ReturnType<typeof saveNowVerdict> {
   return saveNowVerdict(events)
+}
+
+async function captureNowScheduling(): Promise<void> {
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+  let state: CaptureNowRecorderState = { status: 'starting' }
+  const listeners = new Set<(next: CaptureNowRecorderState) => void>()
+  let captures = 0
+  scheduleCaptureNow(
+    0,
+    100,
+    () => state,
+    (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    () => { captures += 1 },
+  )
+  check('a positive capture delay waits while recorder startup is unproven', captures === 0)
+  state = { status: 'recording' }
+  for (const listener of [...listeners]) listener(state)
+  await flush()
+  check('the capture countdown starts after frame evidence arrives', captures === 1 && listeners.size === 0)
+
+  state = { status: 'stopped' }
+  scheduleCaptureNow(
+    0,
+    100,
+    () => state,
+    () => () => {},
+    () => { captures += 1 },
+  )
+  await flush()
+  check('a recorder failure proceeds to capture assertions instead of waiting for readiness', captures === 2)
+
+  state = { status: 'starting' }
+  scheduleCaptureNow(
+    0,
+    5,
+    () => state,
+    () => () => {},
+    () => { captures += 1 },
+  )
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  check('a recorder that remains starting uses the bounded readiness fallback', captures === 3)
 }
 
 console.log('--save-now (CI capture, #63)')
@@ -309,6 +354,12 @@ async function runtime(): Promise<void> {
 function wiring(): void {
   const index = source('src/main/index.ts')
   check(
+    'a delayed unattended capture waits for recorder evidence before its replay countdown',
+    index.includes('scheduleCaptureNow(')
+      && index.includes('getRecorderState,')
+      && index.includes('onRecorderStateChanged,'),
+  )
+  check(
     'the main process reads --save-now from its own argv',
     index.includes('saveNowRequest(process.argv)'),
   )
@@ -363,7 +414,8 @@ function wiring(): void {
 }
 
 void runtime()
-  .then(() => {
+  .then(async () => {
+    await captureNowScheduling()
     wiring()
     console.log(`\n${String(passed)} passed, ${String(failed)} failed`)
     if (failed > 0) process.exitCode = 1
