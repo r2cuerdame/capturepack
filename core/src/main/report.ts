@@ -258,6 +258,26 @@ export function extraDisplayFiles(manifest: Manifest): Array<{ name: string; wha
   return files
 }
 
+/** Declared plugin payloads belong in each generated document's file inventory (SPEC §12.1). */
+export function pluginFiles(manifest: Manifest): Array<{ name: string; what: string }> {
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  return plugins
+    .filter(
+      (plugin) =>
+        plugin !== null &&
+        typeof plugin === 'object' &&
+        typeof plugin.name === 'string' &&
+        typeof plugin.path === 'string',
+    )
+    .map((plugin) => ({
+      name: plugin.path,
+      what:
+        plugin.name === 'git'
+          ? 'git repository state at capture time'
+          : `${plugin.name} plugin metadata at capture time`,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Annotated keyframes (GOAL "Annotated keyframes (LLM-first)", SPEC §5.7):
 // every generated document links the stills as markdown images, so a model
@@ -608,6 +628,9 @@ export function buildReport(
     }
   }
   for (const f of extraDisplayFiles(manifest)) {
+    lines.push(`- ${f.name} — ${f.what}`)
+  }
+  for (const f of pluginFiles(manifest)) {
     lines.push(`- ${f.name} — ${f.what}`)
   }
   const framesEntry = keyframeFileEntry(keyframes, imageCapture)

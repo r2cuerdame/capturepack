@@ -924,6 +924,39 @@ console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotation
   }
 }
 
+console.log('\nreport.md and README.md list declared plugin payloads (Issue #429)')
+{
+  const manifestWithGit = {
+    format: 'capturepack',
+    format_version: '0.1.0',
+    id: 'test-plugin-file-inventory',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.1.0' },
+    environment: { os: 'windows' },
+    media: { snapshot: 'snapshot.png', replay: null, replay_duration_ms: null },
+    plugins: [{ name: 'git', version: '0.1.0', path: 'plugins/git/' }],
+  }
+  const manifestWithoutPlugins = { ...manifestWithGit, plugins: [] }
+  const annotations = { reference_width: 1920, reference_height: 1080, annotations: [] }
+  const reportWithPlugin = buildReport(manifestWithGit, annotations, 'en', false, true)
+  const readmeWithPlugin = buildReadme(manifestWithGit, annotations, 'en', false, true)
+  const reportWithoutPlugins = buildReport(manifestWithoutPlugins, annotations, 'en', false, true)
+  const readmeWithoutPlugins = buildReadme(manifestWithoutPlugins, annotations, 'en', false, true)
+
+  check(
+    'report.md lists the declared Git plugin path and purpose',
+    reportWithPlugin.includes('- plugins/git/ — git repository state at capture time'),
+  )
+  check(
+    'README.md lists the declared Git plugin path and purpose',
+    readmeWithPlugin.includes('| plugins/git/ | git repository state at capture time |'),
+  )
+  check(
+    'report.md and README.md omit plugin rows when no plugins are declared',
+    !reportWithoutPlugins.includes('plugins/git/') && !readmeWithoutPlugins.includes('| plugins/git/ |'),
+  )
+}
+
 console.log('\nSPEC §5.2 defines environment.os_version and environment.screens[].scale as OPTIONAL (Issue #209)')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
