@@ -21,6 +21,7 @@ const imagePack = join(temporaryRoot, 'region-image.capturepack')
 const viewerPack = join(temporaryRoot, 'offline-viewer.capturepack')
 const uiaDisplayPack = join(temporaryRoot, 'uia-display.capturepack')
 const gitPack = join(temporaryRoot, 'git-plugin.capturepack')
+const genericPluginPack = join(temporaryRoot, 'generic-plugin.capturepack')
 const pluginRulesPack = join(temporaryRoot, 'plugin-rules.capturepack')
 let checks = 0
 
@@ -264,6 +265,58 @@ try {
         && failures(result) === 1
         && result.stdout.includes(consoleLogDeclared))
   }
+
+  // SPEC §11.1 applies to every plugin, not only the plugins with core-owned
+  // payload validators. Keep a generic plugin fixture to pin the directory
+  // and metadata contract independently of the well-known plugins above.
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), genericPluginPack, { recursive: true })
+  const genericManifestFile = join(genericPluginPack, 'manifest.json')
+  const genericManifest = JSON.parse(readFileSync(genericManifestFile, 'utf8'))
+  genericManifest.plugins = [{
+    name: 'example-context',
+    version: '1.2.3',
+    path: 'plugins/example-context/',
+  }]
+  writeJson(genericManifestFile, genericManifest)
+  const genericPluginDir = join(genericPluginPack, 'plugins', 'example-context')
+  mkdirSync(genericPluginDir, { recursive: true })
+  const genericMetaFile = join(genericPluginDir, 'meta.json')
+  writeJson(genericMetaFile, { name: 'example-context', version: '1.2.3' })
+  writeJson(join(genericPluginDir, 'context.json'), { source: 'custom-plugin' })
+
+  const validGenericPlugin = runValidator(genericPluginPack)
+  check('a declared generic plugin directory and matching metadata are VALID',
+    validGenericPlugin.status === 0
+      && validGenericPlugin.stdout.includes('plugins/example-context/: declared in manifest and meta.json matches (example-context 1.2.3)')
+      && validGenericPlugin.stdout.includes('result: VALID'))
+
+  rmSync(genericPluginDir, { recursive: true, force: true })
+  const missingGenericPluginDir = runValidator(genericPluginPack)
+  check('a declared plugin with no payload directory is INVALID',
+    missingGenericPluginDir.status === 1
+      && missingGenericPluginDir.stdout.includes('plugins/example-context/: missing')
+      && missingGenericPluginDir.stdout.includes('result: INVALID'))
+
+  mkdirSync(genericPluginDir, { recursive: true })
+  const missingGenericMeta = runValidator(genericPluginPack)
+  check('a declared plugin directory without meta.json is INVALID',
+    missingGenericMeta.status === 1
+      && missingGenericMeta.stdout.includes('plugins/example-context/meta.json: missing')
+      && missingGenericMeta.stdout.includes('result: INVALID'))
+
+  writeJson(genericMetaFile, { name: 'other-plugin', version: '1.2.3' })
+  const mismatchedGenericName = runValidator(genericPluginPack)
+  check('generic plugin metadata rejects a mismatched name',
+    mismatchedGenericName.status === 1
+      && mismatchedGenericName.stdout.includes('meta.json: name/version MUST equal the manifest declaration')
+      && mismatchedGenericName.stdout.includes('result: INVALID'))
+
+  writeJson(genericMetaFile, { name: 'example-context', version: '1.2.4' })
+  const mismatchedGenericVersion = runValidator(genericPluginPack)
+  check('generic plugin metadata rejects a mismatched version',
+    mismatchedGenericVersion.status === 1
+      && mismatchedGenericVersion.stdout.includes('meta.json: name/version MUST equal the manifest declaration')
+      && mismatchedGenericVersion.stdout.includes('result: INVALID'))
 
   writeFileSync(elementsFile, '{\n', 'utf8')
   const invalidJson = runValidator()
