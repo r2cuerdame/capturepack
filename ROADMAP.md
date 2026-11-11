@@ -394,6 +394,12 @@ the observation has passed.
 - Cost: 0; use existing local development and QA resources. No new service,
   infrastructure, or paid API is part of this milestone.
 
+The numbered completion conditions for this milestone and for the 0.6.1
+candidate before it, the five-second condition both keep, and the publication
+contract (`pages.yml` for the website, a hand-dispatched `release.yml` for the
+Windows release) are in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](docs/RELEASE_SCOPE_0_6_1_0_6_2.md).
+
 ---
 
 ## V3 — Semantic layer
