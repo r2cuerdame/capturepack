@@ -49,6 +49,7 @@
     "check:lifetime": "node scripts/lifetime-check.mjs",
     "check:plugins": "node scripts/plugin-preservation-check.mjs",
     "check:git-plugin": "node scripts/git-plugin-check.mjs",
+    "check:console-plugin": "node --experimental-strip-types scripts/console-plugin-check.mjs",
     "check:windows-context": "node scripts/windows-context-timeline-check.mjs",
     "check:image-context": "node scripts/image-context-check.mjs",
     "check:renderer-geometry": "node scripts/renderer-geometry-check.mjs",

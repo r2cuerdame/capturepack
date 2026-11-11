@@ -99,7 +99,7 @@ existed in an earlier Lane-A frame may legitimately be absent from the final
 ## Video-core regression matrix
 
 The tables in this document map a reported failure to the check that would now
-catch it. They are a map, not an inventory: the gate discovers 99 checks and
+catch it. They are a map, not an inventory: the gate discovers 100 checks and
 only some of them have ever had a defect worth naming.
 
 `npm run qa:video` runs type checking plus a subset — 61 of the 91 — so some
@@ -154,6 +154,7 @@ to a user CapturePack.
 | An After Save Action failure costs the saved pack, blocks UI, or reads non-existent manifest fields | The pipeline runs only after the pack is durable on disk, handles non-Error/hung actions without unhandled rejections, enforces encrypted loopback/HTTPS webhook secrets, rejects redirect following (`redirect: 'error'`), and holds summary properties strictly against the manifest schema. Full-profile only. | `check:actions` |
 | CI reports that it made a pack, and the pack proves nothing | `--save-now`'s argv parsing, its verdicts over a sequence of flow events, and its person-less export payload are pinned — including that main and the capture flow actually call into it, since an unwired flag runs never. Separately, every assertion `assert-capturepack.mjs` makes is exercised against a pack that must pass and a mutant that must not, because an assertion that cannot fail is a green tick over a broken build. | `check:save-now`, `check:pack-assertions` |
 | Native replay fallback crashes on locked Windows sessions or swallows helper crashes | `check:native-replay-fallback` verifies that `native-replay-capture.exe` falls back to virtual desktop DC or cleanly skips live capture only on verified locked sessions (`error.status === 1` and stdout `locked`). Startup crashes and absent helpers fail loudly, and forced interactive mode (`CAPTUREPACK_DESKTOP_INTERACTIVE=1`) reports access-denied rejections as assertion failures. | `check:native-replay-fallback` |
+| Optional console context is absent, slow, sensitive or cannot be written | `check:console-plugin` verifies bounded/redacted output, metadata and payload, absent/denied/over-deadline omission, and failure cleanup; capture declares the plugin only after a successful write. | `check:console-plugin` |
 
 The `_223519` fixture is a distilled copy of the relevant numeric evidence, not
 the owner's private pack. The strict forensic gate can additionally audit the

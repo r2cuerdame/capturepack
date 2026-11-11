@@ -744,11 +744,13 @@ console.log('\nThe next-release scope states conditions this repository can sett
   )
   const consoleChecks = scriptNames.filter((name) => name.startsWith('check:') && name.includes('console'))
   check(
-    'the console plugin is still a plan everywhere that says so',
-    /Nothing here is implemented/u.test(plan) && consoleChecks.length === 0 && /^- \[ \] Console plugin$/mu.test(roadmap),
+    'the console prototype check is registered and the roadmap marks its implementation',
+    /console prototype and its deterministic check are implemented in source/iu.test(flat(plan))
+      && consoleChecks.includes('check:console-plugin')
+      && /^- \[x\] Console plugin:.*check:console-plugin`?$/mu.test(roadmap),
     consoleChecks.length > 0
-      ? `${consoleChecks.join(', ')} exists — move the console track out of "planning only" and tick the roadmap`
-      : 'the scope or ROADMAP.md stopped describing the console plugin as planned',
+      ? `${consoleChecks.join(', ')} exists — synchronize the implementation statement or roadmap checkbox`
+      : 'the implemented console plugin check is not registered',
   )
 
   // A push publishes the website; only a person publishes the application.
