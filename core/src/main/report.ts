@@ -447,6 +447,7 @@ export function buildReport(
   renderPending = false,
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
+  includeAnnotationsFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
@@ -588,7 +589,9 @@ export function buildReport(
   lines.push(
     `- snapshot.png — captured frame, ${refWidth}×${refHeight} (original pixels, never modified)`,
   )
-  lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
+  if (includeAnnotationsFile) {
+    lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
+  }
   if (!imageCapture) lines.push('- timeline.json — timestamped events from capture start to save')
   if (hasReplay) {
     // The DECLARED name (SPEC §5.3 allows replay.mp4 too) — never assumed.

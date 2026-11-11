@@ -85,6 +85,7 @@ export function buildReadme(
   renderPending = false,
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
+  includeAnnotationsFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
@@ -167,7 +168,9 @@ export function buildReadme(
   }
   const framesEntry = keyframeFileEntry(keyframes, imageCapture)
   if (framesEntry !== null) lines.push(`| ${framesEntry.name} | ${framesEntry.what} |`)
-  lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
+  if (includeAnnotationsFile) {
+    lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
+  }
   if (!imageCapture) lines.push('| timeline.json | When the capture and each annotation happened |')
   lines.push('| report.md | The full generated narrative of this pack |')
   lines.push('| skills/ | Context documents structured for AI readers |')
