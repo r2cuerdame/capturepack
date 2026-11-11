@@ -85,14 +85,32 @@ dispatched.
 
 The next planned milestone is a no-cost V2 console context provider prototype
 plus continued observation of one month of use without manual reinstall. This
-is a plan, not an implementation or release claim. The provider must write a
-SPEC-compatible `plugins/console/` payload and metadata within 100 ms when
-available; absent, inaccessible, slow, or failed collection must be omitted
-without preventing the pack from saving. Deterministic checks must cover those
-outcomes, followed by the full QA gate and SPEC validation. The operational
-observation remains in progress until a full month has elapsed; record actual
-dates and reinstall events. Planned additional cost is 0, using existing local
-resources only.
+is a plan, not an implementation or release claim. Preserve the existing
+five-second capture workflow: console collection must never hold capture open
+past its 100 ms deadline. When available, write a SPEC-compatible
+`plugins/console/` payload and metadata; if the console is absent, inaccessible,
+slow, or collection or writing fails, omit the plugin and let the pack save
+normally.
+
+The deterministic console check must cover all four outcomes: successful
+collection produces the declared payload and metadata; absent or denied access
+produces no plugin declaration and does not fail the save; a request that
+exceeds 100 ms is abandoned and does not fail the save; and an atomic-write
+failure leaves no partial plugin declaration or temporary file and does not
+fail the save. After these checks, require SPEC validation and all 98 existing
+automated QA checks to pass with no regression. The five-second workflow remains
+an independent acceptance condition throughout.
+
+The one-month observation starts only when a public-release installer has
+successfully completed and its actual date and installed version are recorded.
+Review weekly and at day 30 or later; record confirmed ordinary-use dates,
+automatic updates, any manual reinstall, interruptions, and the evidence
+reviewed. Pass only with at least 30 calendar days, confirmed ordinary use, no
+manual reinstall, and evidence for the starting and final versions and any
+automatic update (or an explicit `unknown`). A manual reinstall fails that
+period; missing dates or evidence are inconclusive, never guessed. Follow
+[`OBSERVATION.md`](OBSERVATION.md) for the local record and evidence rules.
+Planned additional cost is 0, using existing local resources only.
 
 ### Historical 0.4.1 publication evidence
 
