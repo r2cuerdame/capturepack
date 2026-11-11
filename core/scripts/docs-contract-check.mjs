@@ -460,28 +460,60 @@ console.log('\nThe one-month observation log still carries what its verdict need
 
   const checklist = section('Weekly checklist')
   const items = [
+    'Review date',
     'Confirmed ordinary-use dates',
     'Automatic update history',
     'Manual reinstall',
     'Failure or interruption',
+    'About version',
+    'Evidence reviewed',
+    'Unknown dates',
   ]
   const unchecked = items.filter((item) => !new RegExp(`^- \\[ \\] \\*\\*${item}\\*\\*`, 'mu').test(checklist))
   const uncolumned = items.filter((item) => !template.includes(` ${item} |`))
   check(
-    'the weekly checklist and the review table both carry use, update, reinstall and failure',
+    'the weekly checklist and review table carry all eight review items',
     unchecked.length === 0 && uncolumned.length === 0,
     `checklist lacks ${JSON.stringify(unchecked)}; review table lacks ${JSON.stringify(uncolumned)}`,
   )
 
   // One numbered rule per verdict, each running to the next; order matters.
   // Whitespace is collapsed so reflowing the markdown cannot fail the check.
-  const rules = new Map(
-    section('Verdict rules')
-      .split(/\n(?=\d\. \*\*)/u)
-      .slice(1)
-      .map((chunk) => [chunk.match(/^\d\. \*\*(.+?)\*\*/u)?.[1], chunk.replace(/\s+/gu, ' ')]),
-  )
+  const ruleChunks = section('Verdict rules').split(/\n(?=\d\. \*\*)/u).slice(1)
+  const ruleNames = ruleChunks.map((chunk) => chunk.match(/^\d\. \*\*(.+?)\*\*/u)?.[1])
+  const rules = new Map(ruleChunks.map((chunk) => [
+    chunk.match(/^\d\. \*\*(.+?)\*\*/u)?.[1],
+    chunk.replace(/\s+/gu, ' '),
+  ]))
   const rule = (name) => rules.get(name) ?? ''
+  const observationGuide = readFileSync(join(ROOT, 'docs', 'OBSERVATION.md'), 'utf8').replace(/\s+/gu, ' ')
+  const guidePassStart = observationGuide.indexOf('## What counts as a pass')
+  const guidePassEnd = observationGuide.indexOf('## Local evidence to review', guidePassStart)
+  const guidePass = observationGuide.slice(guidePassStart, guidePassEnd)
+  check(
+    'the four verdict rules keep their priority and the guide agrees on each outcome',
+    JSON.stringify(ruleNames) === JSON.stringify(['Failed', 'In progress', 'Passed', 'Inconclusive']) &&
+      /manual reinstall occurred/u.test(rule('Failed')) &&
+      /no manual reinstall is recorded/u.test(rule('In progress')) &&
+      /not yet reached day 30/u.test(rule('In progress')) &&
+      /day 30 or later/u.test(rule('Passed')) &&
+      /every window.*user-confirmed ordinary-use date/u.test(rule('Passed')) &&
+      /manual reinstall as `none`/u.test(rule('Passed')) &&
+      /starting version.*each automatic update.*final version.*explicit `unknown`/u.test(rule('Passed')) &&
+      /no manual reinstall is recorded/u.test(rule('Inconclusive')) &&
+      /review was not held/u.test(rule('Inconclusive')) &&
+      /no confirmed ordinary-use date/u.test(rule('Inconclusive')) &&
+      /manual reinstall as `unknown`/u.test(rule('Inconclusive')) &&
+      /required field is blank/u.test(rule('Inconclusive')) &&
+      /remains \*\*in progress\*\* until.*complete month/u.test(observationGuide) &&
+      /If a manual reinstall occurs, mark the period \*\*failed\*\*/u.test(observationGuide) &&
+      /At least 30 calendar days/u.test(guidePass) &&
+      /used in ordinary work/u.test(guidePass) &&
+      /No manual reinstall occurred/u.test(guidePass) &&
+      /starting version.*any observed automatic update.*final version.*explicitly marked unknown/u.test(guidePass) &&
+      /mark the result \*\*inconclusive\*\*, not passed/u.test(observationGuide),
+    `rule order is ${JSON.stringify(ruleNames)} or a verdict condition differs from docs/OBSERVATION.md`,
+  )
   check(
     'the verdict rules define failed by a manual reinstall, passed by 30 confirmed days, inconclusive by missing evidence',
     /manual reinstall/u.test(rule('Failed')) &&
@@ -493,12 +525,6 @@ console.log('\nThe one-month observation log still carries what its verdict need
       rule('In progress') !== '',
     'docs/OBSERVATION-LOG.md lost a verdict, or a verdict lost the condition that decides it',
   )
-  check(
-    'failed is the first verdict rule applied',
-    [...rules.keys()][0] === 'Failed',
-    `rule order is ${JSON.stringify([...rules.keys()])}; a reinstalled period could read as passed`,
-  )
-
   // A status is a claim. Anything past "not started" needs a period to back it.
   const status = ledger.match(/^\*\*Current status: (not started|in progress|passed|failed|inconclusive)\.\*\*/mu)?.[1]
   const periods = [...section('Periods').matchAll(/^### Period \d+\b/gmu)].length
