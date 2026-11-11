@@ -60,7 +60,7 @@ export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
-import { collectGitState, gitPluginDeclaration, writeGitPlugin } from './plugins/git'
+import { collectGitState, gitPluginDeclaration, tryWriteGitPlugin } from './plugins/git'
 import { copyTextToClipboard } from './clipboard'
 import { isShareBundleArchive } from './packArchive'
 import {
@@ -1498,8 +1498,8 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     let gitDeclaration: NonNullable<Manifest['plugins']>[number] | undefined
     try {
       const gitState = await collectGitState(process.cwd())
-      if (gitState) {
-        await writeGitPlugin(dirPath, gitState)
+      // A failed write cleans up after itself, so only a published plugin is declared.
+      if (gitState && await tryWriteGitPlugin(dirPath, gitState)) {
         gitDeclaration = gitPluginDeclaration()
       }
     } catch {
