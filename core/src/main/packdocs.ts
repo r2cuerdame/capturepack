@@ -653,26 +653,17 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
   lines.push(`# ${t('pack.skillDom')}`)
   lines.push('')
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  const domPlugins = plugins.filter((p) => p.name === 'chrome-dom' || p.name === 'windows-uia')
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
   const targeted = annotations.filter((a) => a.target !== undefined)
-  if (plugins.length === 0 && targeted.length === 0) {
-    // Honest empty: no invented structure when no plugin contributed data.
+  if (domPlugins.length === 0 && targeted.length === 0) {
     lines.push('No DOM metadata in this pack.')
-    lines.push('')
-    lines.push(
-      'No plugin contributed semantic object data (there is no `plugins/` payload and no annotation',
-    )
-    lines.push(
-      'carries a `target`). If a future pack includes it, DOM metadata lives under `plugins/<name>/`',
-    )
-    lines.push('and semantic object references appear as the reserved `target` field on annotation boxes.')
-    lines.push('')
     return lines.join('\n')
   }
-  if (plugins.length > 0) {
+  if (domPlugins.length > 0) {
     lines.push('Plugins that contributed data (see `plugins/`):')
     lines.push('')
-    for (const p of plugins) {
+    for (const p of domPlugins) {
       lines.push(`- **${p.name}** v${p.version} — files under \`${p.path}\``)
     }
     lines.push('')
@@ -682,7 +673,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // what is ABSENT from that structure changes what it may conclude. A model
     // that does not know field values were withheld will read an empty form as
     // an empty form; a model that does knows it is looking at a redaction.
-    const dom = plugins.find((p) => p.name === 'chrome-dom')
+    const dom = domPlugins.find((p) => p.name === 'chrome-dom')
     if (dom !== undefined) {
       lines.push(
         'A `chrome-dom` pick from extension 0.2.0 or newer carries a `document`: every element',
@@ -704,7 +695,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // page rectangles land on the neighbouring thing, so the walk throws them
     // away — and a model that does not know they were thrown away will read a
     // window with no controls as a window that HAD no controls.
-    const uia = plugins.find((p) => p.name === 'windows-uia')
+    const uia = domPlugins.find((p) => p.name === 'windows-uia')
     if (uia !== undefined) {
       lines.push(
         'In `windows-uia` 0.4.0 or newer, read `geometry_refused` before concluding anything from',
