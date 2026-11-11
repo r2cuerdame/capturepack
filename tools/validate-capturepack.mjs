@@ -656,6 +656,12 @@ function validateManifest(m, pack, snapshotDims) {
         if (!ok) continue;
         declared.set(p.name, p);
 
+        const pluginDir = `plugins/${p.name}`;
+        if (!pack.dirs.has(pluginDir)) {
+          fail(`${pluginDir}/: missing — REQUIRED for every declared plugin (SPEC §5.4, §11.1)`);
+          continue;
+        }
+
         const metaName = `plugins/${p.name}/meta.json`;
         const metaBuf = pack.files.get(metaName);
         if (!metaBuf) { fail(`${metaName}: missing — REQUIRED in every plugin directory (SPEC §11.1)`); continue; }
