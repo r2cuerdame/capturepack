@@ -70,6 +70,10 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
+- Save As New copies only declared plugin payloads whose `meta.json` matches the
+  declaration. A plugin directory without that metadata, an undeclared one, or a
+  copy that fails or loses its `meta.json` is removed from the new pack instead
+  of being left undeclared for MCP and Full ZIP to pick up.
 - UI Automation, Chrome DOM and Windows context plugin metadata is published
   only after its payload is written. Failed writes clean up unpublished plugin
   data while preserving a previously complete plugin.
@@ -84,6 +88,10 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - The roadmap and handoff now describe the planned 2026-12 milestone as a
   0.6.2 candidate. This is planning information, not a release or implementation
   claim.
+- The 0.6.1 candidate scope and the 0.6.2 plan have numbered completion
+  conditions in `docs/RELEASE_SCOPE_0_6_1_0_6_2.md`, and `check:docs` keeps that
+  document in step with the checks, the gate count and the workflow triggers
+  ([#445](https://github.com/r2cuerdame/capturepack/issues/445)).
 
 ## 0.5.1 — 2026-09-16
 
