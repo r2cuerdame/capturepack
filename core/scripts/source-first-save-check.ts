@@ -537,7 +537,10 @@ async function main(): Promise<void> {
     console.log('\nIMAGE SAVE AS NEW PLUGIN METADATA')
     const imageSource = path.join(outputDir, 'image-plugin-source')
     mkdirSync(path.join(imageSource, 'plugins', 'sample'), { recursive: true })
-    writeFileSync(path.join(imageSource, 'plugins', 'sample', 'meta.json'), '{"ok":true}')
+    writeFileSync(
+      path.join(imageSource, 'plugins', 'sample', 'meta.json'),
+      JSON.stringify({ name: 'sample', version: '1.0.0' }),
+    )
     writeFileSync(path.join(imageSource, 'plugins', 'sample', 'data.json'), '{"value":1}')
     writeFileSync(path.join(imageSource, 'plugins', 'sample', 'frame.png'), Buffer.from([137, 80, 78, 71]))
     mkdirSync(path.join(imageSource, 'plugins', 'unlisted'), { recursive: true })
