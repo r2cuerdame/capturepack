@@ -963,6 +963,7 @@ export async function addManifestPlugin(
       docLanguage,
       false,
       viewerWritten,
+      existsSync(join(handle.dirPath, 'annotations.json')),
     )
     if (!declared || nextManifest.format_version !== previousFormatVersion) {
       await writeSourceFile(manifestPath, toJson(nextManifest))
@@ -2238,15 +2239,16 @@ async function writeDocs(
   docLanguage: Language,
   renderPending: boolean,
   includeViewer: boolean,
+  includeAnnotationsFile = true,
 ): Promise<void> {
   const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
   await writeSourceFile(
     join(dirPath, 'report.md'),
-    buildReport(manifest, annotationsFile, docLanguage, renderPending, includeViewer),
+    buildReport(manifest, annotationsFile, docLanguage, renderPending, includeViewer, includeAnnotationsFile),
   )
   await writeSourceFile(
     join(dirPath, 'README.md'),
-    buildReadme(manifest, annotationsFile, docLanguage, renderPending, includeViewer),
+    buildReadme(manifest, annotationsFile, docLanguage, renderPending, includeViewer, includeAnnotationsFile),
   )
   const skillFiles =
     manifest.capture_kind === 'image'
@@ -2310,6 +2312,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       docLanguage,
       false,
       viewerWritten,
+      existsSync(join(dirPath, 'annotations.json')),
     )
   })
 }

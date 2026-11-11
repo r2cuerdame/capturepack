@@ -866,11 +866,11 @@ console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotation
   }
 
   const testCases = [
-    { name: 'omitted annotations property', file: { reference_width: 1920, reference_height: 1080 } },
-    { name: 'empty annotations array', file: { reference_width: 1920, reference_height: 1080, annotations: [] } },
-    { name: 'undefined annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: undefined } },
-    { name: 'null annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: null } },
-    { name: 'non-array annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: 'not-an-array' } },
+    { name: 'omitted annotations property', file: { reference_width: 1920, reference_height: 1080 }, annotationsFilePresent: false },
+    { name: 'empty annotations array', file: { reference_width: 1920, reference_height: 1080, annotations: [] }, annotationsFilePresent: true },
+    { name: 'undefined annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: undefined }, annotationsFilePresent: true },
+    { name: 'null annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: null }, annotationsFilePresent: true },
+    { name: 'non-array annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: 'not-an-array' }, annotationsFilePresent: true },
   ]
 
   for (const tc of testCases) {
@@ -878,15 +878,17 @@ console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotation
     let readmeOk = false
     let skillsOk = false
     try {
-      const report = buildReport(testManifest, tc.file, 'en', false, true)
-      reportOk = typeof report === 'string' && report.includes('snapshot.png')
+      const report = buildReport(testManifest, tc.file, 'en', false, true, tc.annotationsFilePresent)
+      reportOk = typeof report === 'string' && report.includes('snapshot.png') &&
+        report.includes('- annotations.json —') === tc.annotationsFilePresent
     } catch {
       reportOk = false
     }
 
     try {
-      const readme = buildReadme(testManifest, tc.file, 'en', false, true)
-      readmeOk = typeof readme === 'string' && readme.includes('snapshot.png')
+      const readme = buildReadme(testManifest, tc.file, 'en', false, true, tc.annotationsFilePresent)
+      readmeOk = typeof readme === 'string' && readme.includes('snapshot.png') &&
+        readme.includes('| annotations.json |') === tc.annotationsFilePresent
     } catch {
       readmeOk = false
     }
