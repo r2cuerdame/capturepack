@@ -117,6 +117,36 @@ All fixtures are deterministic and operate on repository code or temporary
 files. They do not synthesize hotkeys, start the installed application, or write
 to a user CapturePack.
 
+## Console provider and 30-day observation gate — 2026-12 plan
+
+`check:console-plugin` is a planned deterministic regression check for the
+0.6.2 candidate; it is not part of the current 99-check inventory until the
+provider and check are implemented. Its four required outcomes are:
+
+| Scenario | Required evidence |
+|---|---|
+| Supported console collection succeeds | SPEC §11-compatible `plugins/console/output.log` and `meta.json` are written, and the final manifest declares the plugin and its files. |
+| Console is absent or access is denied | No console directory or manifest declaration is emitted; the ordinary pack save succeeds. |
+| Collection exceeds 100 ms | The collection is abandoned at the deadline, does not hold the five-second capture workflow open, and the ordinary pack save succeeds. |
+| Atomic write fails | Temporary/partial plugin files and any manifest declaration are removed; the ordinary pack save succeeds. |
+
+All unavailable, slow, or failed collection paths are fail-open: omit the
+optional plugin and preserve normal pack saving. The 100 ms deadline and the
+five-second capture workflow are independent acceptance conditions. Before
+the milestone can pass, SPEC validation and all 99 existing automated QA
+checks must also pass without regression; adding `check:console-plugin` will
+expand that inventory and must be counted explicitly in the updated gate.
+
+The one-month no-manual-reinstall observation is a separate, non-automated
+release gate, not a substitute for the checks above. Start it only after a
+public-release installer completes and the actual install date and version are
+recorded. Review weekly and on day 30 or later. Pass only with at least 30
+calendar days of user-confirmed ordinary use, no manual reinstall, and evidence
+for the starting and final versions and any automatic update (or an explicit
+`unknown`). A manual reinstall fails the period; missing dates or evidence are
+inconclusive. Follow [OBSERVATION.md](OBSERVATION.md) for the record and
+evidence rules.
+
 | Reported failure | Automated evidence | Gate |
 |---|---|---|
 | `_223519` saved the left-monitor Google control as `330,77 230x36` although UIA recorded `620,51 153x24` | `check:pack-forensics` builds the exact 1x-left/1.5x-primary field shape. Strict mode must reject the 1.5x contradiction and accept the corrected rectangle. | `check:pack-forensics` |
