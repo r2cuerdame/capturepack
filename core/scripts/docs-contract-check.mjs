@@ -957,6 +957,31 @@ console.log('\nreport.md and README.md list declared plugin payloads (Issue #429
   )
 }
 
+console.log('\nskills/dom.md ignores non-DOM plugins (Issue #431)')
+{
+  const gitOnlyManifest = {
+    format: 'capturepack',
+    format_version: '0.1.0',
+    id: 'test-git-only-dom-skill',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.1.0' },
+    environment: { os: 'windows' },
+    media: { snapshot: 'snapshot.png', replay: null, replay_duration_ms: null },
+    plugins: [{ name: 'git', version: '0.1.0', path: 'plugins/git/' }],
+  }
+  const annotations = { reference_width: 1920, reference_height: 1080, annotations: [] }
+  const timeline = { t0: '2026-07-27T10:41:07+09:00', events: [] }
+  const domSkill = buildSkills(gitOnlyManifest, annotations, timeline, 'en', false).dom
+
+  check(
+    'Git-only pack tells AI that it has no DOM metadata and omits plugin data listing',
+    domSkill.includes('No DOM metadata in this pack.') &&
+      !domSkill.includes('Plugins that contributed data') &&
+      !domSkill.includes('git repository state at capture time'),
+    domSkill,
+  )
+}
+
 console.log('\nSPEC §5.2 defines environment.os_version and environment.screens[].scale as OPTIONAL (Issue #209)')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
