@@ -73,6 +73,11 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - UI Automation, Chrome DOM and Windows context plugin metadata is published
   only after its payload is written. Failed writes clean up unpublished plugin
   data while preserving a previously complete plugin.
+- A Git plugin write that fails part-way no longer leaves an undeclared
+  `plugins/git/state.json` in the pack, where the MCP reader and a full ZIP
+  would pick it up. The unpublished directory, and a `plugins/` folder the write
+  created, are removed; the capture still saves
+  ([#442](https://github.com/r2cuerdame/capturepack/issues/442)).
 
 ### Documentation
 
