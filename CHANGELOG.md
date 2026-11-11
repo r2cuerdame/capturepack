@@ -70,13 +70,18 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
-- UI Automation, Chrome DOM and Windows context plugin metadata is published
-  only after its payload is written. Failed writes clean up unpublished plugin
-  data while preserving a previously complete plugin.
 - Save As New copies only declared plugin payloads whose `meta.json` matches the
   declaration. A plugin directory without that metadata, an undeclared one, or a
   copy that fails or loses its `meta.json` is removed from the new pack instead
   of being left undeclared for MCP and Full ZIP to pick up.
+- UI Automation, Chrome DOM and Windows context plugin metadata is published
+  only after its payload is written. Failed writes clean up unpublished plugin
+  data while preserving a previously complete plugin.
+- A Git plugin write that fails part-way no longer leaves an undeclared
+  `plugins/git/state.json` in the pack, where the MCP reader and a full ZIP
+  would pick it up. The unpublished directory, and a `plugins/` folder the write
+  created, are removed; the capture still saves
+  ([#442](https://github.com/r2cuerdame/capturepack/issues/442)).
 
 ### Documentation
 
