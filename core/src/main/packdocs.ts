@@ -26,6 +26,7 @@ import {
   keyframeSet,
   lifetimeLabel,
   packFocusedDisplay,
+  pluginFiles,
 } from './report'
 
 const px = (n: number): number => Math.round(n)
@@ -164,6 +165,9 @@ export function buildReadme(
     }
   }
   for (const f of extraDisplayFiles(manifest)) {
+    lines.push(`| ${f.name} | ${f.what} |`)
+  }
+  for (const f of pluginFiles(manifest)) {
     lines.push(`| ${f.name} | ${f.what} |`)
   }
   const framesEntry = keyframeFileEntry(keyframes, imageCapture)
