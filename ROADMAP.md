@@ -368,13 +368,27 @@ five-second capture workflow, and continue the one-month no-manual-reinstall
 observation. This is a milestone plan, not a version release or a claim that
 the observation has passed.
 
-- A supported console produces a SPEC-compatible `plugins/console/` payload
-  and metadata. Collection completes within 100 ms; missing, inaccessible, or
-  slow console data is omitted and the pack still saves normally.
-- Deterministic checks cover successful collection, absent/denied console
-  access, timeout, and write failure; the full QA gate and SPEC validation pass.
-- The one-month observation records actual install/update dates and any manual
-  reinstall. It remains in progress until a full month has elapsed without one.
+- Preserve the five-second capture workflow: collection has a 100 ms deadline
+  and cannot hold capture open beyond it. A supported console produces a
+  SPEC-compatible `plugins/console/` payload and metadata; absent, inaccessible,
+  slow, or failed collection is omitted and the pack still saves normally.
+- Deterministic checks cover four outcomes: successful collection writes the
+  declared payload and metadata; absent or denied access adds no plugin and
+  does not fail saving; collection exceeding 100 ms is abandoned without
+  affecting saving; and atomic-write failure leaves no partial declaration or
+  temporary file and does not fail saving.
+- Require SPEC validation and all 98 existing automated QA checks to pass with
+  no regression; preserve the five-second workflow as an independent acceptance
+  condition.
+- Start the one-month observation only after a public-release installer
+  completes and its actual date and installed version are recorded. Review
+  weekly and at day 30 or later, recording confirmed ordinary-use dates,
+  automatic updates, manual reinstalls, interruptions, and reviewed evidence.
+  Pass only after at least 30 calendar days of confirmed ordinary use with no
+  manual reinstall and evidence for the starting/final versions and updates (or
+  an explicit `unknown`). A manual reinstall fails the period; missing dates or
+  evidence make it inconclusive. Follow [OBSERVATION.md](docs/OBSERVATION.md)
+  for the record template and evidence rules.
 - Cost: 0; use existing local development and QA resources. No new service,
   infrastructure, or paid API is part of this milestone.
 
