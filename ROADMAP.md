@@ -377,7 +377,7 @@ the observation has passed.
   does not fail saving; collection exceeding 100 ms is abandoned without
   affecting saving; and atomic-write failure leaves no partial declaration or
   temporary file and does not fail saving.
-- Require SPEC validation and all 98 existing automated QA checks to pass with
+- Require SPEC validation and all 99 existing automated QA checks to pass with
   no regression; preserve the five-second workflow as an independent acceptance
   condition.
 - Start the one-month observation only after a public-release installer
@@ -388,7 +388,9 @@ the observation has passed.
   manual reinstall and evidence for the starting/final versions and updates (or
   an explicit `unknown`). A manual reinstall fails the period; missing dates or
   evidence make it inconclusive. Follow [OBSERVATION.md](docs/OBSERVATION.md)
-  for the record template and evidence rules.
+  for the evidence rules, and keep the dated record, weekly checklist and
+  verdict in [OBSERVATION-LOG.md](docs/OBSERVATION-LOG.md); it records the
+  observation as not started until that install is verified.
 - Cost: 0; use existing local development and QA resources. No new service,
   infrastructure, or paid API is part of this milestone.
 
