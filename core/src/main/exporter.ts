@@ -1901,6 +1901,7 @@ async function imagePluginEntryIsMetadata(sourcePath: string): Promise<boolean> 
   }
 }
 
+/** SPEC §5.4/§11.1: an ordinary meta.json whose name and version equal the declaration. */
 async function pluginMetadataMatches(
   dir: string,
   declaration: NonNullable<Manifest['plugins']>[number],
@@ -1920,6 +1921,15 @@ async function pluginMetadataMatches(
   }
 }
 
+/**
+ * Copies only DECLARED, PUBLISHED plugin payloads into a Save As New pack and
+ * returns the declarations that actually landed. A source directory without a
+ * matching meta.json never finished (or is not this declaration's payload), so
+ * it is not copied at all; a copy that fails or loses its meta.json on the way
+ * (the image filter drops media-looking files) is removed from the new pack.
+ * Undeclared source directories never travel: the exporter declares every
+ * directory it writes (SPEC §5.4), and MCP lists plugins/ by directory.
+ */
 async function copySaveAsNewPlugins(
   sourceDir: string,
   targetDir: string,
@@ -1942,10 +1952,7 @@ async function copySaveAsNewPlugins(
     seen.add(declaration.name)
     const source = join(sourceDir, 'plugins', declaration.name)
     const target = join(targetDir, 'plugins', declaration.name)
-    if (!(await pluginMetadataMatches(source, declaration))) {
-      await rm(target, { recursive: true, force: true }).catch(() => {})
-      continue
-    }
+    if (!(await pluginMetadataMatches(source, declaration))) continue
     try {
       await cp(source, target, {
         recursive: true,
@@ -1960,9 +1967,6 @@ async function copySaveAsNewPlugins(
       // Plugin payloads are optional. A failed or partial copy is unpublished.
       await rm(target, { recursive: true, force: true }).catch(() => {})
     }
-  }
-  if (copied.length === 0) {
-    await rm(join(targetDir, 'plugins'), { recursive: true, force: true }).catch(() => {})
   }
   return copied
 }
@@ -2137,8 +2141,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   try {
     await mkdir(dirPath)
     // Copy pack-backed plugins first, then apply the caller's temporal-context
-    // disposition. For video, plugin payloads remain byte-for-byte. An image
-    // pack has a stricter boundary: only DECLARED plugin metadata may cross,
+    // disposition. Only declared payloads published by a matching meta.json
+    // cross; for video they remain byte-for-byte. An image pack has a stricter
+    // boundary: only DECLARED plugin metadata may cross,
     // and neither a media extension nor renamed raster/video magic is copied.
     // Otherwise Save As New could turn plugins/hidden.png from a malformed
     // source into an undeclared full-screen image in a newly trusted pack.
@@ -2195,6 +2200,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // A background render for the NEW folder always follows this save. Publish
     // its discovery commit only after every declared media copy has completed.
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+    // Nothing crossed: leave no plugins/ (empty, or holding what cleanup missed).
     if ((manifest.plugins ?? []).length === 0) {
       await rm(join(dirPath, 'plugins'), { recursive: true, force: true }).catch(() => {})
     }

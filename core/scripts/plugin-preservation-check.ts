@@ -29,6 +29,13 @@
 // image metadata-only copy — must keep the git declaration and its meta.json
 // and state.json bytes, with and without an explicit input.plugins.
 //
+// SAVE AS NEW CARRIES NO UNPUBLISHED PLUGIN DIRECTORY.
+//
+// A declared directory without a matching meta.json, an undeclared directory,
+// and an image copy that loses its meta.json at the privacy filter must all be
+// absent from the new pack — no declaration, no directory — while a published
+// plugin beside them still arrives byte-for-byte.
+//
 // Run: npm run check:plugins
 import {
   existsSync,
@@ -524,6 +531,65 @@ async function checkSaveAsNewUnpublishedPluginCleanup(): Promise<void> {
   }
 }
 
+async function checkSaveAsNewKeepsOnlyPublishedPlugins(): Promise<void> {
+  console.log('\nSAVE AS NEW KEEPS A PUBLISHED PLUGIN BESIDE AN UNPUBLISHED ONE')
+  for (const kind of ['video', 'image'] as const) {
+    const source = path.join(cases, `save-as-new-${kind}-mixed`, 'source')
+    const partial = { name: 'partial', version: '1.0.0', path: 'plugins/partial/' }
+    // Its meta.json parses and matches, but the bytes the image boundary sniffs
+    // read as an MP4 `ftyp` box, so an image copy lands the payload without the
+    // meta.json that publishes it. That copy is incomplete and must not stay.
+    const lostMeta = { name: 'lost-meta', version: '1.0.0', path: 'plugins/lost-meta/' }
+    const declarations = kind === 'image'
+      ? [gitPluginDeclaration(), partial, lostMeta]
+      : [gitPluginDeclaration(), partial]
+    writePackManifest(source, declarations, kind)
+    await writeGitPlugin(source, gitState)
+    const gitDir = path.join(source, 'plugins', 'git')
+    const metaBefore = readFileSync(path.join(gitDir, 'meta.json'))
+    const stateBefore = readFileSync(path.join(gitDir, 'state.json'))
+    mkdirSync(path.join(source, 'plugins', 'partial'), { recursive: true })
+    writeFileSync(path.join(source, 'plugins', 'partial', 'data.json'), '{"incomplete":true}\n')
+    if (kind === 'image') {
+      const lostMetaDir = path.join(source, 'plugins', 'lost-meta')
+      mkdirSync(lostMetaDir, { recursive: true })
+      writeFileSync(
+        path.join(lostMetaDir, 'meta.json'),
+        '  {"ftyp":0,"name":"lost-meta","version":"1.0.0"}\n',
+      )
+      writeFileSync(path.join(lostMetaDir, 'data.json'), '{"value":1}\n')
+    }
+
+    let copied: { id: string; dirPath: string } | null = null
+    try {
+      copied = await saveAsNewPack(
+        source,
+        kind === 'image' ? imagePackInput() : packInput(uiaPayload(1_234)),
+      )
+    } catch (err) {
+      console.error(err)
+    }
+    const name = `${kind} Save As New (published git + unpublished payloads)`
+    check(`${name}: still saves the pack`, copied !== null)
+    if (copied === null) continue
+
+    const copiedDir = path.join(copied.dirPath, 'plugins', 'git')
+    check(
+      `${name}: declares only the published git plugin`,
+      declaredPlugins(copied.dirPath).join(',') === 'git',
+    )
+    check(
+      `${name}: plugins/ holds only the git directory`,
+      readdirSync(path.join(copied.dirPath, 'plugins')).join(',') === 'git',
+    )
+    check(
+      `${name}: copies the git meta.json and state.json bytes`,
+      readFileSync(path.join(copiedDir, 'meta.json')).equals(metaBefore)
+        && readFileSync(path.join(copiedDir, 'state.json')).equals(stateBefore),
+    )
+  }
+}
+
 async function main(): Promise<void> {
   try {
     await mkdir(root, { recursive: true })
@@ -620,6 +686,7 @@ async function main(): Promise<void> {
     await checkGitPreservation()
     await checkSaveAsNewGitPreservation()
     await checkSaveAsNewUnpublishedPluginCleanup()
+    await checkSaveAsNewKeepsOnlyPublishedPlugins()
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(cases, { recursive: true, force: true })
