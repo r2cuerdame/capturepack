@@ -473,6 +473,57 @@ async function checkSaveAsNewGitPreservation(): Promise<void> {
   }
 }
 
+async function checkSaveAsNewUnpublishedPluginCleanup(): Promise<void> {
+  console.log('\nSAVE AS NEW REMOVES UNPUBLISHED PLUGIN DIRECTORIES')
+  for (const kind of ['video', 'image'] as const) {
+    for (const metadata of ['missing', 'malformed'] as const) {
+      const source = path.join(cases, `save-as-new-${kind}-${metadata}`, 'source')
+      const pluginDir = path.join(source, 'plugins', 'git')
+      const orphanDir = path.join(source, 'plugins', 'orphan')
+      writePackManifest(source, [gitPluginDeclaration()], kind)
+      mkdirSync(pluginDir, { recursive: true })
+      mkdirSync(orphanDir, { recursive: true })
+      writeFileSync(path.join(pluginDir, 'state.json'), '{"branch":"main"}\n')
+      writeFileSync(path.join(orphanDir, 'partial.json'), '{"incomplete":true}\n')
+      if (metadata === 'malformed') {
+        writeFileSync(path.join(pluginDir, 'meta.json'), '{"name":"other","version":"0"}\n')
+      }
+
+      let copied: { id: string; dirPath: string } | null = null
+      try {
+        copied = await saveAsNewPack(
+          source,
+          kind === 'image' ? imagePackInput() : packInput(uiaPayload(1_234)),
+        )
+      } catch (err) {
+        console.error(err)
+      }
+      const name = `${kind} Save As New (${metadata} metadata)`
+      check(`${name}: still saves the pack`, copied !== null)
+      if (copied === null) continue
+
+      const savedManifest = JSON.parse(
+        readFileSync(path.join(copied.dirPath, 'manifest.json'), 'utf8'),
+      ) as Manifest
+      const savedPluginsDir = path.join(copied.dirPath, 'plugins')
+      check(
+        `${name}: omits the invalid git declaration`,
+        !(savedManifest.plugins ?? []).some((plugin) => plugin.name === 'git'),
+      )
+      check(
+        `${name}: leaves no partial or undeclared plugin directory`,
+        !existsSync(savedPluginsDir),
+      )
+      check(
+        `${name}: preserves the source files unchanged`,
+        existsSync(path.join(pluginDir, 'state.json'))
+          && existsSync(path.join(orphanDir, 'partial.json'))
+          && (metadata === 'missing' || existsSync(path.join(pluginDir, 'meta.json'))),
+      )
+    }
+  }
+}
+
 async function main(): Promise<void> {
   try {
     await mkdir(root, { recursive: true })
@@ -568,6 +619,7 @@ async function main(): Promise<void> {
     await checkUiaCleanup()
     await checkGitPreservation()
     await checkSaveAsNewGitPreservation()
+    await checkSaveAsNewUnpublishedPluginCleanup()
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(cases, { recursive: true, force: true })

@@ -1901,10 +1901,30 @@ async function imagePluginEntryIsMetadata(sourcePath: string): Promise<boolean> 
   }
 }
 
-async function copyImagePluginMetadata(
+async function pluginMetadataMatches(
+  dir: string,
+  declaration: NonNullable<Manifest['plugins']>[number],
+): Promise<boolean> {
+  try {
+    const metaPath = join(dir, 'meta.json')
+    if (!(await lstat(metaPath)).isFile()) return false
+    const value = JSON.parse(stripUtf8Bom(await readFile(metaPath, 'utf8'))) as unknown
+    return value !== null
+      && typeof value === 'object'
+      && 'name' in value
+      && 'version' in value
+      && value.name === declaration.name
+      && value.version === declaration.version
+  } catch {
+    return false
+  }
+}
+
+async function copySaveAsNewPlugins(
   sourceDir: string,
   targetDir: string,
   plugins: Manifest['plugins'] | undefined,
+  imageCapture: boolean,
 ): Promise<Manifest['plugins']> {
   const copied: Manifest['plugins'] = []
   const seen = new Set<string>()
@@ -1914,6 +1934,7 @@ async function copyImagePluginMetadata(
       typeof declaration !== 'object' ||
       typeof declaration.name !== 'string' ||
       !PLUGIN_DIRECTORY_NAME_RE.test(declaration.name) ||
+      typeof declaration.version !== 'string' ||
       seen.has(declaration.name)
     ) {
       continue
@@ -1921,17 +1942,27 @@ async function copyImagePluginMetadata(
     seen.add(declaration.name)
     const source = join(sourceDir, 'plugins', declaration.name)
     const target = join(targetDir, 'plugins', declaration.name)
-    if (!existsSync(source)) continue
-    await cp(source, target, {
-      recursive: true,
-      filter: imagePluginEntryIsMetadata,
-    })
-    try {
-      const meta = await lstat(join(target, 'meta.json'))
-      if (meta.isFile()) copied.push(declaration)
-    } catch {
-      // A declaration without ordinary meta.json is not a copied plugin.
+    if (!(await pluginMetadataMatches(source, declaration))) {
+      await rm(target, { recursive: true, force: true }).catch(() => {})
+      continue
     }
+    try {
+      await cp(source, target, {
+        recursive: true,
+        ...(imageCapture ? { filter: imagePluginEntryIsMetadata } : {}),
+      })
+      if (await pluginMetadataMatches(target, declaration)) {
+        copied.push(declaration)
+      } else {
+        await rm(target, { recursive: true, force: true })
+      }
+    } catch {
+      // Plugin payloads are optional. A failed or partial copy is unpublished.
+      await rm(target, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+  if (copied.length === 0) {
+    await rm(join(targetDir, 'plugins'), { recursive: true, force: true }).catch(() => {})
   }
   return copied
 }
@@ -2117,12 +2148,8 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // authority for payloads copied from the source pack.
     let copiedPlugins = input.plugins ?? sourceManifest?.plugins
     if (existsSync(srcPlugins)) {
-      if (imageCapture) {
-        copiedPlugins = await copyImagePluginMetadata(sourceDir, dirPath, copiedPlugins)
-      } else {
-        await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
-      }
-    } else if (imageCapture) {
+      copiedPlugins = await copySaveAsNewPlugins(sourceDir, dirPath, copiedPlugins, imageCapture)
+    } else {
       copiedPlugins = []
     }
     const contextDisposition = await reconcileWindowsContextPlugin(
@@ -2168,6 +2195,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // A background render for the NEW folder always follows this save. Publish
     // its discovery commit only after every declared media copy has completed.
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+    if ((manifest.plugins ?? []).length === 0) {
+      await rm(join(dirPath, 'plugins'), { recursive: true, force: true }).catch(() => {})
+    }
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
