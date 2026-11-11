@@ -3,7 +3,7 @@
 ## validate-capturepack.mjs
 
 A dependency-free validator for CapturePack files, checking a pack against
-[SPEC.md](../SPEC.md) (format 0.1.0). It exists to prove the format's core
+[SPEC.md](../SPEC.md) (through format 0.8.0). It exists to prove the format's core
 promise: a pack can be generated *and checked* from any language, with nothing
 but a standard library — this validator uses only Node built-ins (`node:fs`,
 `node:zlib`), zero npm dependencies, and even reads ZIP archives itself
@@ -92,8 +92,11 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   note.
 - **Plugins** (SPEC §5.4, §11): name pattern, `path` exactly
   `plugins/<name>/`, `meta.json` present and matching the declaration.
-  Undeclared plugin directories are ignored with a note. Plugin payload
-  *contents* are plugin-defined and unchecked, with one exception:
+  Undeclared plugin directories are ignored with a note. The well-known Git,
+  Chrome DOM, and Windows UIA payloads are shape-checked; other plugin contents
+  remain plugin-defined and unchecked.
+- **plugins/git/** (SPEC §11.2): `state.json` is required and its repository,
+  branch, commit object id, dirty flag, and changed-files array are checked.
 - **plugins/windows-uia/** (SPEC §11.3), the well-known capture-instant object
   dump, is shape-checked when declared: `elements.json` must exist and be an
   object with an ISO-8601-with-timezone `captured_at`, a positive integer
@@ -147,7 +150,7 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
 
 ### Notes
 
-- Validation is against format **0.1.0**. Packs declaring another
-  `format_version` are still checked under 0.1.0 rules, with a note (pre-1.0,
+- Validation is against format **0.8.0**. Packs declaring another
+  `format_version` are still checked under 0.8.0 rules, with a note (pre-1.0,
   the minor version acts as the major — SPEC §13.1).
 - ZIP64 archives are rejected; packs are small by design and never need it.

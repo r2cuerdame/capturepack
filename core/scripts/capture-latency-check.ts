@@ -252,6 +252,14 @@ console.log('Wiring — a flow cannot be added without being measured')
   // would not break anything — it would just quietly stop answering the one
   // question ROADMAP says outranks every milestone.
   const session = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+  const liveAssertion = readFileSync(
+    path.join(process.cwd(), 'scripts/assert-live-capture-latency.mjs'),
+    'utf8',
+  )
+  const releaseWorkflow = readFileSync(
+    path.join(process.cwd(), '../.github/workflows/release.yml'),
+    'utf8',
+  )
   const count = (pattern: RegExp): number => (session.match(pattern) ?? []).length
 
   // Four since #157: the video flow, the desktop still, the re-edit, and the
@@ -263,6 +271,15 @@ console.log('Wiring — a flow cannot be added without being measured')
     'every flow that takes the exclusive gate begins a measurement',
     gates === begins && begins === 4,
     `${String(gates)} gates, ${String(begins)} begins`,
+  )
+  const flowKinds = Array.from(
+    session.matchAll(/flowActive = true\s+beginFlowLatency\('([^']+)'\)/g),
+    (match) => match[1],
+  )
+  check(
+    'the four gates are paired with video, re-edit, desktop image, and browser image measurements',
+    JSON.stringify(flowKinds) === JSON.stringify(['video', 're-edit', 'image', 'image']),
+    JSON.stringify(flowKinds),
   )
 
   const ends = count(/endFlowLatency\(\)(?!:)/g)
@@ -282,8 +299,8 @@ console.log('Wiring — a flow cannot be added without being measured')
 
   check(
     'the user-held span of the image selector is excluded explicitly',
-    /noteFlowUserWait\(/.test(session),
-    'noteFlowUserWait is not called',
+    /const selectorShownAtMs = monotonicNowMs\(\)[\s\S]{0,160}const selection = await selectionPending[\s\S]{0,160}noteFlowUserWait\(monotonicNowMs\(\) - selectorShownAtMs\)/.test(session),
+    'the selector wait is measured from its display until selection resolves',
   )
 
   check(
@@ -291,6 +308,18 @@ console.log('Wiring — a flow cannot be added without being measured')
     /process\.hrtime\.bigint\(\)/.test(session) &&
       !/beginCaptureLatency\([^)]*Date\.now\(\)/.test(session),
     'a wall-clock reading reaches the latency measurement',
+  )
+
+  check(
+    'the live release gate allows at most 5000 ms and invokes the log assertion',
+    /assert-live-capture-latency\.mjs[^\r\n]*5000/.test(releaseWorkflow),
+    'release workflow is not wired to the 5000 ms assertion',
+  )
+  check(
+    'the live-log assertion requires one video result and caps hands-off at both visible time and the configured limit',
+    /lines\.length !== 1/.test(liveAssertion) &&
+      /handsOffMs > visibleMs \|\| handsOffMs > limitMs/.test(liveAssertion),
+    'live assertion does not enforce a unique result within the limit',
   )
 }
 
