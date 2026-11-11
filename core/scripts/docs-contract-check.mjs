@@ -520,6 +520,251 @@ console.log('\nThe one-month observation log still carries what its verdict need
   )
 }
 
+console.log('\nThe next-release scope states conditions this repository can settle (Issue #445)')
+{
+  // #445 fixed where the 0.6.1 candidate ends and the 0.6.2 plan begins. A
+  // scope document is only worth reading while every condition in it still
+  // points at something that runs: a check that exists and still asserts what
+  // its row says, the count the gate really discovers, the five-second
+  // condition in every stage, and workflow triggers that match the files. Each
+  // of those goes stale silently — the handoff's 0.6.1 baseline had already
+  // dropped the Shadow DOM item when this was written.
+  const read = (...segments) => readFileSync(join(ROOT, ...segments), 'utf8').replace(/\r\n/gu, '\n')
+  const scopePath = join(ROOT, 'docs', 'RELEASE_SCOPE_0_6_1_0_6_2.md')
+  check('docs/RELEASE_SCOPE_0_6_1_0_6_2.md exists', existsSync(scopePath), scopePath)
+  const scope = existsSync(scopePath) ? read('docs', 'RELEASE_SCOPE_0_6_1_0_6_2.md') : ''
+  const sectionOf = (text, marker, heading) => {
+    const start = text.indexOf(`\n${marker} ${heading}\n`)
+    if (start === -1) return ''
+    const next = text.indexOf(`\n${marker} `, start + 1)
+    return text.slice(start, next === -1 ? undefined : next)
+  }
+  const flat = (text) => text.replace(/\s+/gu, ' ')
+  const standing = sectionOf(scope, '##', 'Standing condition — the five-second workflow')
+  const candidate = sectionOf(scope, '##', '0.6.1 candidate — scope and completion conditions')
+  const plan = sectionOf(scope, '##', '0.6.2 plan — acceptance criteria (planning only)')
+  const publication = sectionOf(scope, '##', 'Publication contract')
+  check(
+    'the scope keeps its standing condition, both stages and the publication contract',
+    standing !== '' && candidate !== '' && plan !== '' && publication !== '',
+    'a section heading of docs/RELEASE_SCOPE_0_6_1_0_6_2.md was renamed or removed',
+  )
+
+  const named = [...new Set([...scope.matchAll(/`(check:[a-z0-9:-]+)`/gu)].map((match) => match[1]))]
+  const unknown = named.filter((name) => !scriptNames.includes(name))
+  check(
+    `every check the scope names exists (${String(named.length)} named)`,
+    named.length > 0 && unknown.length === 0,
+    `not in core/package.json: ${unknown.join(', ')}`,
+  )
+
+  const discovered = scriptNames.filter((name) => name.startsWith('check:') && name !== 'check:qa').length
+  check(
+    `the scope states the real discovered count (${String(discovered)}) and both step counts`,
+    flat(scope).includes(`The gate discovers ${String(discovered)} checks today`) &&
+      flat(scope).includes(`(${String(discovered + 1)} steps)`) &&
+      flat(scope).includes(`(${String(discovered + 3)} steps)`) &&
+      flat(candidate).includes(`all ${String(discovered)} discovered checks passing`),
+    `docs/RELEASE_SCOPE_0_6_1_0_6_2.md does not state ${String(discovered)} checks, ` +
+      `${String(discovered + 1)} and ${String(discovered + 3)} steps, or the 0.6.1 no-regression row`,
+  )
+
+  // Each 0.6.1 item names its check, and that check still asserts the thing the
+  // row describes. A renamed assertion fails here until the row is reread.
+  const rows = candidate.split('\n').filter((line) => /^\| \d+ \|/u.test(line))
+  const row = (n) => rows.find((line) => line.startsWith(`| ${String(n)} |`)) ?? ''
+  const items = [
+    {
+      n: 1,
+      scope: /Open Shadow DOM/u,
+      checks: ['check:document-snapshot', 'check:chrome-bridge'],
+      sources: ['document-snapshot-check.mjs', 'chrome-bridge-check.mjs'],
+      asserted: [
+        'an element inside an open shadow root is recorded',
+        'a shadow tree inside a shadow tree is recorded too',
+        'a shadow password field is a password field',
+        'and names it through the shadow boundary',
+        'a closed root is picked as its host, and nothing inside it is read',
+      ],
+    },
+    {
+      n: 2,
+      scope: /route detection/u,
+      checks: ['check:chrome-route-change'],
+      sources: ['chrome-route-change-check.mjs'],
+      asserted: [
+        'inactive-tab hints are discarded',
+        'cross-origin late hints are discarded',
+        'closed tabs are discarded',
+        'unreadable current URL is discarded',
+      ],
+    },
+    {
+      n: 3,
+      scope: /Git context/u,
+      checks: ['check:git-plugin'],
+      sources: ['git-plugin-check.mjs'],
+      asserted: [
+        'short deadlines fail open',
+        'metadata is published only after the state file landed',
+        'removes its staged temporary file and unpublished directory',
+        'a failed rewrite keeps the plugin an earlier write already published',
+        'well inside the five-second workflow',
+      ],
+    },
+    {
+      n: 4,
+      scope: /Opaque Share Copy/u,
+      checks: ['check:share-bundle'],
+      sources: ['share-bundle-check.ts'],
+      asserted: ['opaqueRedaction: true', 'pixels[at] !== 0x1a', 'opaque-label-gutter'],
+    },
+  ]
+  for (const { n, scope: title, checks, sources, asserted } of items) {
+    const text = row(n)
+    const source = sources.map((name) => readFileSync(join(CORE, 'scripts', name), 'utf8')).join('\n')
+    const unasserted = asserted.filter((needle) => !source.includes(needle))
+    const unnamed = checks.filter((name) => !text.includes(`\`${name}\``))
+    check(
+      `0.6.1 item ${String(n)} names ${checks.join(' and ')}, which still assert it`,
+      title.test(text) && unnamed.length === 0 && unasserted.length === 0,
+      !title.test(text)
+        ? `row ${String(n)} is no longer ${String(title)}`
+        : unnamed.length > 0
+          ? `row ${String(n)} does not name ${unnamed.join(', ')}`
+          : `${sources.join(', ')} no longer assert: ${unasserted.join('; ')}`,
+    )
+  }
+  check(
+    'the opaque fill the scope names is the one the Share Copy writer records',
+    row(4).includes('`#1a1a1a`') &&
+      readFileSync(join(CORE, 'src', 'main', 'shareBundle.ts'), 'utf8').includes("'opaque-redaction-v1:#1a1a1a'"),
+    'the scope and core/src/main/shareBundle.ts disagree about the opaque fill',
+  )
+
+  const handoff = read('docs', 'HANDOFF.md')
+  const baseline = sectionOf(handoff, '##', '0.6.1 candidate baseline — not released')
+  const undescribed = items.flatMap(({ checks }) => checks).filter((name) => !baseline.includes(`\`${name}\``))
+  check(
+    'the handoff 0.6.1 baseline describes every candidate item by its check',
+    baseline !== '' && undescribed.length === 0,
+    baseline === '' ? 'docs/HANDOFF.md lost its 0.6.1 candidate baseline' : `not in it: ${undescribed.join(', ')}`,
+  )
+
+  // The scope quotes the changelog's 0.6.1 heading; promotion changes the
+  // heading, and the scope must be reread when it does.
+  const changelogHeading = read('CHANGELOG.md').match(/^## (0\.6\.1 — .+)$/mu)?.[1]
+  check(
+    'the scope quotes the changelog 0.6.1 heading as it stands',
+    changelogHeading !== undefined && flat(candidate).includes(`"${changelogHeading}"`),
+    `CHANGELOG.md says "${String(changelogHeading)}"`,
+  )
+
+  // THE FIVE-SECOND CONDITION IS NOT A FEATURE ROW. It stays in every stage and
+  // is judged on its own, and the 5000 ms limit it names is the one the live
+  // CI job and the Release workflow actually enforce.
+  const ci = read('.github', 'workflows', 'ci.yml')
+  const release = read('.github', 'workflows', 'release.yml')
+  const liveLimit = /node scripts\/assert-live-capture-latency\.mjs "[^"]+" 5000\b/u
+  check(
+    'the standing condition names its automated check and the 5000 ms live limit, judged on its own',
+    standing.includes('`check:capture-latency`') && standing.includes('within 5000 ms') && /judged on its own/u.test(flat(scope)),
+    'the standing condition lost check:capture-latency, the 5000 ms limit or its independence',
+  )
+  check(
+    'the CI capture-e2e job and the Release workflow both enforce that 5000 ms limit',
+    /^ {2}capture-e2e:$/mu.test(ci) && liveLimit.test(ci) &&
+      release.includes('- name: Gate live capture to painted editor') && liveLimit.test(release),
+    'ci.yml or release.yml no longer asserts live capture to painted editor within 5000 ms',
+  )
+  const stages = [
+    ['the 0.6.1 candidate', [candidate]],
+    ['each 0.6.2 track', plan.split('\n### ').slice(1)],
+  ]
+  for (const [name, parts] of stages) {
+    check(
+      `${name} keeps the five-second workflow as its own condition`,
+      parts.length > 0 && parts.every((part) => /^\| \d+ \| Five-second workflow\b.*standing condition/mu.test(part)),
+      `a stage of docs/RELEASE_SCOPE_0_6_1_0_6_2.md lost its "Five-second workflow" row`,
+    )
+  }
+
+  // The 0.6.2 console plan is written three times. Its four outcomes and its
+  // deadline must read the same in each, and the plugin it names must be one
+  // SPEC §11 allows.
+  const consoleTrack = sectionOf(scope, '###', 'Console context plugin')
+  const milestone = (text) => sectionOf(text, '##', 'Next milestone — 2026-12 (0.6.2 candidate; planning only)')
+  const roadmap = read('ROADMAP.md')
+  const outcomes = [/100 ms deadline/iu, /absent or denied access/iu, /exceeds? 100 ms|exceeding 100 ms/iu, /atomic-write failure/iu, /plugins\/console\//u]
+  const plans = [
+    ['ROADMAP.md', milestone(roadmap)],
+    ['docs/HANDOFF.md', milestone(handoff)],
+    ['docs/RELEASE_SCOPE_0_6_1_0_6_2.md', consoleTrack],
+  ]
+  const disagreeing = plans
+    .map(([name, text]) => [name, outcomes.filter((pattern) => !pattern.test(flat(text)))])
+    .filter(([, missing]) => missing.length > 0)
+  check(
+    'the roadmap, handoff and scope state the same console deadline and four outcomes',
+    disagreeing.length === 0,
+    disagreeing.map(([name, missing]) => `${name} lacks ${missing.map(String).join(', ')}`).join('; '),
+  )
+  const pluginName = read('SPEC.md').match(/`<plugin-name>` MUST match\s+`([^`]+)`/u)?.[1]
+  check(
+    'the planned plugin name is one SPEC §11.1 allows, with the meta.json SPEC requires',
+    pluginName !== undefined && new RegExp(pluginName, 'u').test('console') &&
+      flat(consoleTrack).includes('`meta.json` whose `name` is `console` and whose `version` is set'),
+    `SPEC plugin-name pattern ${String(pluginName)}`,
+  )
+  const consoleChecks = scriptNames.filter((name) => name.startsWith('check:') && name.includes('console'))
+  check(
+    'the console plugin is still a plan everywhere that says so',
+    /Nothing here is implemented/u.test(plan) && consoleChecks.length === 0 && /^- \[ \] Console plugin$/mu.test(roadmap),
+    consoleChecks.length > 0
+      ? `${consoleChecks.join(', ')} exists — move the console track out of "planning only" and tick the roadmap`
+      : 'the scope or ROADMAP.md stopped describing the console plugin as planned',
+  )
+
+  // A push publishes the website; only a person publishes the application.
+  const triggers = (yml) => {
+    const block = yml.match(/^on:\n((?:(?: {2}.*)?\n)*)/mu)?.[1] ?? ''
+    return [...block.matchAll(/^ {2}([a-z_]+):/gmu)].map((match) => match[1])
+  }
+  const pages = read('.github', 'workflows', 'pages.yml')
+  check(
+    'pages.yml deploys site/ on a push to main, or by hand',
+    JSON.stringify(triggers(pages)) === JSON.stringify(['push', 'workflow_dispatch']) &&
+      /branches: \[main\]/u.test(pages) && pages.includes('"site/**"') && /path: site$/mu.test(pages) &&
+      pages.includes('actions/deploy-pages@'),
+    `pages.yml triggers are ${JSON.stringify(triggers(pages))}`,
+  )
+  check(
+    'release.yml runs only when dispatched, and only for the version core/package.json builds',
+    JSON.stringify(triggers(release)) === JSON.stringify(['workflow_dispatch']) &&
+      release.includes('$version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version') &&
+      release.includes('"v$version" -ne $env:RELEASE_TAG') &&
+      release.includes('refusing to replace its assets') &&
+      release.includes('run: npm run qa:rc -- --fail-fast'),
+    `release.yml triggers are ${JSON.stringify(triggers(release))}`,
+  )
+  check(
+    'the scope states that contract: pages.yml for the website, release.yml by hand',
+    /\[pages\.yml\]\([^)]*\) \| A push to `main` that touches `site\/\*\*`/u.test(publication) &&
+      /\[release\.yml\]\([^)]*\) \| `workflow_dispatch` only/u.test(publication) &&
+      /A merge to `main` never publishes an installer/u.test(flat(publication)),
+    'the publication contract in docs/RELEASE_SCOPE_0_6_1_0_6_2.md no longer matches the workflows',
+  )
+
+  const linking = ['docs/README.md', 'docs/HANDOFF.md', 'ROADMAP.md'].filter(
+    (name) => !/\]\((?:docs\/)?RELEASE_SCOPE_0_6_1_0_6_2\.md\)/u.test(read(...name.split('/'))),
+  )
+  check(
+    'the docs index, handoff and roadmap all point at the scope',
+    linking.length === 0,
+    `no link to RELEASE_SCOPE_0_6_1_0_6_2.md in ${linking.join(', ')}`,
+  )
+}
+
 console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')

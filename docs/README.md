@@ -65,6 +65,7 @@ work does not settle remains open: a real three-screen capture
 | [DXGI timing reference](DXGI_TIMING_REFERENCE.md) | Windows capture timing evidence and terminology |
 | [DXGI replay ring foundation](DXGI_REPLAY_RING.md) | Native ring self-test, capability handshake, and field-probe boundary |
 | [0.5.1 stability gate](RELEASE_0_5_1_STABILITY_GATE.md) | Stability gate audit, #240/#243 disposition, native replay exit path status, and QA findings |
+| [0.6.1 / 0.6.2 scope](RELEASE_SCOPE_0_6_1_0_6_2.md) | 0.6.1 candidate and 0.6.2 plan boundary, completion conditions, the five-second condition and the publication contract |
 
 ## Integrations and schemas
 
