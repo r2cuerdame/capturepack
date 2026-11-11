@@ -97,7 +97,7 @@ collection produces the declared payload and metadata; absent or denied access
 produces no plugin declaration and does not fail the save; a request that
 exceeds 100 ms is abandoned and does not fail the save; and an atomic-write
 failure leaves no partial plugin declaration or temporary file and does not
-fail the save. After these checks, require SPEC validation and all 98 existing
+fail the save. After these checks, require SPEC validation and all 99 existing
 automated QA checks to pass with no regression. The five-second workflow remains
 an independent acceptance condition throughout.
 
@@ -109,7 +109,10 @@ reviewed. Pass only with at least 30 calendar days, confirmed ordinary use, no
 manual reinstall, and evidence for the starting and final versions and any
 automatic update (or an explicit `unknown`). A manual reinstall fails that
 period; missing dates or evidence are inconclusive, never guessed. Follow
-[`OBSERVATION.md`](OBSERVATION.md) for the local record and evidence rules.
+[`OBSERVATION.md`](OBSERVATION.md) for the evidence rules and record each
+period, weekly review and verdict in
+[`OBSERVATION-LOG.md`](OBSERVATION-LOG.md), which stays `not started` until a
+verified public-release install gives the period its day 0.
 Planned additional cost is 0, using existing local resources only.
 
 ### Historical 0.4.1 publication evidence

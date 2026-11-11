@@ -408,6 +408,118 @@ console.log('\nThe usage journal template still says what Issue #1 says')
   )
 }
 
+console.log('\nThe one-month observation log still carries what its verdict needs (Issue #440)')
+{
+  // The 2026-12 milestone cannot close on "it seemed fine for a month". The
+  // ledger is the only place the start date, the four weekly reviews and the
+  // verdict are written down, so a ledger that quietly drops a field, a review
+  // window or one of the three verdicts makes the month unjudgeable after the
+  // fact — and nobody notices until day 30. Prose is not read for truth here;
+  // only that each required slot still exists and every current document still
+  // points at the ledger.
+  const ledgerPath = join(ROOT, 'docs', 'OBSERVATION-LOG.md')
+  check('docs/OBSERVATION-LOG.md exists', existsSync(ledgerPath), ledgerPath)
+  const ledger = existsSync(ledgerPath) ? readFileSync(ledgerPath, 'utf8').replace(/\r\n/gu, '\n') : ''
+  const section = (heading) => {
+    const start = ledger.indexOf(`\n## ${heading}\n`)
+    if (start === -1) return ''
+    const next = ledger.indexOf('\n## ', start + 1)
+    return ledger.slice(start, next === -1 ? undefined : next)
+  }
+
+  const fields = [
+    'Observation start date (day 0)',
+    'Starting app version',
+    'Week 1 review date (due day 7)',
+    'Week 2 review date (due day 14)',
+    'Week 3 review date (due day 21)',
+    'Week 4 review date (due day 28)',
+    'Final verdict date (day 30 or later)',
+    'End date',
+    'Final app version',
+    'Result',
+    'Reason for result',
+  ]
+  const tracked = section('Tracked fields')
+  const template = section('Period template')
+  const untracked = fields.filter((field) => !tracked.includes(`| ${field} |`))
+  const untemplated = fields.filter((field) => !template.includes(`| ${field} |`))
+  check(
+    'the ledger defines every tracked field and its period template carries each one',
+    untracked.length === 0 && untemplated.length === 0,
+    `Tracked fields lacks ${JSON.stringify(untracked)}; Period template lacks ${JSON.stringify(untemplated)}`,
+  )
+
+  const windows = ['Week 1 (days 0–7)', 'Week 2 (days 8–14)', 'Week 3 (days 15–21)', 'Week 4 (days 22–28)', 'Final (day 29 to verdict)']
+  const unwindowed = windows.filter((window) => !template.includes(`| ${window} |`) || !section('Day counting').includes(window))
+  check(
+    'the four weekly windows and the final window are counted and templated',
+    unwindowed.length === 0,
+    `missing from Day counting or Period template: ${JSON.stringify(unwindowed)}`,
+  )
+
+  const checklist = section('Weekly checklist')
+  const items = [
+    'Confirmed ordinary-use dates',
+    'Automatic update history',
+    'Manual reinstall',
+    'Failure or interruption',
+  ]
+  const unchecked = items.filter((item) => !new RegExp(`^- \\[ \\] \\*\\*${item}\\*\\*`, 'mu').test(checklist))
+  const uncolumned = items.filter((item) => !template.includes(` ${item} |`))
+  check(
+    'the weekly checklist and the review table both carry use, update, reinstall and failure',
+    unchecked.length === 0 && uncolumned.length === 0,
+    `checklist lacks ${JSON.stringify(unchecked)}; review table lacks ${JSON.stringify(uncolumned)}`,
+  )
+
+  // One numbered rule per verdict, each running to the next; order matters.
+  // Whitespace is collapsed so reflowing the markdown cannot fail the check.
+  const rules = new Map(
+    section('Verdict rules')
+      .split(/\n(?=\d\. \*\*)/u)
+      .slice(1)
+      .map((chunk) => [chunk.match(/^\d\. \*\*(.+?)\*\*/u)?.[1], chunk.replace(/\s+/gu, ' ')]),
+  )
+  const rule = (name) => rules.get(name) ?? ''
+  check(
+    'the verdict rules define failed by a manual reinstall, passed by 30 confirmed days, inconclusive by missing evidence',
+    /manual reinstall/u.test(rule('Failed')) &&
+      /day 30 or later/u.test(rule('Passed')) &&
+      /ordinary-use date/u.test(rule('Passed')) &&
+      /`none`/u.test(rule('Passed')) &&
+      /no confirmed ordinary-use date/u.test(rule('Inconclusive')) &&
+      /not held/u.test(rule('Inconclusive')) &&
+      rule('In progress') !== '',
+    'docs/OBSERVATION-LOG.md lost a verdict, or a verdict lost the condition that decides it',
+  )
+  check(
+    'failed is the first verdict rule applied',
+    [...rules.keys()][0] === 'Failed',
+    `rule order is ${JSON.stringify([...rules.keys()])}; a reinstalled period could read as passed`,
+  )
+
+  // A status is a claim. Anything past "not started" needs a period to back it.
+  const status = ledger.match(/^\*\*Current status: (not started|in progress|passed|failed|inconclusive)\.\*\*/mu)?.[1]
+  const periods = [...section('Periods').matchAll(/^### Period \d+\b/gmu)].length
+  check(
+    'the ledger states a defined current status, backed by a recorded period unless not started',
+    status !== undefined && (status === 'not started' ? periods === 0 : periods > 0),
+    status === undefined
+      ? 'no "**Current status: …**" line naming a defined result'
+      : `status is ${status} with ${String(periods)} recorded period(s)`,
+  )
+
+  const linking = ['docs/OBSERVATION.md', 'docs/README.md', 'ROADMAP.md', 'docs/HANDOFF.md'].filter(
+    (name) => !/\]\((?:docs\/)?OBSERVATION-LOG\.md\)/u.test(readFileSync(join(ROOT, name), 'utf8')),
+  )
+  check(
+    'the observation guide, docs index, roadmap and handoff all point at the ledger',
+    linking.length === 0,
+    `no link to OBSERVATION-LOG.md in ${linking.join(', ')}`,
+  )
+}
+
 console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')

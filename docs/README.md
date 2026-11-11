@@ -73,6 +73,7 @@ work does not settle remains open: a real three-screen capture
 | [MCP](MCP.md) | Loopback, read-only tools for already-saved packs |
 | [Temporal provider API](temporal-provider-api.md) | Provider contract and timing rules |
 | [One-month operation observation](OBSERVATION.md) | Start, review, and record the no-manual-reinstall stability observation |
+| [One-month observation log](OBSERVATION-LOG.md) | Dated ledger, weekly review checklist, and passed/failed/inconclusive verdict rules for that observation |
 | [Manifest schema](schemas/manifest.schema.json) | Machine-readable manifest validation |
 | [Annotations schema](schemas/annotations.schema.json) | Machine-readable annotation validation |
 | [Timeline schema](schemas/timeline.schema.json) | Machine-readable event timeline validation |

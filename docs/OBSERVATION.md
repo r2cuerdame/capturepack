@@ -69,7 +69,11 @@ unchanged while collecting evidence.
 ## Recording template
 
 Keep one copy for each observation period. Use `unknown` when evidence is not
-available; do not invent a date or cause.
+available; do not invent a date or cause. The official record is
+[OBSERVATION-LOG.md](OBSERVATION-LOG.md): it carries these fields per period,
+the day 7/14/21/28 review windows and final day-30 review, the weekly
+checklist, and the order in which this guide's passed, failed and inconclusive
+rules are applied.
 
 ```text
 Observation start date (release installer completed):
