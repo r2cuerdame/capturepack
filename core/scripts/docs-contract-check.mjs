@@ -1552,5 +1552,107 @@ console.log('\nMP4 replay packs with render pending emit replay_annotated.mp4 (I
   )
 }
 
+console.log('\nThe handoff and roadmap preserve candidate and console contracts (Issue #446)')
+{
+  const handoff = readFileSync(join(ROOT, 'docs', 'HANDOFF.md'), 'utf8')
+  const roadmap = readFileSync(join(ROOT, 'ROADMAP.md'), 'utf8')
+  const loopProject = readFileSync(join(ROOT, '.loop', 'project.md'), 'utf8')
+  const normalize = (text) => text.replace(/\s+/gu, ' ').trim()
+  const section = (text, heading) => {
+    text = text.replace(/\r\n/gu, '\n')
+    const start = text.indexOf(`\n## ${heading}\n`)
+    if (start === -1) return ''
+    const next = text.indexOf('\n## ', start + 1)
+    return text.slice(start, next === -1 ? undefined : next)
+  }
+  const bullet = (text, title) => {
+    text = text.replace(/\r\n/gu, '\n')
+    const start = text.indexOf(`- **${title}**`)
+    if (start === -1) return ''
+    const rest = text.slice(start)
+    const next = rest.indexOf('\n- **', 1)
+    return normalize(rest.slice(0, next === -1 ? undefined : next))
+  }
+
+  const candidate = section(handoff, '0.6.1 candidate baseline — not released')
+  const git = bullet(candidate, 'Git capture context')
+  const opaque = bullet(candidate, 'Opaque Share Copy redaction')
+  const gitScript = packageJson.scripts['check:git-plugin']
+  const shareScript = packageJson.scripts['check:share-bundle']
+  check(
+    'the 0.6.1 Git handoff names its regression check and measured, content-free capture contract',
+    gitScript !== undefined && git.includes('check:git-plugin') &&
+      git.includes('plugins/git/meta.json') && git.includes('plugins/git/state.json') &&
+      git.includes('--no-optional-locks') && git.includes('100 ms') &&
+      git.includes('never file contents'),
+    'docs/HANDOFF.md or core/package.json lost the Git capture check, outputs, deadline or privacy boundary',
+  )
+  check(
+    'the 0.6.1 opaque redaction handoff names its regression check and pixel boundary',
+    shareScript !== undefined && opaque.includes('check:share-bundle') &&
+      opaque.includes('opaqueRedaction: true') && opaque.includes('#1a1a1a') &&
+      opaque.includes('pixels outside it are kept') &&
+      opaque.includes('original media and structured capture context are excluded'),
+    'docs/HANDOFF.md or core/package.json lost the opaque redaction check or its preservation/exclusion rules',
+  )
+
+  const consoleHeading = 'Next milestone — 2026-12 (0.6.2 candidate; planning only)'
+  const consoleDocs = [
+    ['docs/HANDOFF.md', normalize(section(handoff, consoleHeading))],
+    ['ROADMAP.md', normalize(section(roadmap, consoleHeading))],
+  ]
+  const outcomes = [
+    {
+      name: 'successful collection',
+      matches: (text) => text.includes('successful collection') &&
+        text.includes('declared payload and metadata'),
+    },
+    {
+      name: 'absent or denied access',
+      matches: (text) => /absent or denied(?: access)?/u.test(text) &&
+        /(?:no plugin declaration|adds no plugin)/u.test(text) &&
+        /does not fail (?:the )?sav(?:e|ing)/u.test(text),
+    },
+    {
+      name: 'collection exceeding 100 ms',
+      matches: (text) => /exceeds? 100 ms|exceeding 100 ms/u.test(text) &&
+        text.includes('abandoned') && /does not fail (?:the )?sav(?:e|ing)/u.test(text),
+    },
+    {
+      name: 'atomic-write failure',
+      matches: (text) => text.includes('atomic-write failure') &&
+        /no partial (?:plugin )?declaration or temporary file/u.test(text) &&
+        /does not fail (?:the )?sav(?:e|ing)/u.test(text),
+    },
+  ]
+  for (const outcome of outcomes) {
+    const missing = consoleDocs.filter(([, text]) => !outcome.matches(text)).map(([name]) => name)
+    check(
+      `both milestone documents preserve the ${outcome.name} acceptance contract`,
+      missing.length === 0,
+      `missing or inconsistent in ${missing.join(', ') || '(none)'}`,
+    )
+  }
+  const consoleRequirements = consoleDocs.map(([name, text]) => ({
+    name,
+    valid: /five.second capture workflow/u.test(text) && text.includes('100 ms'),
+  }))
+  check(
+    'both milestone documents keep the five-second workflow and 100 ms deadline',
+    consoleRequirements.every(({ valid }) => valid),
+    `missing from ${consoleRequirements.filter(({ valid }) => !valid).map(({ name }) => name).join(', ')}`,
+  )
+
+  const deployment = normalize(loopProject)
+  const handoffDeployment = normalize(handoff)
+  check(
+    'handoff and project deployment records keep pages.yml web deploy and manual release.yml',
+    deployment.includes('pages.yml') && /release\.yml.{0,40}사람이 직접 실행/u.test(deployment) &&
+      handoffDeployment.includes('pages.yml') && handoffDeployment.includes('release.yml') &&
+      /release\.yml.{0,60}manually dispatched/u.test(handoffDeployment),
+    'docs/HANDOFF.md or .loop/project.md no longer states the official deployment contract',
+  )
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1

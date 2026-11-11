@@ -78,7 +78,7 @@ focused regression checks. They are release-candidate scope, not a claim that
 
 The complete candidate gate is `npm run qa:checks`; release preparation and
 publication still follow [RELEASING.md](RELEASING.md). The website deploy
-remains the `pages.yml` path; the Windows release workflow is manually
+remains the `pages.yml` path; the Windows `release.yml` workflow is manually
 dispatched.
 
 ## Next milestone — 2026-12 (0.6.2 candidate; planning only)
