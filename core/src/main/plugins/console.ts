@@ -36,11 +36,21 @@ export async function collectConsoleOutput(
     // Bound intermediate copies as well as persisted bytes; output beyond this
     // tail cannot survive the final 100-line/256-KiB payload contract.
     const inputLimited = source.length > CONSOLE_PLUGIN_MAX_BYTES
-    const boundedSource = inputLimited ? source.slice(-CONSOLE_PLUGIN_MAX_BYTES) : source
+    let sourceStart = inputLimited ? source.length - CONSOLE_PLUGIN_MAX_BYTES : 0
+    if (sourceStart > 0 && source.charCodeAt(sourceStart) >= 0xdc00
+      && source.charCodeAt(sourceStart) <= 0xdfff) {
+      sourceStart += 1
+    }
+    const boundedSource = source.slice(sourceStart)
     const sanitized = redactSecrets(boundedSource)
     const bytes = Buffer.from(sanitized, 'utf8')
-    const byteLimited = bytes.length > CONSOLE_PLUGIN_MAX_BYTES
-    const limited = bytes.subarray(0, CONSOLE_PLUGIN_MAX_BYTES).toString('utf8')
+    // Keep the newest bytes. Reserve one byte for the required final newline,
+    // then advance past any UTF-8 continuation bytes at the leading boundary.
+    const byteBudget = CONSOLE_PLUGIN_MAX_BYTES - 1
+    const byteLimited = bytes.length > byteBudget
+    let tailStart = Math.max(0, bytes.length - byteBudget)
+    while (tailStart < bytes.length && ((bytes[tailStart] ?? 0) & 0xc0) === 0x80) tailStart += 1
+    const limited = bytes.subarray(tailStart).toString('utf8')
     const allLines = limited.split(/\r?\n/u)
     const lineLimited = allLines.length > CONSOLE_PLUGIN_MAX_LINES
     const lines = allLines.slice(-CONSOLE_PLUGIN_MAX_LINES)
@@ -61,7 +71,8 @@ export async function collectConsoleOutput(
 function redactSecrets(value: string): string {
   return value
     .replace(/\b(BEARER\s+)[A-Za-z0-9._~+/-]+=*/giu, '$1[REDACTED]')
-    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret)\b(\s*[:=]\s*)([^\s,;]+)/giu, '$1$2[REDACTED]')
+    .replace(/(["'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret)["']\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\s]+)/giu, '$1"[REDACTED]"')
+    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret)\b(\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/giu, '$1$2[REDACTED]')
     .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/gu, '[REDACTED]')
 }
 

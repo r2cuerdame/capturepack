@@ -18,7 +18,7 @@ function check(name, condition) {
 }
 
 try {
-  const source = `first\n${Array.from({ length: 110 }, (_, i) => `line-${i}`).join('\n')}\npassword=hunter2`
+  const source = `first\n${Array.from({ length: 110 }, (_, i) => `line-${i}`).join('\n')}\npassword=hunter2\n{"password":"jsonSecret","access_token":"jsonToken"}`
   const output = await collectConsoleOutput(async () => source)
   const successRoot = path.join(root, 'success')
   await mkdir(successRoot)
@@ -33,6 +33,9 @@ try {
     && metadata.name === declaration.name && metadata.version === declaration.version
     && state.lines <= 100 && Buffer.byteLength(log) <= 256 * 1024
     && log.includes('[REDACTED]') && !log.includes('hunter2')
+    && log.includes('"password":"[REDACTED]"')
+    && log.includes('"access_token":"[REDACTED]"')
+    && !log.includes('jsonSecret') && !log.includes('jsonToken')
     && log.includes('line-109') && !/^line-0$/mu.test(log)
   if (!successfulContract) {
     console.log('DETAIL console success:', JSON.stringify({
@@ -42,6 +45,7 @@ try {
       bytes: Buffer.byteLength(log),
       redacted: log.includes('[REDACTED]'),
       originalSecretAbsent: !log.includes('hunter2'),
+      jsonValuesAbsent: !log.includes('jsonSecret') && !log.includes('jsonToken'),
       latestLinePresent: log.includes('line-109'),
       oldestLineAbsent: !/^line-0$/mu.test(log),
     }))
@@ -54,6 +58,19 @@ try {
       && exporterSource.includes('if (await tryWriteConsolePlugin(dirPath, consoleOutput))')
       && exporterSource.includes('consoleDeclaration = consolePluginDeclaration()')
       && exporterSource.includes('capturePlugins.length > 0 ? capturePlugins : undefined'))
+
+  const jsonCredentials = await collectConsoleOutput(async () =>
+    '{"password":"hunter2","access_token":"abcd"}')
+  check('quoted JSON credential keys and values are redacted', jsonCredentials !== null
+    && jsonCredentials.output.includes('"password":"[REDACTED]"')
+    && jsonCredentials.output.includes('"access_token":"[REDACTED]"')
+    && !jsonCredentials.output.includes('hunter2') && !jsonCredentials.output.includes('abcd'))
+
+  const newestTail = await collectConsoleOutput(async () => `${'界'.repeat(90_000)}\nLATEST LINE`)
+  check('UTF-8 byte bound retains the newest complete line and includes its final newline',
+    newestTail !== null && newestTail.output.endsWith('LATEST LINE\n')
+      && Buffer.byteLength(newestTail.output, 'utf8') <= 256 * 1024
+      && !newestTail.output.includes('\uFFFD') && newestTail.truncated)
 
   const absent = await collectConsoleOutput(async () => null)
   const denied = await collectConsoleOutput(async () => { throw new Error('access denied') })
