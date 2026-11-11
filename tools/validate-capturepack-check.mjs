@@ -20,6 +20,7 @@ const motionPack = join(temporaryRoot, 'mixed-display-motion.capturepack')
 const imagePack = join(temporaryRoot, 'region-image.capturepack')
 const viewerPack = join(temporaryRoot, 'offline-viewer.capturepack')
 const uiaDisplayPack = join(temporaryRoot, 'uia-display.capturepack')
+const gitPack = join(temporaryRoot, 'git-plugin.capturepack')
 let checks = 0
 
 function check(message, condition) {
@@ -118,6 +119,57 @@ try {
   check('the invalid payload reports the validation failure instead of crashing',
     invalid.stdout.includes('.events is empty')
       && !`${invalid.stdout}\n${invalid.stderr}`.includes('ReferenceError'))
+
+  // Git context has a stable, cross-tool contract in SPEC §11.2. Validate both
+  // the writer's payload and malformed required fields through the public CLI.
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), gitPack, { recursive: true })
+  const gitManifestFile = join(gitPack, 'manifest.json')
+  const gitManifest = JSON.parse(readFileSync(gitManifestFile, 'utf8'))
+  gitManifest.plugins = [{ name: 'git', version: '0.1.0', path: 'plugins/git/' }]
+  writeJson(gitManifestFile, gitManifest)
+  mkdirSync(join(gitPack, 'plugins', 'git'), { recursive: true })
+  writeJson(join(gitPack, 'plugins', 'git', 'meta.json'), { name: 'git', version: '0.1.0' })
+  const gitStateFile = join(gitPack, 'plugins', 'git', 'state.json')
+  const gitState = {
+    repository: 'capturepack',
+    branch: 'loop/450-1',
+    commit: 'bfb161b54855469f19176a031c4908277a0b1968',
+    dirty: true,
+    changed_files: ['tools/validate-capturepack.mjs'],
+  }
+  writeJson(gitStateFile, gitState)
+  const validGit = runValidator(gitPack)
+  check('a declared Git plugin with a conforming state.json is VALID',
+    validGit.status === 0
+      && validGit.stdout.includes('plugins/git/state.json: repository state is well-formed (1 changed file(s))')
+      && validGit.stdout.includes('result: VALID'))
+
+  writeJson(gitStateFile, { ...gitState, changed_files: [], dirty: false })
+  const cleanGit = runValidator(gitPack)
+  check('Git state accepts a clean repository with no changed files',
+    cleanGit.status === 0 && cleanGit.stdout.includes('result: VALID'))
+  rmSync(gitStateFile)
+  const missingGitState = runValidator(gitPack)
+  check('a declared Git plugin requires state.json',
+    missingGitState.status === 1
+      && missingGitState.stdout.includes('state.json: missing')
+      && missingGitState.stdout.includes('result: INVALID'))
+
+  for (const [field, value, expected] of [
+    ['repository', '', '.repository MUST be a non-empty string'],
+    ['branch', null, '.branch MUST be a non-empty string'],
+    ['commit', 'not-a-commit', '.commit MUST be a 40-64 character hexadecimal object id'],
+    ['dirty', 'true', '.dirty MUST be a boolean'],
+    ['changed_files', ['src/a.ts', 3], '.changed_files MUST be an array of strings'],
+  ]) {
+    const malformed = { ...gitState, [field]: value }
+    writeJson(gitStateFile, malformed)
+    const result = runValidator(gitPack)
+    check(`Git state rejects malformed ${field}`,
+      result.status === 1
+        && result.stdout.includes(expected)
+        && result.stdout.includes('result: INVALID'))
+  }
 
   writeFileSync(elementsFile, '{\n', 'utf8')
   const invalidJson = runValidator()

@@ -39,7 +39,17 @@ values when checking 0.6.0.
 The following behaviors are present in the current source baseline and have
 focused regression checks. They are release-candidate scope, not a claim that
 0.6.1 has been published; **0.6.0 remains the current stable release**.
+Each item's completion condition, the five-second workflow condition every
+stage keeps, and the 0.6.2 acceptance criteria are fixed in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md).
 
+- **Open Shadow DOM** (`check:document-snapshot`, `check:chrome-bridge`,
+  [#345](https://github.com/r2cuerdame/capturepack/issues/345)). The document
+  snapshot records what an open shadow root draws, nested roots included, and
+  keeps its password, typed-value and hidden refusals inside the shadow tree.
+  The picker highlights and picks an element inside an open root and names it
+  through each boundary (`host >>> inner`); a closed root is picked as its host
+  and nothing inside it is read.
 - **Git capture context** (`check:git-plugin`). At save, before the manifest is
   written, `exporter.ts` reads the repository containing the CapturePack
   process's working directory — not the captured window's — and writes
@@ -48,7 +58,12 @@ focused regression checks. They are release-candidate scope, not a claim that
   paths, both sides of a rename included. Every Git read passes
   `--no-optional-locks`. It records repository state, never file contents. A
   Git error, a folder outside any repository, or the 100 ms deadline leaves no
-  `plugins/git/` and no manifest declaration; the pack still saves.
+  `plugins/git/` and no manifest declaration; the pack still saves. State and
+  metadata are written to temporary files and atomically replaced, metadata
+  last; a write that fails part-way removes its temporary file and the
+  unpublished directory, keeps a plugin an earlier write already published,
+  and the capture still saves
+  ([#442](https://github.com/r2cuerdame/capturepack/issues/442)).
 - **Opaque Share Copy redaction** (`check:share-bundle`). History plans and
   creates Share Copy with `opaqueRedaction: true`. Each blur visible at a
   still's time, at its resolved tracked or keyframed position, is filled with
@@ -78,7 +93,7 @@ focused regression checks. They are release-candidate scope, not a claim that
 
 The complete candidate gate is `npm run qa:checks`; release preparation and
 publication still follow [RELEASING.md](RELEASING.md). The website deploy
-remains the `pages.yml` path; the Windows release workflow is manually
+remains the `pages.yml` path; the Windows `release.yml` workflow is manually
 dispatched.
 
 ## Next milestone — 2026-12 (0.6.2 candidate; planning only)
@@ -99,7 +114,8 @@ exceeds 100 ms is abandoned and does not fail the save; and an atomic-write
 failure leaves no partial plugin declaration or temporary file and does not
 fail the save. After these checks, require SPEC validation and all 99 existing
 automated QA checks to pass with no regression. The five-second workflow remains
-an independent acceptance condition throughout.
+an independent acceptance condition throughout. The numbered criteria are in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md).
 
 The one-month observation starts only when a public-release installer has
 successfully completed and its actual date and installed version are recorded.

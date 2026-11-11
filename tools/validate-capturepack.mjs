@@ -666,10 +666,11 @@ function validateManifest(m, pack, snapshotDims) {
         } else {
           pass(`plugins/${p.name}/: declared in manifest and meta.json matches (${p.name} ${p.version})`);
         }
-        // windows-uia is a well-known payload with a defined shape (SPEC §11.3);
-        // every other plugin's contents stay plugin-defined and unchecked.
+        // These well-known payloads have defined shapes; other plugin contents
+        // remain plugin-defined and unchecked.
         if (p.name === "windows-uia") validateWindowsUia(pack, displayInfo);
         if (p.name === "chrome-dom") validateChromeDom(pack, replayDurationMs, captureKind);
+        if (p.name === "git") validateGitState(pack);
       }
       if (m.plugins.length === 0) pass(`manifest.json: plugins is [] (no plugin data)`);
     }
@@ -699,6 +700,46 @@ function validateManifest(m, pack, snapshotDims) {
     displayInfo,
     imageCapture: captureKind === "image",
   };
+}
+
+/** Validate the well-known Git context payload defined by SPEC §11.2. */
+function validateGitState(pack) {
+  const name = "plugins/git/state.json";
+  const buf = pack.files.get(name);
+  if (!buf) {
+    fail(`${name}: missing — the git payload REQUIRES it (SPEC §11.2)`);
+    return;
+  }
+  const parsed = parseJsonFile(name, buf);
+  if (parsed.error) return;
+  const state = parsed.value;
+  if (!isObj(state)) {
+    fail(`${name}: MUST be a JSON object (SPEC §11.2)`);
+    return;
+  }
+
+  let ok = true;
+  for (const field of ["repository", "branch"]) {
+    if (!isStr(state[field]) || state[field].length === 0) {
+      fail(`${name}.${field} MUST be a non-empty string (SPEC §11.2)`);
+      ok = false;
+    }
+  }
+  if (!isStr(state.commit) || !/^[0-9a-f]{40,64}$/i.test(state.commit)) {
+    fail(`${name}.commit MUST be a 40-64 character hexadecimal object id (SPEC §11.2)`);
+    ok = false;
+  }
+  if (typeof state.dirty !== "boolean") {
+    fail(`${name}.dirty MUST be a boolean (SPEC §11.2)`);
+    ok = false;
+  }
+  if (!Array.isArray(state.changed_files) || state.changed_files.some((file) => !isStr(file))) {
+    fail(`${name}.changed_files MUST be an array of strings (SPEC §11.2)`);
+    ok = false;
+  }
+  if (ok) {
+    pass(`${name}: repository state is well-formed (${state.changed_files.length} changed file(s))`);
+  }
 }
 
 /**
