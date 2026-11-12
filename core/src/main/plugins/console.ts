@@ -33,8 +33,7 @@ export async function collectConsoleOutput(
     ])
     if (timer) clearTimeout(timer)
     if (typeof source !== 'string' || source.length === 0) return null
-    // Bound intermediate copies as well as persisted bytes; output beyond this
-    // tail cannot survive the final 100-line/256-KiB payload contract.
+    // Bound the retained input and any look-behind copies as well as persisted bytes.
     const inputLimited = source.length > CONSOLE_PLUGIN_MAX_BYTES
     let sourceStart = inputLimited ? source.length - CONSOLE_PLUGIN_MAX_BYTES : 0
     if (sourceStart > 0 && source.charCodeAt(sourceStart) >= 0xdc00
@@ -42,13 +41,28 @@ export async function collectConsoleOutput(
       sourceStart += 1
     }
     let boundedSource = source.slice(sourceStart)
-    if (sourceStart > 0) {
-      // The leading characters may begin in the middle of a credential assignment.
-      // Drop that incomplete line so redaction never sees a secret without its key.
+    if (sourceStart > 0 && source[sourceStart - 1] !== '\n') {
+      // Drop only an incomplete leading line so redaction never sees a
+      // credential value without its key.
       const firstLineBreak = boundedSource.indexOf('\n')
-      boundedSource = firstLineBreak < 0 ? '' : boundedSource.slice(firstLineBreak + 1)
+      if (firstLineBreak < 0) return null
+      boundedSource = boundedSource.slice(firstLineBreak + 1)
+      sourceStart += firstLineBreak + 1
     }
-    const sanitized = redactSecrets(boundedSource)
+    // An assignment or Bearer prefix can end before the retained row, with
+    // whitespace (including newlines) between the key and its value. Sanitize
+    // with bounded look-behind, then remove only the sanitized context.
+    // A clipped context can lose a credential key or the start of a quoted
+    // value even when it contains non-whitespace. Omit the optional plugin if
+    // the entire prefix cannot fit within the look-behind budget.
+    if (sourceStart > CONSOLE_PLUGIN_MAX_BYTES) return null
+    const context = source.slice(0, sourceStart)
+    const sanitizedContext = redactSecrets(context)
+    const contextualOutput = redactSecrets(context + boundedSource)
+    // A quoted value crossing the boundary can rewrite the context itself.
+    // Omit the optional plugin if that boundary cannot be retained safely.
+    if (!contextualOutput.startsWith(sanitizedContext)) return null
+    const sanitized = contextualOutput.slice(sanitizedContext.length)
     const bytes = Buffer.from(sanitized, 'utf8')
     // Keep the newest bytes. Reserve one byte for the required final newline,
     // then advance past any UTF-8 continuation bytes at the leading boundary.
@@ -57,11 +71,12 @@ export async function collectConsoleOutput(
     let tailStart = Math.max(0, bytes.length - byteBudget)
     while (tailStart < bytes.length && ((bytes[tailStart] ?? 0) & 0xc0) === 0x80) tailStart += 1
     const limited = bytes.subarray(tailStart).toString('utf8')
-    const allLines = limited.split(/\r?\n/u)
+    const allLines = limited.replace(/\r?\n$/u, '').split(/\r?\n/u)
     const lineLimited = allLines.length > CONSOLE_PLUGIN_MAX_LINES
     const lines = allLines.slice(-CONSOLE_PLUGIN_MAX_LINES)
-    const output = lines.join('\n').replace(/\n*$/u, '')
-    if (!output) return null
+    // Omit a blank-only tail without stripping real blank rows from a nonempty log.
+    if (lines.every((line) => line.length === 0)) return null
+    const output = lines.join('\n')
     return {
       output: `${output}\n`,
       source: 'environment',
@@ -115,7 +130,7 @@ export async function writeConsolePlugin(dirPath: string, output: ConsoleOutput)
     await writeAtomicFile(join(pluginDir, 'state.json'), `${JSON.stringify({
       source: output.source,
       truncated: output.truncated,
-      lines: output.output.split('\n').filter(Boolean).length,
+      lines: output.output.replace(/\r?\n$/u, '').split(/\r?\n/u).length,
       bytes: Buffer.byteLength(output.output, 'utf8'),
     }, null, 2)}\n`)
     await writeAtomicFile(join(pluginDir, 'meta.json'), `${JSON.stringify({
