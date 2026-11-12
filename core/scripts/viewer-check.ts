@@ -704,6 +704,230 @@ function pureContractChecks(): void {
   }
 }
 
+/** The first bytes of a PNG whose IHDR declares width x height (#500). */
+function pngHeader(width: number, height: number): Buffer {
+  const head = Buffer.alloc(33)
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(head, 0)
+  head.writeUInt32BE(13, 8)
+  head.write('IHDR', 12, 'latin1')
+  head.writeUInt32BE(width, 16)
+  head.writeUInt32BE(height, 20)
+  head[24] = 8
+  head[25] = 6
+  return head
+}
+
+/** The four documents that print the reference frame, as written on disk. */
+function packDocs(dir: string): { report: string; readme: string; overview: string; annotation: string } {
+  return {
+    report: readFileSync(path.join(dir, 'report.md'), 'utf8'),
+    readme: readFileSync(path.join(dir, 'README.md'), 'utf8'),
+    overview: readFileSync(path.join(dir, 'skills', 'overview.md'), 'utf8'),
+    annotation: readFileSync(path.join(dir, 'skills', 'annotation.md'), 'utf8'),
+  }
+}
+
+/** Every document names `size` as snapshot.png's frame, and none prints 0×0. */
+function docsAgreeOn(
+  docs: ReturnType<typeof packDocs>,
+  size: string,
+  imageCapture: boolean,
+): boolean {
+  return (
+    docs.report.includes(`snapshot.png — captured frame, ${size} `) &&
+    docs.readme.includes(`| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${size} `) &&
+    (imageCapture
+      ? docs.overview.includes(`**Media:** ${size} still image in snapshot.png`)
+      : docs.overview.includes(`**Media:** ${size} snapshot.png`)) &&
+    docs.annotation.includes(`snapshot.png, ${size} pixels`) &&
+    Object.values(docs).every((doc) => !/(^|[^0-9])0×0([^0-9]|$)/u.test(doc))
+  )
+}
+
+// Issue #500: with annotations.json absent, damaged or missing its reference
+// size, every document still names the FOCUSED display's snapshot.png frame —
+// never displays[0], and never 0×0 beside a readable raster (SPEC §8.2).
+async function referenceFrameFallbackChecks(outputDir: string): Promise<void> {
+  const writeHandPack = (name: string, manifest: Manifest, png: Buffer): { id: string; dirPath: string } => {
+    const dirPath = path.join(outputDir, name)
+    mkdirSync(path.join(dirPath, 'skills'), { recursive: true })
+    writeFileSync(path.join(dirPath, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
+    writeFileSync(path.join(dirPath, 'snapshot.png'), png)
+    return { id: manifest.id, dirPath }
+  }
+  const lateDeclaration = (name: string): NonNullable<Manifest['plugins']>[number] => ({
+    name,
+    version: '1.0.0',
+    path: `plugins/${name}/`,
+  })
+  const attachLatePlugin = async (handle: { id: string; dirPath: string }, name: string): Promise<void> => {
+    mkdirSync(path.join(handle.dirPath, 'plugins', name), { recursive: true })
+    writeFileSync(path.join(handle.dirPath, 'plugins', name, 'meta.json'), `{"name":"${name}","version":"1"}`)
+    await addManifestPlugin(handle, lateDeclaration(name), 'en')
+  }
+
+  // Display 1 is a portrait screen the cursor was NOT on; display 2 is focused.
+  const multiManifest = videoManifest({
+    id: 'reference-frame-multi',
+    environment: {
+      os: 'windows',
+      screens: [
+        { width: 1080, height: 1920, scale: 1 },
+        { width: 2560, height: 1440, scale: 1 },
+      ],
+    },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.mp4',
+      replay_duration_ms: 5_000,
+      displays: [
+        {
+          index: 1,
+          focused: false,
+          snapshot: 'snapshot-d1.png',
+          snapshot_width: 1080,
+          snapshot_height: 1920,
+          replay: null,
+          bounds: { x: -1080, y: 0, width: 1080, height: 1920 },
+          scale: 1,
+        },
+        {
+          index: 2,
+          focused: true,
+          snapshot: 'snapshot.png',
+          snapshot_width: 2560,
+          snapshot_height: 1440,
+          replay: 'replay.mp4',
+          replay_duration_ms: 5_000,
+          replay_clock_offset_ms: 0,
+          bounds: { x: 0, y: 0, width: 2560, height: 1440 },
+          scale: 1,
+        },
+      ],
+    },
+  })
+  const multiHandle = writeHandPack('reference-frame-multi', multiManifest, pngHeader(2560, 1440))
+  writeFileSync(path.join(multiHandle.dirPath, 'replay.mp4'), 'REPLAY')
+
+  await refreshPackDocs(multiHandle.dirPath, 'en')
+  const multiOmitted = packDocs(multiHandle.dirPath)
+  check(
+    '#500 multi-display pack without annotations.json: every document names the focused display 2560×1440',
+    docsAgreeOn(multiOmitted, '2560×1440', false) &&
+      !multiOmitted.report.includes('captured frame, 1080×1920') &&
+      !multiOmitted.annotation.includes('snapshot.png, 1080×1920'),
+  )
+
+  for (const [label, json] of [
+    ['zero', { reference_width: 0, reference_height: 0, annotations: [] }],
+    ['negative', { reference_width: -1080, reference_height: -1920, annotations: [] }],
+    ['non-numeric', { reference_width: '1080', reference_height: null, annotations: [] }],
+    ['missing', { annotations: [] }],
+  ] as const) {
+    writeFileSync(path.join(multiHandle.dirPath, 'annotations.json'), JSON.stringify(json), 'utf8')
+    await refreshPackDocs(multiHandle.dirPath, 'en')
+    const safe = await readAnnotationsSafe(multiHandle.dirPath, multiManifest)
+    check(
+      `#500 multi-display pack with ${label} reference size falls back to the focused display`,
+      safe.reference_width === 2560 &&
+        safe.reference_height === 1440 &&
+        docsAgreeOn(packDocs(multiHandle.dirPath), '2560×1440', false),
+    )
+  }
+
+  writeFileSync(path.join(multiHandle.dirPath, 'annotations.json'), '{"reference_width": [broken', 'utf8')
+  await refreshPackDocs(multiHandle.dirPath, 'en')
+  check(
+    '#500 multi-display pack with damaged annotations.json names the focused display',
+    docsAgreeOn(packDocs(multiHandle.dirPath), '2560×1440', false),
+  )
+
+  rmSync(path.join(multiHandle.dirPath, 'annotations.json'), { force: true })
+  await attachLatePlugin(multiHandle, 'late-reference-multi')
+  check(
+    '#500 late plugin on a multi-display pack without annotations.json keeps the focused display size',
+    docsAgreeOn(packDocs(multiHandle.dirPath), '2560×1440', false),
+  )
+
+  // A positive stated size is kept as written, even where it differs.
+  writeFileSync(
+    path.join(multiHandle.dirPath, 'annotations.json'),
+    JSON.stringify({ reference_width: 1280, reference_height: 720, annotations: [] }),
+    'utf8',
+  )
+  const statedSafe = await readAnnotationsSafe(multiHandle.dirPath, multiManifest)
+  await refreshPackDocs(multiHandle.dirPath, 'en')
+  check(
+    '#500 a positive stated reference size is preserved, not replaced',
+    statedSafe.reference_width === 1280 &&
+      statedSafe.reference_height === 720 &&
+      docsAgreeOn(packDocs(multiHandle.dirPath), '1280×720', false),
+  )
+
+  // An image pack declares no displays (SPEC §5.6): the raster's own header
+  // is the only statement of its size.
+  const imageManifest = videoManifest({
+    id: 'reference-frame-image',
+    capture_kind: 'image',
+    media: { snapshot: 'snapshot.png', replay: null, image_scope: 'region' },
+  })
+  delete imageManifest.media.replay_duration_ms
+  const imageHandle = writeHandPack('reference-frame-image', imageManifest, pngHeader(1366, 768))
+  await refreshPackDocs(imageHandle.dirPath, 'en')
+  const safeImage = await readAnnotationsSafe(imageHandle.dirPath, imageManifest)
+  check(
+    '#500 image pack without annotations.json reads snapshot.png 1366×768 instead of 0×0',
+    safeImage.reference_width === 1366 &&
+      safeImage.reference_height === 768 &&
+      docsAgreeOn(packDocs(imageHandle.dirPath), '1366×768', true),
+  )
+  await attachLatePlugin(imageHandle, 'late-reference-image')
+  check(
+    '#500 late plugin on an image pack without annotations.json keeps snapshot.png 1366×768',
+    docsAgreeOn(packDocs(imageHandle.dirPath), '1366×768', true),
+  )
+  writeFileSync(
+    path.join(imageHandle.dirPath, 'annotations.json'),
+    JSON.stringify({ reference_width: 0, reference_height: -1, annotations: [] }),
+    'utf8',
+  )
+  await refreshPackDocs(imageHandle.dirPath, 'en')
+  check(
+    '#500 image pack with a zero/negative reference size reads snapshot.png instead',
+    docsAgreeOn(packDocs(imageHandle.dirPath), '1366×768', true),
+  )
+
+  // The pure builders apply the same rule to an in-memory file (NaN included)
+  // and a pre-0.7.0 entry that states no snapshot size (bounds × scale).
+  const nanFile = { reference_width: Number.NaN, reference_height: Number.NaN, annotations: [] }
+  const nanSkills = buildSkills(multiManifest, nanFile, timeline(), 'en', false)
+  check(
+    '#500 builders replace a NaN reference size with the focused display',
+    buildReport(multiManifest, nanFile, 'en').includes('captured frame, 2560×1440 ') &&
+      buildReadme(multiManifest, nanFile, 'en').includes('The captured frame, 2560×1440 ') &&
+      nanSkills.overview.includes('**Media:** 2560×1440 snapshot.png') &&
+      nanSkills.annotation.includes('snapshot.png, 2560×1440 pixels'),
+  )
+  const legacyManifest = videoManifest({
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.mp4',
+      replay_duration_ms: 5_000,
+      displays: (multiManifest.media.displays ?? []).map((d) =>
+        d.focused
+          ? { ...d, snapshot_width: 0, snapshot_height: 0, bounds: { x: 0, y: 0, width: 1707, height: 960 }, scale: 1.5 }
+          : d,
+      ),
+    },
+  })
+  check(
+    '#500 builders derive a legacy focused entry from bounds × scale, not displays[0]',
+    buildReport(legacyManifest, { annotations: [] } as unknown as AnnotationsFile, 'en').includes(
+      'captured frame, 2561×1440 ',
+    ),
+  )
+}
+
 async function writerIntegrationChecks(): Promise<void> {
   console.log('\nWRITER / REGENERATION CONTRACT')
   const outputDir = mkdtempSync(path.join(tmpdir(), 'capturepack-viewer-check-'))
@@ -1385,7 +1609,8 @@ async function writerIntegrationChecks(): Promise<void> {
     const safeDimensionsAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), 1920, 1080)
     check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
     const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
-    check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    const lateMalformedFocused = manifestAfterLateMalformedAnn.media.displays?.find((d) => d.focused)
+    check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (lateMalformedFocused?.snapshot_width ?? 0) && safeManifestAnn.reference_height === (lateMalformedFocused?.snapshot_height ?? 0) && safeManifestAnn.annotations.length === 0)
     const safeOmittedAnn = await readAnnotationsSafe(handle.dirPath)
     check('readAnnotationsSafe preserves dimensions and defaults annotations when annotations array is omitted', safeOmittedAnn.reference_width === 1920 && safeOmittedAnn.reference_height === 1080 && safeOmittedAnn.annotations.length === 0)
     writeFileSync(
@@ -1399,6 +1624,8 @@ async function writerIntegrationChecks(): Promise<void> {
     )
     const safeValidAnn = await readAnnotationsSafe(handle.dirPath)
     check('readAnnotationsSafe preserves valid annotations', safeValidAnn.annotations.length === 1 && safeValidAnn.annotations[0]?.annotation_id === 'ann_safe_check')
+
+    await referenceFrameFallbackChecks(outputDir)
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))

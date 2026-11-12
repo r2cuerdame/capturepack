@@ -27,6 +27,7 @@ import {
   lifetimeLabel,
   packFocusedDisplay,
   pluginFiles,
+  referenceFrameSize,
 } from './report'
 
 const px = (n: number): number => Math.round(n)
@@ -90,14 +91,7 @@ export function buildReadme(
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -268,14 +262,7 @@ function buildOverviewSkill(
   renderPending: boolean,
 ): string {
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -503,14 +490,7 @@ function buildAnnotationSkill(
   t: TranslateFn,
 ): string {
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const numbers = computeDisplayNumbers(annotations)
   const multi = isMultiDisplay(manifest)

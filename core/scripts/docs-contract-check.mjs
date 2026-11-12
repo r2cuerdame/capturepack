@@ -1211,6 +1211,31 @@ console.log('\nSPEC §4, §8, §14 define annotations.json as OPTIONAL')
       /await readAnnotationsSafe\(\s*dirPath/u.test(exporterSource),
     'exporter.ts addManifestPlugin or refreshPackDocs does not use readAnnotationsSafe',
   )
+  // Issue #500: the reference frame is the FOCUSED display's snapshot.png
+  // (SPEC §8.2). displays[0] is another screen whenever the cursor was not on
+  // the first one, and an image pack declares no displays at all.
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  const packdocsSource = readFileSync(join(CORE, 'src', 'main', 'packdocs.ts'), 'utf8')
+  check(
+    'reference-size fallbacks never read displays[0] (Issue #500)',
+    ![exporterSource, reportSource, packdocsSource].some((source) =>
+      /displays\?\.\[0\]\?\.snapshot_(width|height)/u.test(source),
+    ),
+    'a document or readAnnotationsSafe still falls back to displays[0] instead of the focused display',
+  )
+  check(
+    'addManifestPlugin and refreshPackDocs hand readAnnotationsSafe the manifest (Issue #500)',
+    /await readAnnotationsSafe\(\s*handle\.dirPath,\s*nextManifest\s*\)/u.test(exporterSource) &&
+      /await readAnnotationsSafe\(\s*dirPath,\s*manifest\s*\)/u.test(exporterSource) &&
+      /pngPixelSize\(join\(dirPath, packSnapshotName\(/u.test(exporterSource),
+    'readAnnotationsSafe callers no longer pass the manifest, or it no longer measures snapshot.png',
+  )
+  check(
+    'every document prints the shared referenceFrameSize (Issue #500)',
+    (packdocsSource.match(/referenceFrameSize\(manifest, annotationsFile\)/gu) ?? []).length === 3 &&
+      reportSource.includes('= referenceFrameSize(manifest, annotationsFile)'),
+    'README.md, report.md or a skill computes its own reference size',
+  )
 }
 
 console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotationsFile.annotations is omitted or empty (Issue #207)')
