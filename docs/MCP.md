@@ -220,15 +220,18 @@ pack as described above.
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
 | `capturepack_frame` | `display?`, `time_s?`, `id?` | An image of the selected 1-based display (focused by default): the **nearest annotated keyframe** to `time_s` when that display has them, else its snapshot — **see below** |
 | `capturepack_replay` | `id?` | Replay **metadata** only: filename, duration_ms, size_bytes — never raw video bytes |
-| `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + the control trees the dump reached); DOM-ish data lives under a chrome plugin dir when present |
-| `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
+| `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — JSON files are parsed and `.log` files are returned as bounded text. On Windows this usually includes `windows-uia`; console packs also expose `output.log` and parsed `state.json` |
+| `capturepack_find_dom` | `selector`, `id?` | Case-insensitive plugin/DOM entries matching the selector; `.log` hits include a 1-based line number |
 | `capturepack_windows` | `id?` | Window/focus timeline events — including the observed `input.window.*` ones — plus window-related plugin metadata (the `windows-uia` window list), when present |
-| `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, video timeline when present, plugin JSON, and manifest title/note — hits grouped by source |
+| `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, video timeline when present, plugin JSON and `.log` lines, and manifest title/note — hits grouped by source |
 | `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table + plugin inventory, plus the timeline only for video packs. The timeline section lists at most 100 events and then states how many were omitted — use `capturepack_timeline` for the full log. Returned as text; **writes no files** |
 
-Plugin metadata is exposed generically — the MCP server never special-cases plugin kinds.
-If a pack has no plugin data, the plugin-reading tools return empty results with a clear
-message; that is expected today.
+Plugin metadata is exposed generically. JSON payloads are parsed as JSON; `.log` text is
+returned inline only up to the existing 100,000-character limit, and searchable text files
+retain the existing 20,000,000-character per-file search bound. Log search results identify
+their 1-based line. Missing files, unreadable files, and malformed JSON are reported as
+file-level errors or warnings so another console payload remains available. If a pack has no
+plugin data, the plugin-reading tools return empty results with a clear message.
 
 ### `input.*` timeline events (format 0.8.0)
 
