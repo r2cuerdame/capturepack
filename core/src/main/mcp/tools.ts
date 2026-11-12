@@ -577,7 +577,8 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'DOM / plugin metadata',
       description:
-        'Generic plugin metadata of a CapturePack: every JSON file under plugins/*/ parsed and ' +
+        'Generic plugin metadata of a CapturePack: JSON files and bounded .log text files under ' +
+        'plugins/*/ are returned as-is. ' +
         'returned as-is. On Windows the "windows-uia" plugin is the usual one: elements.json holds ' +
         'the top-level window list and the UI Automation control trees of the windows the dump ' +
         'reached at the capture instant (name, control_type, automation_id, class_name, bounds in ' +
@@ -621,10 +622,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Find in DOM / plugin metadata',
       description:
         'Case-insensitive substring search for a CSS selector, element id, text or any string ' +
-        'inside the plugin JSON metadata of a CapturePack (plugins/*/*.json). Returns each match ' +
-        'with its plugin, file and JSON path.',
+        'inside plugin JSON metadata or .log text of a CapturePack (plugins/*/*.{json,log}). ' +
+        'Log matches report a 1-based line number.',
       inputSchema: {
-        selector: z.string().min(1).describe('Substring to look for (e.g. "#save", "button", "login") — matched case-insensitively against every string value in the plugin JSON.'),
+        selector: z.string().min(1).describe('Substring to look for (e.g. "#save", "button", "login") — matched case-insensitively against plugin JSON strings and log lines.'),
         ...idArg,
       },
     },
@@ -691,7 +692,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Search a pack',
       description:
         'Case-insensitive substring search across everything in a CapturePack: report.md lines, ' +
-        'annotation texts, video timeline events when present, plugin JSON metadata, and the ' +
+        'annotation texts, video timeline events when present, plugin JSON metadata and log lines, and the ' +
         'manifest title/note. Returns hits grouped by source.',
       inputSchema: {
         keyword: z.string().min(1).describe('Substring to search for (case-insensitive).'),
@@ -1001,16 +1002,17 @@ function annotationLifetime(a: Annotation): string {
   return `${a.start_ms}–${a.end_ms} ms`
 }
 
-interface PluginJsonFile {
+interface PluginFileContent {
   file: string
   json?: unknown
+  text?: string
   error?: string
 }
 
 interface PluginJsonContents {
   name: string
   version: string | null
-  files: PluginJsonFile[]
+  files: PluginFileContent[]
 }
 
 interface PluginJsonSearchMatch {
@@ -1036,15 +1038,24 @@ function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
   return pack.plugins().map((plugin) => ({
     name: plugin.name,
     version: plugin.version,
-    files: plugin.files.map((file): PluginJsonFile => {
-      if (!file.toLowerCase().endsWith('.json')) return { file, error: 'not a JSON file (listed only)' }
-      const text = pack.readText(file)
-      if (text === null) return { file, error: 'unreadable' }
-      if (text.length > MAX_PLUGIN_FILE_CHARS) return { file, error: `file too large to inline (${text.length} chars)` }
+    files: plugin.files.map((file): PluginFileContent => {
+      const isJson = file.toLowerCase().endsWith('.json')
+      const isLog = file.toLowerCase().endsWith('.log')
+      if (!isJson && !isLog) return { file, error: 'not a supported text file (listed only)' }
       try {
-        return { file, json: JSON.parse(stripUtf8Bom(text)) as unknown }
-      } catch (err) {
-        return { file, error: `invalid JSON: ${errorMessage(err)}` }
+        const text = pack.readText(file)
+        if (text === null) return { file, error: 'unreadable' }
+        if (text.length > MAX_PLUGIN_FILE_CHARS) {
+          return { file, error: `file too large to inline (${text.length} chars)` }
+        }
+        if (isLog) return { file, text }
+        try {
+          return { file, json: JSON.parse(stripUtf8Bom(text)) as unknown }
+        } catch (err) {
+          return { file, error: `invalid JSON: ${errorMessage(err)}` }
+        }
+      } catch {
+        return { file, error: 'unreadable' }
       }
     }),
   }))
@@ -1061,13 +1072,20 @@ function pluginJsonSearch(
 
   outer: for (const plugin of pack.plugins()) {
     for (const file of plugin.files) {
-      if (!file.toLowerCase().endsWith('.json')) continue
+      const isJson = file.toLowerCase().endsWith('.json')
+      const isLog = file.toLowerCase().endsWith('.log')
+      if (!isJson && !isLog) continue
       if (matches.length >= budget) {
         truncated = true
         break outer
       }
 
-      const text = pack.readText(file)
+      let text: string | null
+      try {
+        text = pack.readText(file)
+      } catch {
+        text = null
+      }
       if (text === null) {
         warnings.push({ plugin: plugin.name, file, error: 'unreadable' })
         continue
@@ -1078,6 +1096,23 @@ function pluginJsonSearch(
           file,
           error: `file too large to search (${text.length} chars; limit ${MAX_PLUGIN_SEARCH_FILE_CHARS})`,
         })
+        continue
+      }
+
+      if (isLog) {
+        for (const [index, line] of text.split(/\r?\n/u).entries()) {
+          if (!predicate(line)) continue
+          if (matches.length >= budget) {
+            truncated = true
+            break outer
+          }
+          matches.push({
+            plugin: plugin.name,
+            file,
+            json_path: `line[${index + 1}]`,
+            value: cap(line, 300),
+          })
+        }
         continue
       }
 

@@ -274,6 +274,8 @@ export function pluginFiles(manifest: Manifest): Array<{ name: string; what: str
       what:
         plugin.name === 'git'
           ? 'git repository state at capture time'
+          : plugin.name === 'console'
+            ? 'console output log and execution state at capture time'
           : `${plugin.name} plugin metadata at capture time`,
     }))
 }
