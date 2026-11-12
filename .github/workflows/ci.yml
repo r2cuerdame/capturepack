@@ -85,10 +85,11 @@ jobs:
         run: npm run build
 
       # A capture, unattended, through the very entry point the global hotkey
-      # uses. `--capture-now=6` is not padding: the replay buffer and the surface
-      # ring have to be FULL of something before there is anything to record,
-      # and capturing the instant the app starts would assert on a fraction of a
-      # second. The exit code is the verdict — 0 saved, 20 the flow saved
+      # uses. `--capture-now=6` counts six seconds from confirmed recording,
+      # not app launch: run 43169244932 captured before readiness and produced
+      # only 537 ms. Recorder recovery restarts the full interval. Keep the
+      # one-second assertion floor so short captures remain visible.
+      # The exit code is the verdict — 0 saved, 20 the flow saved
       # nothing, 21 it never finished (see src/main/saveNow.ts).
       - name: Capture a pack, with nobody at the machine
         run: |

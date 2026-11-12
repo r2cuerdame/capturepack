@@ -19,18 +19,24 @@ export function scheduleCaptureWhenRecording<State extends CaptureReadiness>(
 ): () => void {
   let timer: Timer | null = null
   let disposed = false
+  let countdown = 0
   let unsubscribe = (): void => {}
 
   const onState = (state: State): void => {
     if (disposed) return
     if (state.status !== 'recording') {
+      countdown += 1
       if (timer !== null) cancel(timer)
       timer = null
       return
     }
     if (timer !== null) return
 
+    const currentCountdown = ++countdown
     timer = schedule(() => {
+      // A cancelled callback may already be queued. Recovery owns a new full
+      // interval; an old callback must neither capture nor clear its timer.
+      if (disposed || currentCountdown !== countdown) return
       timer = null
       if (disposed || getState().status !== 'recording') return
       disposed = true
