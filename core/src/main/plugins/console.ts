@@ -42,9 +42,9 @@ export async function collectConsoleOutput(
       sourceStart += 1
     }
     let boundedSource = source.slice(sourceStart)
-    if (sourceStart > 0) {
-      // The leading characters may begin in the middle of a credential assignment.
-      // Drop that incomplete line so redaction never sees a secret without its key.
+    if (sourceStart > 0 && source[sourceStart - 1] !== '\n') {
+      // Drop only an incomplete leading line so redaction never sees a
+      // credential value without its key.
       const firstLineBreak = boundedSource.indexOf('\n')
       boundedSource = firstLineBreak < 0 ? '' : boundedSource.slice(firstLineBreak + 1)
     }

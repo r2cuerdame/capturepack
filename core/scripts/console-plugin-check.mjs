@@ -143,6 +143,49 @@ try {
     cutCredential !== null && !cutCredential.output.includes('hunter2')
       && cutCredential.output.endsWith('\n') && cutCredential.truncated)
 
+  const inputLimit = 256 * 1024
+  const inputBoundaryCases = []
+  for (const [endingName, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    const alignedTail = ['first', 'password=' + 'x'.repeat(inputLimit - 18 - 3 * ending.length),
+      'last'].join(ending) + ending
+    const partialTail = ['partial-token', 'first',
+      'password=' + 'x'.repeat(inputLimit - 31 - 4 * ending.length), 'last'].join(ending) + ending
+    assert.equal(alignedTail.length, inputLimit)
+    assert.equal(partialTail.length, inputLimit)
+    inputBoundaryCases.push(
+      { name: 'a complete first row at the input boundary (' + endingName + ')',
+        input: 'old' + ending + alignedTail },
+      { name: 'only complete rows after a partial credential (' + endingName + ')',
+        input: 'password=discarded-' + partialTail },
+    )
+  }
+  for (const [boundaryName, prefix, remainingBreak] of [
+    ['before CR', 'password=discarded-token', '\r\n'],
+    ['between CR and LF', 'password=discarded-token\r', '\n'],
+  ]) {
+    const tail = remainingBreak + ['first',
+      'password=' + 'x'.repeat(inputLimit - 24 - remainingBreak.length), 'last'].join('\r\n') + '\r\n'
+    assert.equal(tail.length, inputLimit)
+    inputBoundaryCases.push({ name: 'complete rows when input is cut ' + boundaryName,
+      input: prefix + tail })
+  }
+  const expectedBoundaryLog = 'first\npassword=[REDACTED]\nlast\n'
+  for (const [index, fixture] of inputBoundaryCases.entries()) {
+    const collected = await collectConsoleOutput(async () => fixture.input)
+    const caseRoot = path.join(root, 'input-boundary-' + index)
+    await mkdir(caseRoot)
+    const published = await tryWriteConsolePlugin(caseRoot, collected)
+    const caseDir = path.join(caseRoot, 'plugins', 'console')
+    const storedLog = published ? await readFile(path.join(caseDir, 'output.log'), 'utf8') : null
+    const storedState = published
+      ? JSON.parse(await readFile(path.join(caseDir, 'state.json'), 'utf8')) : null
+    check('collection and publication preserve ' + fixture.name,
+      published && collected?.output === expectedBoundaryLog && collected.truncated
+        && storedLog === expectedBoundaryLog && storedState.lines === 3 && storedState.truncated
+        && storedState.bytes === Buffer.byteLength(expectedBoundaryLog, 'utf8')
+        && storedState.bytes <= inputLimit)
+  }
+
   const absent = await collectConsoleOutput(async () => null)
   const denied = await collectConsoleOutput(async () => { throw new Error('access denied') })
   const absentRoot = path.join(root, 'absent')
