@@ -33,8 +33,7 @@ export async function collectConsoleOutput(
     ])
     if (timer) clearTimeout(timer)
     if (typeof source !== 'string' || source.length === 0) return null
-    // Bound intermediate copies as well as persisted bytes; output beyond this
-    // tail cannot survive the final 100-line/256-KiB payload contract.
+    // Bound the retained input and any look-behind copies as well as persisted bytes.
     const inputLimited = source.length > CONSOLE_PLUGIN_MAX_BYTES
     let sourceStart = inputLimited ? source.length - CONSOLE_PLUGIN_MAX_BYTES : 0
     if (sourceStart > 0 && source.charCodeAt(sourceStart) >= 0xdc00
@@ -46,9 +45,22 @@ export async function collectConsoleOutput(
       // Drop only an incomplete leading line so redaction never sees a
       // credential value without its key.
       const firstLineBreak = boundedSource.indexOf('\n')
-      boundedSource = firstLineBreak < 0 ? '' : boundedSource.slice(firstLineBreak + 1)
+      if (firstLineBreak < 0) return null
+      boundedSource = boundedSource.slice(firstLineBreak + 1)
+      sourceStart += firstLineBreak + 1
     }
-    const sanitized = redactSecrets(boundedSource)
+    // An assignment or Bearer prefix can end before the retained row, with
+    // whitespace (including newlines) between the key and its value. Sanitize
+    // with bounded look-behind, then remove only the sanitized context.
+    const contextStart = Math.max(0, sourceStart - CONSOLE_PLUGIN_MAX_BYTES)
+    const context = source.slice(contextStart, sourceStart)
+    if (contextStart > 0 && !/\S/u.test(context)) return null
+    const sanitizedContext = redactSecrets(context)
+    const contextualOutput = redactSecrets(context + boundedSource)
+    // A quoted value crossing the boundary can rewrite the context itself.
+    // Omit the optional plugin if that boundary cannot be retained safely.
+    if (!contextualOutput.startsWith(sanitizedContext)) return null
+    const sanitized = contextualOutput.slice(sanitizedContext.length)
     const bytes = Buffer.from(sanitized, 'utf8')
     // Keep the newest bytes. Reserve one byte for the required final newline,
     // then advance past any UTF-8 continuation bytes at the leading boundary.
