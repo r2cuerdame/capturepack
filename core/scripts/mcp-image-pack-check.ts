@@ -449,7 +449,7 @@ async function main(): Promise<void> {
       plugins: [consolePluginDeclaration()],
     }),
   )
-  const consoleOutput = 'Build started\nTypeError: CapturePackConsoleSignal was not defined\nBuild exited with code 1\n'
+  const consoleOutput = 'Build started\n\nTypeError: CapturePackConsoleSignal was not defined\nBuild exited with code 1\n'
   await writeConsolePlugin(consolePackDir, {
     output: consoleOutput,
     source: 'environment',
@@ -532,6 +532,12 @@ async function main(): Promise<void> {
   registerTools(server as never, store as never, { logRequests: false })
 
   console.log('SUMMARY')
+  const domDescription = definitions.get('capturepack_dom')?.description ?? ''
+  check(
+    domDescription.includes('returned as-is. On Windows') &&
+      !domDescription.includes('returned as-is. returned as-is.'),
+    'capturepack_dom description does not repeat the returned-as-is phrase',
+  )
   const latest = await callbacks.get('capturepack_latest')?.({})
   check(latest !== undefined, 'capturepack_latest is registered')
   const summary = textJson(latest as ToolResult)
@@ -959,7 +965,7 @@ async function main(): Promise<void> {
     JSON.stringify(consoleDomFiles[2]?.json) === JSON.stringify({
       source: 'environment',
       truncated: false,
-      lines: 3,
+      lines: 4,
       bytes: Buffer.byteLength(consoleOutput, 'utf8'),
     }),
     'capturepack_dom parses console state.json',
@@ -982,7 +988,7 @@ async function main(): Promise<void> {
       consoleSearchHits.length === 1 &&
       consoleSearchHits[0]?.plugin === 'console' &&
       consoleSearchHits[0]?.file === 'plugins/console/output.log' &&
-      consoleSearchHits[0]?.json_path === 'line[2]' &&
+      consoleSearchHits[0]?.json_path === 'line[3]' &&
       consoleSearchHits[0]?.value === 'TypeError: CapturePackConsoleSignal was not defined',
     'capturepack_search finds console log text case-insensitively with its line number',
   )
@@ -994,7 +1000,7 @@ async function main(): Promise<void> {
     consoleFindDom.count === 1 &&
       consoleFindMatches[0]?.plugin === 'console' &&
       consoleFindMatches[0]?.file === 'plugins/console/output.log' &&
-      consoleFindMatches[0]?.json_path === 'line[2]',
+      consoleFindMatches[0]?.json_path === 'line[3]',
     'capturepack_find_dom searches console log lines without a failure',
   )
   const emptyConsoleDom = await callbacks.get('capturepack_dom')?.({ id: emptyConsolePack.id })

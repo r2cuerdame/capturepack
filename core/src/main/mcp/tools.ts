@@ -578,8 +578,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'DOM / plugin metadata',
       description:
         'Generic plugin metadata of a CapturePack: JSON files and bounded .log text files under ' +
-        'plugins/*/ are returned as-is. ' +
-        'returned as-is. On Windows the "windows-uia" plugin is the usual one: elements.json holds ' +
+        'plugins/*/ are returned as-is. On Windows the "windows-uia" plugin is the usual one: elements.json holds ' +
         'the top-level window list and the UI Automation control trees of the windows the dump ' +
         'reached at the capture instant (name, control_type, automation_id, class_name, bounds in ' +
         'SNAPSHOT pixel coordinates, depth, and window = the z of the owning window) — that is ' +
@@ -1100,7 +1099,7 @@ function pluginJsonSearch(
       }
 
       if (isLog) {
-        for (const [index, line] of text.split(/\r?\n/u).entries()) {
+        for (const [index, line] of text.replace(/\r?\n$/u, '').split(/\r?\n/u).entries()) {
           if (!predicate(line)) continue
           if (matches.length >= budget) {
             truncated = true
