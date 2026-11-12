@@ -61,6 +61,7 @@ import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
 import { collectGitState, gitPluginDeclaration, tryWriteGitPlugin } from './plugins/git'
+import { collectConsoleOutput, consolePluginDeclaration, tryWriteConsolePlugin } from './plugins/console'
 import { copyTextToClipboard } from './clipboard'
 import { isShareBundleArchive } from './packArchive'
 import {
@@ -1505,6 +1506,18 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     } catch {
       // Optional plugin failure must not fail the capture.
     }
+    let consoleDeclaration: NonNullable<Manifest['plugins']>[number] | undefined
+    try {
+      // The supplied console snapshot is bounded to 100 ms and optional. The
+      // writer publishes metadata last, so the declaration follows only a
+      // complete payload and every failure remains outside capture success.
+      const consoleOutput = await collectConsoleOutput()
+      if (await tryWriteConsolePlugin(dirPath, consoleOutput)) {
+        consoleDeclaration = consolePluginDeclaration()
+      }
+    } catch {
+      // Optional console context must never fail the capture.
+    }
     // Optional context lands before the manifest that declares it. Its writer
     // swallows every failure, so save-first remains a media-first guarantee.
     const contextDisposition = await reconcileWindowsContextPlugin(
@@ -1522,6 +1535,9 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       dirPath,
       imageCapture ? undefined : input.displays,
     )
+    const capturePlugins = [gitDeclaration, consoleDeclaration].filter(
+      (plugin): plugin is NonNullable<Manifest['plugins']>[number] => plugin !== undefined,
+    )
     const manifest = buildManifest({
       id,
       createdAt: input.capturedAt,
@@ -1538,7 +1554,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       replayDurationMs: input.replayDurationMs,
       snapshotTMs: null,
       plugins: withWindowsContextPlugin(
-        gitDeclaration ? [gitDeclaration] : undefined,
+        capturePlugins.length > 0 ? capturePlugins : undefined,
         contextDisposition,
       ),
       displays: writtenDisplays,
