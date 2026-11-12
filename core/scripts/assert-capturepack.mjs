@@ -320,6 +320,19 @@ export function displayScreenFindings(manifest) {
     ok: focused.length === 1,
     text: `media.displays declares exactly one focused display (found ${focused.length})`,
   })
+  // Two entries naming one index means two rasters claim one monitor and
+  // another monitor has no entry at all. Every per-entry check below would
+  // pass for both, so the count is asserted here rather than left to the
+  // validator, which a caller may have switched off (SPEC §5.6).
+  const indices = displays.map((display) => display.index)
+  const repeated = [...new Set(indices.filter((index, at) => indices.indexOf(index) !== at))]
+  findings.push({
+    ok: repeated.length === 0 && displays.length <= screens.length,
+    text:
+      `media.displays declares ${displays.length} display(s) with distinct indices against ` +
+      `${screens.length} environment.screens entr${screens.length === 1 ? 'y' : 'ies'}` +
+      (repeated.length === 0 ? '' : ` (index ${repeated.map((index) => JSON.stringify(index)).join(', ')} repeated)`),
+  })
   for (const display of displays) {
     const index = display.index
     const screen = Number.isInteger(index) && index >= 1 ? screens[index - 1] : undefined

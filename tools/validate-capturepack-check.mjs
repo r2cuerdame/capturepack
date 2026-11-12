@@ -21,6 +21,8 @@ const imagePack = join(temporaryRoot, 'region-image.capturepack')
 const viewerPack = join(temporaryRoot, 'offline-viewer.capturepack')
 const uiaDisplayPack = join(temporaryRoot, 'uia-display.capturepack')
 const gitPack = join(temporaryRoot, 'git-plugin.capturepack')
+const genericPluginPack = join(temporaryRoot, 'generic-plugin.capturepack')
+const pluginRulesPack = join(temporaryRoot, 'plugin-rules.capturepack')
 let checks = 0
 
 function check(message, condition) {
@@ -38,6 +40,11 @@ function runValidator(target = pack) {
     cwd: repositoryRoot,
     encoding: 'utf8',
   })
+}
+
+function failures(result) {
+  const summary = /result: (?:VALID|INVALID) — \d+ passed, (\d+) failed/.exec(result.stdout)
+  return summary ? Number(summary[1]) : Number.NaN
 }
 
 function pngHeader(width, height) {
@@ -170,6 +177,146 @@ try {
         && result.stdout.includes(expected)
         && result.stdout.includes('result: INVALID'))
   }
+
+  // UNDECLARED PLUGIN DIRECTORIES AND DECLARATION PATHS (SPEC §5.4, §11.1, #472).
+  //
+  // Readers MUST ignore a plugins/ directory the manifest does not declare, so
+  // one is a note and never a failure — whatever it holds and whatever it is
+  // called. A declaration is held to the opposite standard: its path MUST be
+  // exactly "plugins/<name>/", a name is declared once, and a declaration that
+  // breaks either rule does not count as declaring the directory.
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), pluginRulesPack, { recursive: true })
+  const pluginRulesManifestFile = join(pluginRulesPack, 'manifest.json')
+  const pluginRulesManifest = JSON.parse(readFileSync(pluginRulesManifestFile, 'utf8'))
+  const undeclaredNote = (name) => `NOTE  plugins/${name}/: not declared in manifest.plugins — ignored`
+  const consoleLogDeclared = 'PASS  plugins/console-log/: declared in manifest and meta.json matches (console-log 0.1.0)'
+  mkdirSync(join(pluginRulesPack, 'plugins', 'console-log'), { recursive: true })
+  writeJson(join(pluginRulesPack, 'plugins', 'console-log', 'meta.json'), {
+    name: 'console-log',
+    version: '0.1.0',
+  })
+  writeFileSync(join(pluginRulesPack, 'plugins', 'console-log', 'output.log'), 'GET /checkout 200\n', 'utf8')
+  const undeclaredPayload = runValidator(pluginRulesPack)
+  check('an undeclared plugin directory is VALID and only noted (SPEC §11.1)',
+    undeclaredPayload.status === 0
+      && undeclaredPayload.stdout.includes('result: VALID')
+      && failures(undeclaredPayload) === 0
+      && undeclaredPayload.stdout.includes(undeclaredNote('console-log')))
+
+  mkdirSync(join(pluginRulesPack, 'plugins', 'scratch'))
+  mkdirSync(join(pluginRulesPack, 'plugins', 'Legacy_Plugin'))
+  writeFileSync(join(pluginRulesPack, 'plugins', 'Legacy_Plugin', 'dump.bin'), Buffer.from([0, 1, 2, 3]))
+  const undeclaredOddities = runValidator(pluginRulesPack)
+  check('an empty or non-conforming undeclared plugin directory is still only noted',
+    undeclaredOddities.status === 0
+      && undeclaredOddities.stdout.includes('result: VALID')
+      && undeclaredOddities.stdout.includes(undeclaredNote('scratch'))
+      && undeclaredOddities.stdout.includes(undeclaredNote('Legacy_Plugin')))
+
+  const consoleLog = { name: 'console-log', version: '0.1.0', path: 'plugins/console-log/' }
+  pluginRulesManifest.plugins = [consoleLog]
+  writeJson(pluginRulesManifestFile, pluginRulesManifest)
+  const declaredBesideUndeclared = runValidator(pluginRulesPack)
+  check('a declared plugin validates while its undeclared siblings are only noted',
+    declaredBesideUndeclared.status === 0
+      && declaredBesideUndeclared.stdout.includes('result: VALID')
+      && declaredBesideUndeclared.stdout.includes(consoleLogDeclared)
+      && !declaredBesideUndeclared.stdout.includes(undeclaredNote('console-log'))
+      && declaredBesideUndeclared.stdout.includes(undeclaredNote('scratch'))
+      && declaredBesideUndeclared.stdout.includes(undeclaredNote('Legacy_Plugin')))
+  rmSync(join(pluginRulesPack, 'plugins', 'scratch'), { recursive: true, force: true })
+  rmSync(join(pluginRulesPack, 'plugins', 'Legacy_Plugin'), { recursive: true, force: true })
+
+  for (const path of [
+    'plugins/console-log',
+    './plugins/console-log/',
+    '/plugins/console-log/',
+    'plugins\\console-log\\',
+    'Plugins/console-log/',
+    'plugins/console-log/meta.json',
+    'plugins/other-plugin/',
+    undefined,
+  ]) {
+    const declaration = { ...consoleLog, path }
+    if (path === undefined) delete declaration.path
+    pluginRulesManifest.plugins = [declaration]
+    writeJson(pluginRulesManifestFile, pluginRulesManifest)
+    const result = runValidator(pluginRulesPack)
+    check(`a plugin declared at path ${JSON.stringify(path)} is rejected (SPEC §5.4)`,
+      result.status === 1
+        && result.stdout.includes('result: INVALID')
+        && result.stdout.includes(`plugins[0].path ${JSON.stringify(path)} MUST be exactly "plugins/console-log/"`)
+        && failures(result) === 1
+        && !result.stdout.includes(consoleLogDeclared)
+        && result.stdout.includes(undeclaredNote('console-log')))
+  }
+
+  for (const [label, second] of [
+    ['an identical second entry', { ...consoleLog }],
+    ['a second entry with another version', { ...consoleLog, version: '0.2.0' }],
+  ]) {
+    pluginRulesManifest.plugins = [consoleLog, second]
+    writeJson(pluginRulesManifestFile, pluginRulesManifest)
+    const result = runValidator(pluginRulesPack)
+    check(`a plugin name declared twice is rejected — ${label} (SPEC §5.4)`,
+      result.status === 1
+        && result.stdout.includes('result: INVALID')
+        && result.stdout.includes('manifest.json: plugins[1]: duplicate plugin name "console-log"')
+        && failures(result) === 1
+        && result.stdout.includes(consoleLogDeclared))
+  }
+
+  // SPEC §11.1 applies to every plugin, not only the plugins with core-owned
+  // payload validators. Keep a generic plugin fixture to pin the directory
+  // and metadata contract independently of the well-known plugins above.
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), genericPluginPack, { recursive: true })
+  const genericManifestFile = join(genericPluginPack, 'manifest.json')
+  const genericManifest = JSON.parse(readFileSync(genericManifestFile, 'utf8'))
+  genericManifest.plugins = [{
+    name: 'example-context',
+    version: '1.2.3',
+    path: 'plugins/example-context/',
+  }]
+  writeJson(genericManifestFile, genericManifest)
+  const genericPluginDir = join(genericPluginPack, 'plugins', 'example-context')
+  mkdirSync(genericPluginDir, { recursive: true })
+  const genericMetaFile = join(genericPluginDir, 'meta.json')
+  writeJson(genericMetaFile, { name: 'example-context', version: '1.2.3' })
+  writeJson(join(genericPluginDir, 'context.json'), { source: 'custom-plugin' })
+
+  const validGenericPlugin = runValidator(genericPluginPack)
+  check('a declared generic plugin directory and matching metadata are VALID',
+    validGenericPlugin.status === 0
+      && validGenericPlugin.stdout.includes('plugins/example-context/: declared in manifest and meta.json matches (example-context 1.2.3)')
+      && validGenericPlugin.stdout.includes('result: VALID'))
+
+  rmSync(genericPluginDir, { recursive: true, force: true })
+  const missingGenericPluginDir = runValidator(genericPluginPack)
+  check('a declared plugin with no payload directory is INVALID',
+    missingGenericPluginDir.status === 1
+      && missingGenericPluginDir.stdout.includes('plugins/example-context/: missing')
+      && missingGenericPluginDir.stdout.includes('result: INVALID'))
+
+  mkdirSync(genericPluginDir, { recursive: true })
+  const missingGenericMeta = runValidator(genericPluginPack)
+  check('a declared plugin directory without meta.json is INVALID',
+    missingGenericMeta.status === 1
+      && missingGenericMeta.stdout.includes('plugins/example-context/meta.json: missing')
+      && missingGenericMeta.stdout.includes('result: INVALID'))
+
+  writeJson(genericMetaFile, { name: 'other-plugin', version: '1.2.3' })
+  const mismatchedGenericName = runValidator(genericPluginPack)
+  check('generic plugin metadata rejects a mismatched name',
+    mismatchedGenericName.status === 1
+      && mismatchedGenericName.stdout.includes('meta.json: name/version MUST equal the manifest declaration')
+      && mismatchedGenericName.stdout.includes('result: INVALID'))
+
+  writeJson(genericMetaFile, { name: 'example-context', version: '1.2.4' })
+  const mismatchedGenericVersion = runValidator(genericPluginPack)
+  check('generic plugin metadata rejects a mismatched version',
+    mismatchedGenericVersion.status === 1
+      && mismatchedGenericVersion.stdout.includes('meta.json: name/version MUST equal the manifest declaration')
+      && mismatchedGenericVersion.stdout.includes('result: INVALID'))
 
   writeFileSync(elementsFile, '{\n', 'utf8')
   const invalidJson = runValidator()

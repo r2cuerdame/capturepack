@@ -281,6 +281,11 @@ export function getRecorderState(): RecorderState {
   return { ...publishedRecorderState }
 }
 
+/** Actual recorder targets, including displays whose recorder has failed. */
+export function getRecorderDisplayIds(): readonly number[] {
+  return [...wantedDisplayIds]
+}
+
 /** Subscribes to actual recorder state changes; returns an unsubscribe handle. */
 export function onRecorderStateChanged(listener: (state: RecorderState) => void): () => void {
   recorderStateListeners.add(listener)

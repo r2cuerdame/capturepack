@@ -358,15 +358,16 @@ a password field renders dots, which is the case the DOM walker already refuses
 - [x] Built-in Windows UI Automation context provider
 - [x] Git plugin: captures repository, branch, commit, dirty state and changed paths
       in the saved pack (`check:git-plugin`)
-- [ ] Console plugin
+- [x] Console plugin: bounded, redacted optional context with `check:console-plugin`
 - [ ] Unreal plugin · Unity plugin
 
 ## Next milestone — 2026-12 (0.6.2 candidate; planning only)
 
 **Goal:** prototype the V2 console context provider without changing the
 five-second capture workflow, and continue the one-month no-manual-reinstall
-observation. This is a milestone plan, not a version release or a claim that
-the observation has passed.
+observation. The console prototype is implemented in source with an explicit
+`CAPTUREPACK_CONSOLE_OUTPUT` input; this remains a milestone plan, not a version
+release or a claim that the observation has passed.
 
 - Preserve the five-second capture workflow: collection has a 100 ms deadline
   and cannot hold capture open beyond it. A supported console produces a
@@ -377,7 +378,7 @@ the observation has passed.
   does not fail saving; collection exceeding 100 ms is abandoned without
   affecting saving; and atomic-write failure leaves no partial declaration or
   temporary file and does not fail saving.
-- Require SPEC validation and all 99 existing automated QA checks to pass with
+- Require SPEC validation and all 100 automated QA checks to pass with
   no regression; preserve the five-second workflow as an independent acceptance
   condition.
 - Start the one-month observation only after a public-release installer
