@@ -22,6 +22,7 @@ import { displayFramesDir, keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
 import type { AuthoredMotionSpace } from '../shared/track'
 import {
+  BACKGROUND_MEDIA_CONCURRENCY,
   BoundedBackgroundMediaQueue,
   copyBufferResponsively,
 } from './backgroundMediaQueue'
@@ -135,7 +136,7 @@ const renderStateListeners = new Set<RenderStateListener>()
 // work, and serializing it with annotated renders prevents a multi-display save
 // from spawning one extra real-time encoder per screen.
 // ---------------------------------------------------------------------------
-const renderQueue = new BoundedBackgroundMediaQueue(1)
+const renderQueue = new BoundedBackgroundMediaQueue(BACKGROUND_MEDIA_CONCURRENCY)
 
 function enqueueRender<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
   return renderQueue.enqueue(run)

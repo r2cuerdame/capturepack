@@ -246,6 +246,12 @@ async function main(): Promise<void> {
       renderSource.includes('await copyBufferResponsively(job.snapshotPng, signal)'),
   )
   check(
+    'the production render queue uses the configured concurrency limit',
+    BACKGROUND_MEDIA_CONCURRENCY === 1 &&
+      renderSource.includes('new BoundedBackgroundMediaQueue(BACKGROUND_MEDIA_CONCURRENCY)') &&
+      !/new BoundedBackgroundMediaQueue\(\s*\d/.test(renderSource),
+  )
+  check(
     'the active hidden render window is abortable on app quit',
     renderSource.includes("app.on('before-quit'") &&
       renderSource.includes('renderQueue.shutdown()') &&
