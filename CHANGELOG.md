@@ -87,6 +87,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   would pick it up. The unpublished directory, and a `plugins/` folder the write
   created, are removed; the capture still saves
   ([#442](https://github.com/r2cuerdame/capturepack/issues/442)).
+- Regenerated `report.md`, `README.md` and `skills/` no longer state the wrong
+  `snapshot.png` size when `annotations.json` is absent, damaged or carries a
+  zero, negative or non-numeric reference size. They now use the focused
+  display, not the first one, and an image pack reads the size from its saved
+  `snapshot.png` instead of printing 0×0. A positive stated size is kept
+  ([#500](https://github.com/r2cuerdame/capturepack/issues/500)).
 
 ### Documentation
 
