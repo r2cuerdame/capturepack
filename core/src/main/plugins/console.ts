@@ -41,7 +41,13 @@ export async function collectConsoleOutput(
       && source.charCodeAt(sourceStart) <= 0xdfff) {
       sourceStart += 1
     }
-    const boundedSource = source.slice(sourceStart)
+    let boundedSource = source.slice(sourceStart)
+    if (sourceStart > 0) {
+      // The leading characters may begin in the middle of a credential assignment.
+      // Drop that incomplete line so redaction never sees a secret without its key.
+      const firstLineBreak = boundedSource.indexOf('\n')
+      boundedSource = firstLineBreak < 0 ? '' : boundedSource.slice(firstLineBreak + 1)
+    }
     const sanitized = redactSecrets(boundedSource)
     const bytes = Buffer.from(sanitized, 'utf8')
     // Keep the newest bytes. Reserve one byte for the required final newline,

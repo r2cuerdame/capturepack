@@ -72,6 +72,12 @@ try {
       && Buffer.byteLength(newestTail.output, 'utf8') <= 256 * 1024
       && !newestTail.output.includes('\uFFFD') && newestTail.truncated)
 
+  const cutCredential = await collectConsoleOutput(async () =>
+    'password=hunter2\n' + 'x'.repeat(262135))
+  check('input truncation drops an incomplete credential line before redaction',
+    cutCredential !== null && !cutCredential.output.includes('hunter2')
+      && cutCredential.output.endsWith('\n') && cutCredential.truncated)
+
   const absent = await collectConsoleOutput(async () => null)
   const denied = await collectConsoleOutput(async () => { throw new Error('access denied') })
   const absentRoot = path.join(root, 'absent')
