@@ -52,9 +52,11 @@ export async function collectConsoleOutput(
     // An assignment or Bearer prefix can end before the retained row, with
     // whitespace (including newlines) between the key and its value. Sanitize
     // with bounded look-behind, then remove only the sanitized context.
-    const contextStart = Math.max(0, sourceStart - CONSOLE_PLUGIN_MAX_BYTES)
-    const context = source.slice(contextStart, sourceStart)
-    if (contextStart > 0 && !/\S/u.test(context)) return null
+    // A clipped context can lose a credential key or the start of a quoted
+    // value even when it contains non-whitespace. Omit the optional plugin if
+    // the entire prefix cannot fit within the look-behind budget.
+    if (sourceStart > CONSOLE_PLUGIN_MAX_BYTES) return null
+    const context = source.slice(0, sourceStart)
     const sanitizedContext = redactSecrets(context)
     const contextualOutput = redactSecrets(context + boundedSource)
     // A quoted value crossing the boundary can rewrite the context itself.

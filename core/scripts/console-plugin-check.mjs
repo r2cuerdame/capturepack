@@ -155,6 +155,8 @@ try {
     inputBoundaryCases.push(
       { name: 'a complete first row at the input boundary (' + endingName + ')',
         input: 'old' + ending + alignedTail },
+      { name: 'a complete first row with the full look-behind budget (' + endingName + ')',
+        input: 'o'.repeat(inputLimit - ending.length) + ending + alignedTail },
       { name: 'only complete rows after a partial credential (' + endingName + ')',
         input: 'password=discarded-' + partialTail },
     )
@@ -189,6 +191,9 @@ try {
   for (const [endingName, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     const credentialBoundaryCases = [
       { name: 'password assignment', prefix: 'password=' + ending,
+        value: 'boundarySecret', redacted: '[REDACTED]' },
+      { name: 'password assignment using the full look-behind budget',
+        prefix: 'password=' + ' '.repeat(inputLimit - 9 - ending.length) + ending,
         value: 'boundarySecret', redacted: '[REDACTED]' },
       { name: 'assignment separated by blank rows', prefix: 'access_token= \t' + ending.repeat(3),
         value: 'boundarySecret', redacted: '[REDACTED]' },
@@ -226,6 +231,21 @@ try {
         value: 'boundarySecret"' },
       { name: 'credential context beyond the bounded whitespace look-behind',
         prefix: 'password=' + ending.repeat(inputLimit), value: 'boundarySecret' },
+      { name: 'a password key clipped immediately before its equals sign',
+        prefix: 'password=' + ' '.repeat(inputLimit - 1 - ending.length) + ending,
+        value: 'boundarySecret' },
+      { name: 'a partially clipped password key',
+        prefix: 'password=' + ' '.repeat(inputLimit - 7 - ending.length) + ending,
+        value: 'boundarySecret' },
+      { name: 'a partially clipped JSON credential key',
+        prefix: '{"password":' + ' '.repeat(inputLimit - 7 - ending.length) + ending,
+        value: '"boundarySecret"' },
+      { name: 'a partially clipped bearer prefix',
+        prefix: 'Authorization: Bearer' + ' '.repeat(inputLimit - 4 - ending.length) + ending,
+        value: 'boundarySecret' },
+      { name: 'a clipped key before a quoted multiline credential',
+        prefix: 'password="' + 'q'.repeat(inputLimit - 1 - ending.length) + ending,
+        value: 'boundarySecret"' },
     ]
     for (const [index, fixture] of unsafeContextCases.entries()) {
       const emptyTail = [fixture.value, 'password=', 'last'].join(ending) + ending
