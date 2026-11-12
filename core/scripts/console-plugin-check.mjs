@@ -143,6 +143,124 @@ try {
     cutCredential !== null && !cutCredential.output.includes('hunter2')
       && cutCredential.output.endsWith('\n') && cutCredential.truncated)
 
+  const inputLimit = 256 * 1024
+  const inputBoundaryCases = []
+  for (const [endingName, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    const alignedTail = ['first', 'password=' + 'x'.repeat(inputLimit - 18 - 3 * ending.length),
+      'last'].join(ending) + ending
+    const partialTail = ['partial-token', 'first',
+      'password=' + 'x'.repeat(inputLimit - 31 - 4 * ending.length), 'last'].join(ending) + ending
+    assert.equal(alignedTail.length, inputLimit)
+    assert.equal(partialTail.length, inputLimit)
+    inputBoundaryCases.push(
+      { name: 'a complete first row at the input boundary (' + endingName + ')',
+        input: 'old' + ending + alignedTail },
+      { name: 'a complete first row with the full look-behind budget (' + endingName + ')',
+        input: 'o'.repeat(inputLimit - ending.length) + ending + alignedTail },
+      { name: 'only complete rows after a partial credential (' + endingName + ')',
+        input: 'password=discarded-' + partialTail },
+    )
+  }
+  for (const [boundaryName, prefix, remainingBreak] of [
+    ['before CR', 'password=discarded-token', '\r\n'],
+    ['between CR and LF', 'password=discarded-token\r', '\n'],
+  ]) {
+    const tail = remainingBreak + ['first',
+      'password=' + 'x'.repeat(inputLimit - 24 - remainingBreak.length), 'last'].join('\r\n') + '\r\n'
+    assert.equal(tail.length, inputLimit)
+    inputBoundaryCases.push({ name: 'complete rows when input is cut ' + boundaryName,
+      input: prefix + tail })
+  }
+  const expectedBoundaryLog = 'first\npassword=[REDACTED]\nlast\n'
+  for (const [index, fixture] of inputBoundaryCases.entries()) {
+    const collected = await collectConsoleOutput(async () => fixture.input)
+    const caseRoot = path.join(root, 'input-boundary-' + index)
+    await mkdir(caseRoot)
+    const published = await tryWriteConsolePlugin(caseRoot, collected)
+    const caseDir = path.join(caseRoot, 'plugins', 'console')
+    const storedLog = published ? await readFile(path.join(caseDir, 'output.log'), 'utf8') : null
+    const storedState = published
+      ? JSON.parse(await readFile(path.join(caseDir, 'state.json'), 'utf8')) : null
+    check('collection and publication preserve ' + fixture.name,
+      published && collected?.output === expectedBoundaryLog && collected.truncated
+        && storedLog === expectedBoundaryLog && storedState.lines === 3 && storedState.truncated
+        && storedState.bytes === Buffer.byteLength(expectedBoundaryLog, 'utf8')
+        && storedState.bytes <= inputLimit)
+  }
+
+  for (const [endingName, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    const credentialBoundaryCases = [
+      { name: 'password assignment', prefix: 'password=' + ending,
+        value: 'boundarySecret', redacted: '[REDACTED]' },
+      { name: 'password assignment using the full look-behind budget',
+        prefix: 'password=' + ' '.repeat(inputLimit - 9 - ending.length) + ending,
+        value: 'boundarySecret', redacted: '[REDACTED]' },
+      { name: 'assignment separated by blank rows', prefix: 'access_token= \t' + ending.repeat(3),
+        value: 'boundarySecret', redacted: '[REDACTED]' },
+      { name: 'JSON credential', prefix: '{"password":' + ending,
+        value: '"boundarySecret"', redacted: '"[REDACTED]"' },
+      { name: 'bearer token', prefix: 'Authorization: Bearer' + ending,
+        value: 'boundarySecret', redacted: '[REDACTED]' },
+    ]
+    for (const [index, fixture] of credentialBoundaryCases.entries()) {
+      const emptyTail = [fixture.value, 'password=', 'last'].join(ending) + ending
+      const retainedTail = [fixture.value, 'password=' + 'x'.repeat(inputLimit - emptyTail.length),
+        'last'].join(ending) + ending
+      assert.equal(retainedTail.length, inputLimit)
+      const expectedLog = fixture.redacted + '\npassword=[REDACTED]\nlast\n'
+      const untruncated = await collectConsoleOutput(async () => fixture.prefix + fixture.value)
+      const collected = await collectConsoleOutput(async () => fixture.prefix + retainedTail)
+      const caseRoot = path.join(root, 'credential-boundary-' + endingName + '-' + index)
+      await mkdir(caseRoot)
+      const published = await tryWriteConsolePlugin(caseRoot, collected)
+      const caseDir = path.join(caseRoot, 'plugins', 'console')
+      const storedLog = published ? await readFile(path.join(caseDir, 'output.log'), 'utf8') : null
+      const storedState = published
+        ? JSON.parse(await readFile(path.join(caseDir, 'state.json'), 'utf8')) : null
+      check('collection and publication redact a boundary-aligned ' + fixture.name + ' (' + endingName + ')',
+        untruncated !== null && !untruncated.output.includes('boundarySecret')
+          && published && collected?.output === expectedLog && collected.truncated
+          && storedLog === expectedLog && !storedLog.includes('boundarySecret')
+          && storedState.lines === 3 && storedState.truncated
+          && storedState.bytes === Buffer.byteLength(expectedLog, 'utf8')
+          && storedState.bytes <= inputLimit)
+    }
+    const unsafeContextCases = [
+      { name: 'a quoted credential that rewrites the retained boundary',
+        prefix: 'password="prefix-first' + ending + 'prefix-second' + ending,
+        value: 'boundarySecret"' },
+      { name: 'credential context beyond the bounded whitespace look-behind',
+        prefix: 'password=' + ending.repeat(inputLimit), value: 'boundarySecret' },
+      { name: 'a password key clipped immediately before its equals sign',
+        prefix: 'password=' + ' '.repeat(inputLimit - 1 - ending.length) + ending,
+        value: 'boundarySecret' },
+      { name: 'a partially clipped password key',
+        prefix: 'password=' + ' '.repeat(inputLimit - 7 - ending.length) + ending,
+        value: 'boundarySecret' },
+      { name: 'a partially clipped JSON credential key',
+        prefix: '{"password":' + ' '.repeat(inputLimit - 7 - ending.length) + ending,
+        value: '"boundarySecret"' },
+      { name: 'a partially clipped bearer prefix',
+        prefix: 'Authorization: Bearer' + ' '.repeat(inputLimit - 4 - ending.length) + ending,
+        value: 'boundarySecret' },
+      { name: 'a clipped key before a quoted multiline credential',
+        prefix: 'password="' + 'q'.repeat(inputLimit - 1 - ending.length) + ending,
+        value: 'boundarySecret"' },
+    ]
+    for (const [index, fixture] of unsafeContextCases.entries()) {
+      const emptyTail = [fixture.value, 'password=', 'last'].join(ending) + ending
+      const retainedTail = [fixture.value, 'password=' + 'x'.repeat(inputLimit - emptyTail.length),
+        'last'].join(ending) + ending
+      assert.equal(retainedTail.length, inputLimit)
+      const collected = await collectConsoleOutput(async () => fixture.prefix + retainedTail)
+      const caseRoot = path.join(root, 'unsafe-context-' + endingName + '-' + index)
+      await mkdir(caseRoot)
+      check('unsafe ' + fixture.name + ' omits the optional plugin (' + endingName + ')',
+        collected === null && !await tryWriteConsolePlugin(caseRoot, collected)
+          && !(await readdir(caseRoot)).includes('plugins'))
+    }
+  }
+
   const absent = await collectConsoleOutput(async () => null)
   const denied = await collectConsoleOutput(async () => { throw new Error('access denied') })
   const absentRoot = path.join(root, 'absent')
