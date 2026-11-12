@@ -78,6 +78,46 @@ try {
     overHundredLines !== null && overHundredLines.truncated
       && overHundredRows.length === 100
       && overHundredRows[0] === 'line-10' && overHundredRows[99] === 'line-109')
+
+  const hundredWithBlank = [...Array.from({ length: 99 }, (_, i) => 'line-' + i), '']
+  const hundredTenWithBlank = [...Array.from({ length: 109 }, (_, i) => 'line-' + i), '']
+  const newestHundredWithBlank = [...Array.from({ length: 99 }, (_, i) => 'line-' + (i + 10)), '']
+  const trailingBlankCases = [
+    { name: 'one trailing blank row', rows: ['first', ''], expected: 'first\n\n', lines: 2, truncated: false },
+    { name: 'multiple trailing blank rows', rows: ['first', '', ''], expected: 'first\n\n\n', lines: 3, truncated: false },
+    { name: '100 rows ending in a blank', rows: hundredWithBlank,
+      expected: hundredWithBlank.join('\n') + '\n', lines: 100, truncated: false },
+    { name: '110 rows ending in a blank', rows: hundredTenWithBlank,
+      expected: newestHundredWithBlank.join('\n') + '\n', lines: 100, truncated: true },
+  ]
+  for (const [endingName, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    for (const [index, fixture] of trailingBlankCases.entries()) {
+      const collected = await collectConsoleOutput(async () => fixture.rows.join(ending) + ending)
+      const caseRoot = path.join(root, 'trailing-blank-' + endingName + '-' + index)
+      await mkdir(caseRoot)
+      const published = await tryWriteConsolePlugin(caseRoot, collected)
+      const caseDir = path.join(caseRoot, 'plugins', 'console')
+      const storedLog = published ? await readFile(path.join(caseDir, 'output.log'), 'utf8') : null
+      const storedState = published
+        ? JSON.parse(await readFile(path.join(caseDir, 'state.json'), 'utf8')) : null
+      check('collection and publication preserve ' + fixture.name + ' (' + endingName + ')',
+        published && collected?.output === fixture.expected
+          && collected.truncated === fixture.truncated
+          && storedLog === fixture.expected && storedState.lines === fixture.lines
+          && storedState.truncated === fixture.truncated
+          && storedState.bytes === Buffer.byteLength(fixture.expected, 'utf8')
+          && storedState.bytes <= 256 * 1024)
+    }
+  }
+  for (const [index, emptyInput] of ['', '\n', '\n\n', '\r\n', '\r\n\r\n',
+    'older\n' + '\n'.repeat(110)].entries()) {
+    const collected = await collectConsoleOutput(async () => emptyInput)
+    const caseRoot = path.join(root, 'empty-output-' + index)
+    await mkdir(caseRoot)
+    check('empty or newline-only retained output creates no plugin (case ' + index + ')',
+      collected === null && !await tryWriteConsolePlugin(caseRoot, collected)
+        && !(await readdir(caseRoot)).includes('plugins'))
+  }
   check('save-first capture declares console only after a successful plugin write',
     exporterSource.includes('const consoleOutput = await collectConsoleOutput()')
       && exporterSource.includes('if (await tryWriteConsolePlugin(dirPath, consoleOutput))')

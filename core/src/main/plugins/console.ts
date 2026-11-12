@@ -60,8 +60,9 @@ export async function collectConsoleOutput(
     const allLines = limited.replace(/\r?\n$/u, '').split(/\r?\n/u)
     const lineLimited = allLines.length > CONSOLE_PLUGIN_MAX_LINES
     const lines = allLines.slice(-CONSOLE_PLUGIN_MAX_LINES)
-    const output = lines.join('\n').replace(/\n*$/u, '')
-    if (!output) return null
+    // Omit a blank-only tail without stripping real blank rows from a nonempty log.
+    if (lines.every((line) => line.length === 0)) return null
+    const output = lines.join('\n')
     return {
       output: `${output}\n`,
       source: 'environment',
