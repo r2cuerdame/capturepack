@@ -1327,6 +1327,12 @@ console.log('\nreport.md and README.md list declared plugin payloads (Issue #429
   const readmeWithPlugin = buildReadme(manifestWithGit, annotations, 'en', false, true)
   const reportWithoutPlugins = buildReport(manifestWithoutPlugins, annotations, 'en', false, true)
   const readmeWithoutPlugins = buildReadme(manifestWithoutPlugins, annotations, 'en', false, true)
+  const manifestWithConsole = {
+    ...manifestWithGit,
+    plugins: [{ name: 'console', version: '0.1.0', path: 'plugins/console/' }],
+  }
+  const reportWithConsole = buildReport(manifestWithConsole, annotations, 'en', false, true)
+  const readmeWithConsole = buildReadme(manifestWithConsole, annotations, 'en', false, true)
 
   check(
     'report.md lists the declared Git plugin path and purpose',
@@ -1339,6 +1345,14 @@ console.log('\nreport.md and README.md list declared plugin payloads (Issue #429
   check(
     'report.md and README.md omit plugin rows when no plugins are declared',
     !reportWithoutPlugins.includes('plugins/git/') && !readmeWithoutPlugins.includes('| plugins/git/ |'),
+  )
+  check(
+    'report.md and README.md explain the console log and execution state payloads',
+    reportWithConsole.includes(
+      '- plugins/console/ — console output log and execution state at capture time',
+    ) && readmeWithConsole.includes(
+      '| plugins/console/ | console output log and execution state at capture time |',
+    ),
   )
 }
 
