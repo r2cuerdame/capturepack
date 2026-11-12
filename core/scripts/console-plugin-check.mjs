@@ -53,6 +53,15 @@ try {
   check('successful capture writes bounded plugin payload and metadata', written
     && successfulContract)
   check('manifest declaration uses the payload directory', declaration.path === 'plugins/console/')
+  const blankLinesRoot = path.join(root, 'blank-lines')
+  await mkdir(blankLinesRoot)
+  const blankLinesOutput = { output: 'first\n\nthird\n', source: 'environment', truncated: false }
+  await tryWriteConsolePlugin(blankLinesRoot, blankLinesOutput)
+  const blankLinesState = JSON.parse(await readFile(
+    path.join(blankLinesRoot, 'plugins', 'console', 'state.json'), 'utf8'))
+  const blankLinesLog = await readFile(path.join(blankLinesRoot, 'plugins', 'console', 'output.log'), 'utf8')
+  check('console state counts blank log lines without counting the final newline',
+    blankLinesState.lines === 3 && blankLinesLog === blankLinesOutput.output)
   check('save-first capture declares console only after a successful plugin write',
     exporterSource.includes('const consoleOutput = await collectConsoleOutput()')
       && exporterSource.includes('if (await tryWriteConsolePlugin(dirPath, consoleOutput))')

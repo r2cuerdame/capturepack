@@ -115,7 +115,7 @@ export async function writeConsolePlugin(dirPath: string, output: ConsoleOutput)
     await writeAtomicFile(join(pluginDir, 'state.json'), `${JSON.stringify({
       source: output.source,
       truncated: output.truncated,
-      lines: output.output.split('\n').filter(Boolean).length,
+      lines: output.output.replace(/\r?\n$/u, '').split(/\r?\n/u).length,
       bytes: Buffer.byteLength(output.output, 'utf8'),
     }, null, 2)}\n`)
     await writeAtomicFile(join(pluginDir, 'meta.json'), `${JSON.stringify({
