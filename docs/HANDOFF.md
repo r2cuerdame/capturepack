@@ -98,9 +98,11 @@ dispatched.
 
 ## Next milestone — 2026-12 (0.6.2 candidate; planning only)
 
-The next planned milestone is a no-cost V2 console context provider prototype
-plus continued observation of one month of use without manual reinstall. This
-is a plan, not an implementation or release claim. Preserve the existing
+The next milestone is a no-cost V2 console context provider prototype plus
+continued observation of one month of use without manual reinstall. The console
+prototype is implemented in source, but is not a release claim. Its current
+supported input is an explicit `CAPTUREPACK_CONSOLE_OUTPUT` snapshot; it does
+not scrape other processes or terminal windows. Preserve the existing
 five-second capture workflow: console collection must never hold capture open
 past its 100 ms deadline. When available, write a SPEC-compatible
 `plugins/console/` payload and metadata; if the console is absent, inaccessible,
@@ -112,8 +114,8 @@ collection produces the declared payload and metadata; absent or denied access
 produces no plugin declaration and does not fail the save; a request that
 exceeds 100 ms is abandoned and does not fail the save; and an atomic-write
 failure leaves no partial plugin declaration or temporary file and does not
-fail the save. After these checks, require SPEC validation and all 99 existing
-automated QA checks to pass with no regression. The five-second workflow remains
+fail the save. After these checks, require SPEC validation and all 100 automated
+QA checks to pass with no regression. The five-second workflow remains
 an independent acceptance condition throughout. The numbered criteria are in
 [RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md).
 
@@ -736,8 +738,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 99 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **102 gate steps** — 100 with
+`qa:rc` currently runs 101 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **104 gate steps** — 102 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,

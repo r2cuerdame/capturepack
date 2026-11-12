@@ -6,6 +6,7 @@ import type { UpdaterStatusPayload } from '../shared/ipc'
 import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
 import {
   disposeCapture,
+  getRecorderDisplayIds,
   getRecorderState,
   onRecorderStateChanged,
   setupDisplayMediaHandler,
@@ -14,6 +15,7 @@ import {
   startCapture,
 } from './capture'
 import type { RecorderState } from './capture'
+import { shouldSimulateNoFrames } from './displayMediaPolicy'
 import {
   contextNowMs,
   startContextRuntime,
@@ -51,6 +53,7 @@ import {
   saveNowRequest,
 } from './saveNow'
 import { captureOrSaveInProgress } from './captureActivity'
+import { scheduleCaptureWhenRecording } from './captureNow'
 import { anyPackOperationActive } from './packOperations'
 import { captureFlowActive, startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
@@ -618,11 +621,31 @@ function main(): void {
         const seconds = Number(captureNow.split('=')[1] ?? '0')
         const delayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0
         if (delayMs === 0) capture()
-        else {
-          logInfo(`[capture] --capture-now: capturing in ${String(seconds)}s`)
+        else if (
+          process.argv.includes('--simulate-no-frames') ||
+          getRecorderDisplayIds().some((displayId) =>
+            shouldSimulateNoFrames(process.argv, String(displayId)),
+          )
+        ) {
+          // The starved-recorder test must still exercise the explicit
+          // screenshot-only outcome; it cannot wait for a recording state.
+          // One deliberately starved recorder prevents aggregate readiness too.
+          // Only a scoped flag matching an actual recorder target bypasses it.
           setTimeout(() => {
             void capture()
           }, delayMs)
+        } else {
+          logInfo(
+            `[capture] --capture-now: capturing ${String(seconds)}s after the recorder is ready`,
+          )
+          scheduleCaptureWhenRecording(
+            delayMs,
+            getRecorderState,
+            onRecorderStateChanged,
+            () => {
+              void capture()
+            },
+          )
         }
       }
       // `--save-now[=SECONDS]` (#63): the half of an unattended capture nobody

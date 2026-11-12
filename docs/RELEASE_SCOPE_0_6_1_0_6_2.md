@@ -21,9 +21,9 @@ match the workflow files. Prose is still judged by the reader.
 | Release | A step of [release.yml](../.github/workflows/release.yml) | Only when a person dispatches it |
 | Field | A measurement on real hardware, a real install or a real month | Recorded by a person; unverified until recorded |
 
-The gate discovers 99 checks today. `npm run qa:checks` runs those 99 plus type
-checking (100 steps); `npm run qa:rc` adds the production build and the
-isolated Electron smoke (102 steps). The count moves when a check is added, and
+The gate discovers 101 checks today. `npm run qa:checks` runs those 101 plus type
+checking (102 steps); `npm run qa:rc` adds the production build and the
+isolated Electron smoke (104 steps). The count moves when a check is added, and
 this document must move with it.
 
 ## Standing condition — the five-second workflow
@@ -40,7 +40,7 @@ has not been run.
 |---|---|
 | The hands-off time from trigger to a painted editor is counted honestly: no stage counted twice, no backwards clock, no human selection time billed to the app, no total for an editor that never opened | `check:capture-latency` (automated) |
 | A live capture reaches a painted editor within 5000 ms | `assert-live-capture-latency.mjs <main.log> 5000` in the CI `capture-e2e` job and in the Release workflow's "Gate live capture to painted editor" step |
-| Save-time context collection cannot hold capture open: each collector has a 100 ms deadline and fails open, and a failed plugin write still returns well inside five seconds | `check:git-plugin` today; the 0.6.2 console check must assert the same |
+| Save-time context collection cannot hold capture open: each collector has a 100 ms deadline and fails open, and a failed plugin write still returns well inside five seconds | `check:git-plugin`, `check:console-plugin` |
 | A capture whose sources are durable reports saved, and one that saved nothing says so | `check:save-now` (automated); `--save-now` exit codes in the CI `capture-e2e` job |
 
 The live 5000 ms assertion needs a real display. A headless or locked-desktop
@@ -58,7 +58,7 @@ installer yet.
 | 2 | Single-page route detection | The tab's current URL and title are forwarded, never the hint's; inactive-tab, cross-origin, closed-tab, unreadable-URL and malformed hints are dropped without throwing; a long route is delivered with the URL capped at 2,048 characters and the title at 512 | `check:chrome-route-change` |
 | 3 | Git context saved safely ([#442](https://github.com/r2cuerdame/capturepack/issues/442)) | Repository, branch, commit, dirty flag and changed paths are collected within 100 ms or omitted. State and metadata go through a temporary file and an atomic replace, metadata last. A failed write leaves no declaration, no temporary file and no unpublished directory, keeps a plugin an earlier write published, and the capture still saves | `check:git-plugin` |
 | 4 | Opaque Share Copy masking | Each blur active at a still's time is filled with solid `#1a1a1a` and the label gutter is cleared where it is active; pixels outside it are kept; Share Copy still holds only declared annotated stills re-encoded from pixels | `check:share-bundle` |
-| 5 | No regression anywhere | `npm run qa:checks` finishes with all 99 discovered checks passing and type checking clean — zero failures, zero skipped checks | The whole gate |
+| 5 | No regression anywhere | `npm run qa:checks` finishes with all 101 discovered checks passing and type checking clean — zero failures, zero skipped checks | The whole gate |
 | 6 | Five-second workflow | The standing condition above, on the candidate's own head | See the standing condition |
 
 Promoting the candidate to 0.6.1 is a separate act that this document does not
@@ -70,21 +70,21 @@ exact source, then a person dispatches the Release workflow
 ## 0.6.2 plan — acceptance criteria (planning only)
 
 This is the 2026-12 milestone in [ROADMAP.md](../ROADMAP.md) and
-[HANDOFF.md](HANDOFF.md). Nothing here is implemented, and the roadmap's
-"Console plugin" item stays unchecked until the console check exists.
+[HANDOFF.md](HANDOFF.md). The console prototype and its deterministic check are
+implemented in source; merge and release remain separate gates.
 
 ### Console context plugin
 
 | # | Completion condition |
 |---|---|
-| 1 | Pack format: a supported console writes `plugins/console/` with a `meta.json` whose `name` is `console` and whose `version` is set, plus a plugin-defined payload, and the manifest declares the same name and path ([SPEC.md §11](../SPEC.md#11-plugins)). The plugin only appends metadata and touches no core file |
+| 1 | A console host may provide its bounded output snapshot through `CAPTUREPACK_CONSOLE_OUTPUT`; the app writes `plugins/console/` with a `meta.json` whose `name` is `console` and whose `version` is set, plus `output.log` and `state.json`, and declares the same plugin name and path ([SPEC.md §11](../SPEC.md#11-plugins)). The opt-in source avoids scraping unrelated processes or terminal windows |
 | 2 | Deadline: collection has a 100 ms deadline and cannot hold capture open beyond it |
 | 3 | Success: a successful collection writes the declared payload and metadata |
 | 4 | Absent or denied access: no plugin is added, nothing is declared, and the save does not fail |
 | 5 | Timeout: a collection that exceeds 100 ms is abandoned and the save does not fail |
 | 6 | Atomic-write failure: no partial plugin declaration and no temporary file are left, and the save does not fail |
-| 7 | A new deterministic console check in `core/package.json` asserts outcomes 3–6. Adding it raises the discovered count, and the documents that state the count change with it |
-| 8 | No regression: `check:spec`, `check:validator`, `check:docs` and every existing check pass |
+| 7 | A new deterministic console check in `core/package.json` asserts outcomes 3–6. Adding it raises the discovered count to 101, and the documents that state the count change with it |
+| 8 | No regression: `check:spec`, `check:validator`, `check:docs` and all 101 discovered checks passing |
 | 9 | Five-second workflow: the standing condition above, judged on its own |
 
 ### One month without a manual reinstall

@@ -528,9 +528,9 @@ async function main(): Promise<void> {
       `manifest=${copiedPluginNames.length}, directories=${copiedPluginDirectories.length}`,
     )
     check(
-      'video Save As New skills document reports the copied plugin count',
-      readFileSync(path.join(copied.dirPath, 'skills', 'project.md'), 'utf8').includes(
-        String(copiedPluginNames.length),
+      'video Save As New overview reports the exact copied plugin count',
+      readFileSync(path.join(copied.dirPath, 'skills', 'overview.md'), 'utf8').includes(
+        `${copiedPluginNames.length} plugins.`,
       ),
     )
 
