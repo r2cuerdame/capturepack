@@ -57,7 +57,7 @@ export async function collectConsoleOutput(
     let tailStart = Math.max(0, bytes.length - byteBudget)
     while (tailStart < bytes.length && ((bytes[tailStart] ?? 0) & 0xc0) === 0x80) tailStart += 1
     const limited = bytes.subarray(tailStart).toString('utf8')
-    const allLines = limited.split(/\r?\n/u)
+    const allLines = limited.replace(/\r?\n$/u, '').split(/\r?\n/u)
     const lineLimited = allLines.length > CONSOLE_PLUGIN_MAX_LINES
     const lines = allLines.slice(-CONSOLE_PLUGIN_MAX_LINES)
     const output = lines.join('\n').replace(/\n*$/u, '')

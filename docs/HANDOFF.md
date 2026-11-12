@@ -738,8 +738,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 100 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **103 gate steps** — 101 with
+`qa:rc` currently runs 101 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **104 gate steps** — 102 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,

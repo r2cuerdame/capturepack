@@ -62,6 +62,22 @@ try {
   const blankLinesLog = await readFile(path.join(blankLinesRoot, 'plugins', 'console', 'output.log'), 'utf8')
   check('console state counts blank log lines without counting the final newline',
     blankLinesState.lines === 3 && blankLinesLog === blankLinesOutput.output)
+  const exactHundredLines = await collectConsoleOutput(async () =>
+    `${Array.from({ length: 100 }, (_, i) => `line-${i}`).join('\n')}\n`)
+  const exactHundredRows = exactHundredLines?.output
+    .replace(/\r?\n$/u, '').split(/\r?\n/u) ?? []
+  check('exactly 100 console lines preserve the first row and remain untruncated',
+    exactHundredLines !== null && !exactHundredLines.truncated
+      && exactHundredRows.length === 100
+      && exactHundredRows[0] === 'line-0' && exactHundredRows[99] === 'line-99')
+  const overHundredLines = await collectConsoleOutput(async () =>
+    `${Array.from({ length: 110 }, (_, i) => `line-${i}`).join('\n')}\n`)
+  const overHundredRows = overHundredLines?.output
+    .replace(/\r?\n$/u, '').split(/\r?\n/u) ?? []
+  check('over 100 console lines retain the newest 100 rows and report truncation',
+    overHundredLines !== null && overHundredLines.truncated
+      && overHundredRows.length === 100
+      && overHundredRows[0] === 'line-10' && overHundredRows[99] === 'line-109')
   check('save-first capture declares console only after a successful plugin write',
     exporterSource.includes('const consoleOutput = await collectConsoleOutput()')
       && exporterSource.includes('if (await tryWriteConsolePlugin(dirPath, consoleOutput))')
