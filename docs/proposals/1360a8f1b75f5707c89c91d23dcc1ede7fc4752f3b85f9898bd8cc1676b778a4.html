@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>CapturePack PLC 및 KPI 제안 덱</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-alt: #334155;
+  --primary: #38bdf8;
+  --accent: #818cf8;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --border: #475569;
+  --success: #34d399;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Pretendard', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  padding: 24px;
+}
+.deck { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+section.slide {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.slide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid var(--surface-alt);
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+}
+.slide-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+h1 { font-size: 24px; color: var(--text); margin-bottom: 6px; }
+h2 { font-size: 20px; color: var(--primary); margin-bottom: 12px; }
+h3 { font-size: 16px; color: var(--accent); margin-bottom: 8px; }
+p, li { font-size: 14px; color: var(--text); }
+.muted { color: var(--muted); font-size: 13px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px; }
+.card {
+  background: var(--surface-alt);
+  border-radius: 8px;
+  padding: 16px;
+  border-top: 3px solid var(--primary);
+}
+.card h4 { font-size: 15px; color: var(--text); margin-bottom: 8px; }
+.card ul { padding-left: 18px; }
+.card li { margin-bottom: 4px; font-size: 13px; }
+.kpi-badge {
+  display: inline-block;
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--primary);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.diagram-wrap {
+  text-align: center;
+  margin: 16px 0;
+  background: var(--surface-alt);
+  padding: 16px;
+  border-radius: 8px;
+}
+svg text { font-family: sans-serif; font-size: 11px; fill: #f8fafc; text-anchor: middle; }
+.table-wrap { overflow-x: auto; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 10px; border: 1px solid var(--border); text-align: left; }
+th { background: var(--surface-alt); color: var(--primary); }
+.highlight { border-left: 4px solid var(--success); padding-left: 12px; margin: 10px 0; }
+.options { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.opt-card {
+  background: var(--surface-alt);
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.opt-card.recommended { border-color: var(--primary); }
+</style>
+</head>
+<body>
+<div class="deck">
+
+<section class="slide" id="slide1">
+  <div class="slide-header">
+    <span class="slide-num">Slide 1 / 5 · 배경 및 제안 개요</span>
+    <span class="muted">2026-11-12 KST 의종 결정 기반</span>
+  </div>
+  <h1>CapturePack 목표(단기·분기·연간) 및 KPI 제안 덱</h1>
+  <p class="muted">오픈소스 저비용 운영 원칙과 7일 이하 주간 배포 단위를 반영한 정본 목표 설정</p>
+  <div class="highlight" style="margin-top:16px;">
+    <p><strong>왜 필요한가:</strong> 2026-11-12 의종 합의에 따라 마일스톤을 7일 이하로 전환하고 기본 KPI를 DAU(Pulse)로 정했으나, <code>단기·분기·연간 목표</code>가 미정 상태입니다. 오픈소스 특성에 맞추어 불필요한 비용을 쓰지 않으면서도 안정적인 지속성을 확보할 실질적 목표를 수립합니다.</p>
+  </div>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 110" width="100%" height="110">
+      <rect x="10" y="20" width="160" height="70" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+      <text x="90" y="50" font-weight="bold">1. 합의 원칙</text>
+      <text x="90" y="70" fill="#94a3b8">성능→버그→새기능</text>
+      <line x1="175" y1="55" x2="210" y2="55" stroke="#38bdf8" stroke-width="2"/>
+      <polygon points="210,51 215,55 210,59" fill="#38bdf8"/>
+      <rect x="215" y="20" width="160" height="70" rx="8" fill="#1e293b" stroke="#818cf8" stroke-width="2"/>
+      <text x="295" y="50" font-weight="bold">2. 7일 배포 창</text>
+      <text x="295" y="70" fill="#94a3b8">주간 패치 릴리스</text>
+      <line x1="380" y1="55" x2="415" y2="55" stroke="#818cf8" stroke-width="2"/>
+      <polygon points="415,51 420,55 415,59" fill="#818cf8"/>
+      <rect x="420" y="20" width="160" height="70" rx="8" fill="#1e293b" stroke="#34d399" stroke-width="2"/>
+      <text x="500" y="50" font-weight="bold">3. Pulse DAU</text>
+      <text x="500" y="70" fill="#94a3b8">기본 KPI 측정</text>
+      <line x1="585" y1="55" x2="620" y2="55" stroke="#34d399" stroke-width="2"/>
+      <polygon points="620,51 625,55 620,59" fill="#34d399"/>
+      <rect x="625" y="20" width="125" height="70" rx="8" fill="#334155" stroke="#f8fafc" stroke-width="1.5"/>
+      <text x="687" y="50" font-weight="bold">4. 지속 운영</text>
+      <text x="687" y="70" fill="#94a3b8">비용 0원 유지</text>
+    </svg>
+  </div>
+</section>
+
+<section class="slide" id="slide2">
+  <div class="slide-header">
+    <span class="slide-num">Slide 2 / 5 · 목표 및 KPI 세부안</span>
+    <span class="muted">Horizon Proposals</span>
+  </div>
+  <h2>단기 · 분기 · 연간 목표 및 측정 출처</h2>
+  <div class="grid-3">
+    <div class="card">
+      <h4>단기 목표 (1~2주)</h4>
+      <ul>
+        <li><strong>0.6.1 안정화 패치</strong> 배포</li>
+        <li>콘솔 플러그인(#483, #485) 검증</li>
+        <li>5초 캡처 워크플로 불변식 유지</li>
+        <li>QA checks 98개 전수 통과</li>
+      </ul>
+      <div class="kpi-badge">단기 DAU: 5+ (안정화)</div>
+    </div>
+    <div class="card">
+      <h4>분기 목표 (2026 Q4)</h4>
+      <ul>
+        <li><strong>7일 주기 배포</strong> 6회 이상 안착</li>
+        <li>0.6.1 → 0.6.2 점진적 패치</li>
+        <li>오픈소스 커뮤니티 피드백 수렴</li>
+        <li>추가 인프라 비용 0원 유지</li>
+      </ul>
+      <div class="kpi-badge">분기 DAU: 20+ (Pulse 기준)</div>
+    </div>
+    <div class="card">
+      <h4>연간 목표 (2027)</h4>
+      <ul>
+        <li>가장 가벼운 5초 Windows 캡처</li>
+        <li>플러그인 생태계 안정적 확장</li>
+        <li>누적 다운로드 5,000+ 달성</li>
+        <li>유료 서명 미도입(비용 0원) 불변</li>
+      </ul>
+      <div class="kpi-badge">연간 DAU: 100+ (Pulse 기준)</div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>구분</th>
+          <th>목표 내용</th>
+          <th>KPI 지표</th>
+          <th>측정 출처</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>기본 KPI</strong></td>
+          <td>실제 일일 활성 사용자 수 유지</td>
+          <td>DAU (단기 5+ → 분기 20+ → 연간 100+)</td>
+          <td>Pulse (웹 capturepack.dev 및 앱 진단)</td>
+        </tr>
+        <tr>
+          <td><strong>추가 불변식</strong></td>
+          <td>오픈소스 저비용 원칙 및 5초 사용성</td>
+          <td>비용 0원, 코드서명 0원, QA 100%</td>
+          <td>GitHub Actions, 릴리스 영수증</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" id="slide3">
+  <div class="slide-header">
+    <span class="slide-num">Slide 3 / 5 · 마일스톤 운영 체계</span>
+    <span class="muted">7-Day Release Cadence</span>
+  </div>
+  <h2>7일 이하 배포 창 마일스톤 계획</h2>
+  <p>월 단위의 큰 묶음 대신 7일 이하의 명확한 KST 배포 창으로 마일스톤을 쪼개어 배포합니다.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>마일스톤 명칭 (KST 기간)</th>
+          <th>주요 범위 및 인도물</th>
+          <th>상태</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>2026-11-12–2026-11-18</strong></td>
+          <td>0.6.1 릴리스 후보 검증 (콘솔 플러그인 결함 해소, Opaque Redaction 동기화)</td>
+          <td><span style="color:var(--primary);font-weight:bold;">현재 진행 중</span></td>
+        </tr>
+        <tr>
+          <td><strong>2026-11-19–2026-11-25</strong></td>
+          <td>0.6.1 배포 후 모니터링 및 0.6.2 성능 개선(#436 재실행 안정성, 캡처 레이턴시 최적화)</td>
+          <td>차기 예정</td>
+        </tr>
+        <tr>
+          <td><strong>2026-11-26–2026-12-02</strong></td>
+          <td>0.6.2 릴리스 및 Chrome 확장 연동 안정성 점검</td>
+          <td>차기 예정</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="highlight">
+    <p><strong>원칙 준수:</strong> 테스트가 끝날 때마다 자주 배포하며, 기능이 없더라도 버그·안정성 패치만으로 7일 주기 창을 완결합니다.</p>
+  </div>
+</section>
+
+<section class="slide" id="slide4">
+  <div class="slide-header">
+    <span class="slide-num">Slide 4 / 5 · 효과 · 비용 · 위험 분석</span>
+    <span class="muted">Impact & Feasibility</span>
+  </div>
+  <h2>효과 및 위험 관리</h2>
+  <div class="grid-3">
+    <div class="card">
+      <h4>기대 효과</h4>
+      <ul>
+        <li>공회전 없는 명확한 7일 주기 달성</li>
+        <li>Pulse 기반 실질 DAU 추적으로 방향성 유지</li>
+        <li>작은 패치로 배포 리스크 최소화</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>소요 비용</h4>
+      <ul>
+        <li><strong>추가 비용: 0원</strong></li>
+        <li>유료 코드 서명 미도입 유지</li>
+        <li>기존 PC 및 무료 호스팅(Pages) 활용</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>위험 및 대응</h4>
+      <ul>
+        <li><strong>위험:</strong> 사용자 유입 지연 시 DAU 저조</li>
+        <li><strong>대응:</strong> 무리한 마케팅 대신 오픈소스 안정성과 5초 워크플로 품질로 자연 유입 유도</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="slide5">
+  <div class="slide-header">
+    <span class="slide-num">Slide 5 / 5 · 의종 결정 요청</span>
+    <span class="muted">Decision Options</span>
+  </div>
+  <h2>의종 선택지</h2>
+  <p>이 제안을 검토하신 후 원하시는 번호를 이슈 댓글로 남겨주시면 지침 정본에 반영하고 작업을 이어갑니다.</p>
+  <div class="options">
+    <div class="opt-card recommended">
+      <h4>[선택지 1 - 추천] 제안된 단기·분기·연간 목표 및 DAU KPI 승인</h4>
+      <p class="muted">단기(0.6.1 배포/안정화), 분기(7일 주기 6회 안착/DAU 20+), 연간(오픈소스 정착/DAU 100+), 기본 KPI(DAU, 측정: Pulse), 7일 배포 창 마일스톤을 <code>.loop/guidelines.md</code> 정본으로 확정합니다.</p>
+    </div>
+    <div class="opt-card">
+      <h4>[선택지 2] 단기 목표(0.6.1 배포 및 7일 마일스톤)만 우선 승인</h4>
+      <p class="muted">분기/연간 목표는 0.6.1 실측 배포 후 Pulse 데이터를 보고 추후 재설정합니다.</p>
+    </div>
+    <div class="opt-card">
+      <h4>[선택지 3] 직접 수정 및 의견 입력 (자유 입력)</h4>
+      <p class="muted">원하시는 목표 수치, 기간, 또는 KPI 우선순위를 직접 적어주시면 즉시 반영합니다.</p>
+    </div>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
