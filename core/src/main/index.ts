@@ -6,6 +6,7 @@ import type { UpdaterStatusPayload } from '../shared/ipc'
 import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
 import {
   disposeCapture,
+  getRecorderDisplayIds,
   getRecorderState,
   onRecorderStateChanged,
   setupDisplayMediaHandler,
@@ -14,6 +15,7 @@ import {
   startCapture,
 } from './capture'
 import type { RecorderState } from './capture'
+import { shouldSimulateNoFrames } from './displayMediaPolicy'
 import {
   contextNowMs,
   startContextRuntime,
@@ -619,9 +621,16 @@ function main(): void {
         const seconds = Number(captureNow.split('=')[1] ?? '0')
         const delayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0
         if (delayMs === 0) capture()
-        else if (process.argv.includes('--simulate-no-frames')) {
+        else if (
+          process.argv.includes('--simulate-no-frames') ||
+          getRecorderDisplayIds().some((displayId) =>
+            shouldSimulateNoFrames(process.argv, String(displayId)),
+          )
+        ) {
           // The starved-recorder test must still exercise the explicit
           // screenshot-only outcome; it cannot wait for a recording state.
+          // One deliberately starved recorder prevents aggregate readiness too.
+          // Only a scoped flag matching an actual recorder target bypasses it.
           setTimeout(() => {
             void capture()
           }, delayMs)
