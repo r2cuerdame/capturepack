@@ -157,6 +157,61 @@ console.log('Refusals')
 }
 
 {
+  // Same timestamps going forward, but the stage names out of their declared
+  // order: a call site moved, and "saved" no longer means what it says.
+  const state = beginCaptureLatency('video', 0)
+  markCaptureLatency(state, 'frozen', 200)
+  markCaptureLatency(state, 'editor-visible', 900)
+  markCaptureLatency(state, 'saved', 1_100)
+  const report = captureLatencyReport(state)
+  check(
+    'a stage recorded after a later stage refuses, even on a forward clock',
+    report.refused !== null && report.refused.includes('saved') && report.handsOffMs === null,
+    `${String(report.refused)} / ${String(report.handsOffMs)}`,
+  )
+}
+
+{
+  // A skipped stage is normal (a re-edit has no freeze, a failed save has no
+  // "saved"); only reordering is a defect.
+  const state = beginCaptureLatency('image', 0)
+  markCaptureLatency(state, 'frozen', 150)
+  markCaptureLatency(state, 'editor-visible', 1_200)
+  const report = captureLatencyReport(state)
+  check(
+    'a skipped stage is not mistaken for a reordered one',
+    report.refused === null && report.handsOffMs === 1_200,
+    `${String(report.refused)} / ${String(report.handsOffMs)}`,
+  )
+}
+
+{
+  const state = beginCaptureLatency('image', 0)
+  markCaptureLatency(state, 'frozen', 100)
+  markCaptureLatency(state, 'editor-visible', 2_000)
+  noteCaptureLatencyUserWait(state, 1_500)
+  const report = captureLatencyReport(state)
+  check(
+    'a wait noted after the editor became visible is refused, not subtracted',
+    report.refused !== null && report.handsOffMs === null,
+    `${String(report.refused)} / ${String(report.handsOffMs)}`,
+  )
+}
+
+{
+  const state = beginCaptureLatency('image', 0)
+  markCaptureLatency(state, 'frozen', 100)
+  noteCaptureLatencyUserWait(state, 0)
+  markCaptureLatency(state, 'editor-visible', 700)
+  const report = captureLatencyReport(state)
+  check(
+    'an instant selection is a zero wait, not a refusal',
+    report.refused === null && report.handsOffMs === 700 && report.waitedForUserMs === 0,
+    `${String(report.refused)} / ${String(report.handsOffMs)}`,
+  )
+}
+
+{
   // A capture whose editor never opened is exactly the case a user complains
   // about. It must survive as evidence of how far the flow got.
   const state = beginCaptureLatency('video', 0)
@@ -252,6 +307,14 @@ console.log('Wiring — a flow cannot be added without being measured')
   // would not break anything — it would just quietly stop answering the one
   // question ROADMAP says outranks every milestone.
   const session = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+  const liveAssertion = readFileSync(
+    path.join(process.cwd(), 'scripts/assert-live-capture-latency.mjs'),
+    'utf8',
+  )
+  const releaseWorkflow = readFileSync(
+    path.join(process.cwd(), '../.github/workflows/release.yml'),
+    'utf8',
+  )
   const count = (pattern: RegExp): number => (session.match(pattern) ?? []).length
 
   // Four since #157: the video flow, the desktop still, the re-edit, and the
@@ -264,12 +327,43 @@ console.log('Wiring — a flow cannot be added without being measured')
     gates === begins && begins === 4,
     `${String(gates)} gates, ${String(begins)} begins`,
   )
+  const flowKinds = Array.from(
+    session.matchAll(/flowActive = true\s+beginFlowLatency\('([^']+)'\)/g),
+    (match) => match[1],
+  )
+  check(
+    'the four gates are paired with video, re-edit, desktop image, and browser image measurements',
+    JSON.stringify(flowKinds) === JSON.stringify(['video', 're-edit', 'image', 'image']),
+    JSON.stringify(flowKinds),
+  )
 
   const ends = count(/endFlowLatency\(\)(?!:)/g)
   check(
     'and every one of them ends it, so no flow reports nothing',
     ends === begins,
     `${String(begins)} begins, ${String(ends)} ends`,
+  )
+
+  // Each entry point must end its measurement in `finally`, so a thrown or
+  // cancelled flow still reports how far it got rather than nothing.
+  const entryPoints = [
+    'startCaptureFlow',
+    'startEditFlow',
+    'startImageCaptureFlow',
+    'startBrowserPageFlow',
+  ]
+  const unended = entryPoints.filter((name) => {
+    const start = session.search(new RegExp(`export (?:async )?function ${name}\\(`))
+    if (start < 0) return true
+    const next = session.slice(start + 1).search(/\n(?:export )?(?:async )?function \w+\(/)
+    const body = session.slice(start, next < 0 ? undefined : start + 1 + next)
+    return !/flowActive = true\s+beginFlowLatency\('/.test(body)
+      || !/finally[\s\S]*?flowActive = false\s+endFlowLatency\(\)/.test(body)
+  })
+  check(
+    'each of the four entry points begins its measurement and ends it in finally',
+    unended.length === 0,
+    `not ended in finally: ${unended.join(', ')}`,
   )
 
   const shows = count(/await initializeAndShowEditor\(editor, init\)/g)
@@ -279,11 +373,55 @@ console.log('Wiring — a flow cannot be added without being measured')
     shows === visibleMarks && shows === 3,
     `${String(shows)} reveals, ${String(visibleMarks)} marks`,
   )
+  // Order, not just count: the mark must be the very next statement after the
+  // paint boundary resolves (comments allowed), and the line reported at once.
+  // Marking earlier would bill the paint to nobody; later, to the user.
+  const pairedVisible = count(
+    /await initializeAndShowEditor\(editor, init\)\s*(?:\/\/[^\n]*\s*)*markFlowLatency\('editor-visible'\)\s*reportFlowLatency\(\)/g,
+  )
+  check(
+    'editor-visible is marked immediately after the painted reveal, then reported',
+    pairedVisible === shows,
+    `${String(pairedVisible)} of ${String(shows)} reveals are marked immediately`,
+  )
+
+  // Stages are refused if reordered, so the call sites must stay in order in
+  // each of the two flows that freeze and save: video (runFlow) and the stills
+  // (runImageFlowWithContext freezes, runImageEditor saves and reveals).
+  const bodyOf = (name: string): string => {
+    const start = session.search(new RegExp(`\\n(?:export )?(?:async )?function ${name}\\(`))
+    if (start < 0) return ''
+    const next = session.slice(start + 1).search(/\n(?:export )?(?:async )?function \w+\(/)
+    return session.slice(start, next < 0 ? undefined : start + 1 + next)
+  }
+  const inOrder = (body: string, stages: string[]): boolean => {
+    const at = stages.map((stage) => body.indexOf(`markFlowLatency('${stage}')`))
+    return at.every((index, i) => index >= 0 && (i === 0 || index > (at[i - 1] ?? -1)))
+  }
+  check(
+    'the video flow marks frozen, saved and editor-visible in that order',
+    inOrder(bodyOf('runFlow'), ['frozen', 'saved', 'editor-visible']),
+  )
+  check(
+    'the still flows freeze before the selector and save before the reveal',
+    inOrder(bodyOf('runImageFlowWithContext'), ['frozen'])
+      && /markFlowLatency\('frozen'\)[\s\S]*const selectorShownAtMs/.test(bodyOf('runImageFlowWithContext'))
+      && inOrder(bodyOf('runImageEditor'), ['saved', 'editor-visible']),
+  )
+  check(
+    'the re-edit flow, which reopens a saved pack, marks only editor-visible',
+    inOrder(bodyOf('runEditFlow'), ['editor-visible'])
+      && !/markFlowLatency\('(?:frozen|saved)'\)/.test(bodyOf('runEditFlow')),
+  )
+  check(
+    'the selector wait is noted before a cancelled selection returns',
+    /noteFlowUserWait\(monotonicNowMs\(\) - selectorShownAtMs\)\s*if \(selection === null\)/.test(session),
+  )
 
   check(
     'the user-held span of the image selector is excluded explicitly',
-    /noteFlowUserWait\(/.test(session),
-    'noteFlowUserWait is not called',
+    /const selectorShownAtMs = monotonicNowMs\(\)[\s\S]{0,160}const selection = await selectionPending[\s\S]{0,160}noteFlowUserWait\(monotonicNowMs\(\) - selectorShownAtMs\)/.test(session),
+    'the selector wait is measured from its display until selection resolves',
   )
 
   check(
@@ -291,6 +429,18 @@ console.log('Wiring — a flow cannot be added without being measured')
     /process\.hrtime\.bigint\(\)/.test(session) &&
       !/beginCaptureLatency\([^)]*Date\.now\(\)/.test(session),
     'a wall-clock reading reaches the latency measurement',
+  )
+
+  check(
+    'the live release gate allows at most 5000 ms and invokes the log assertion',
+    /assert-live-capture-latency\.mjs[^\r\n]*5000/.test(releaseWorkflow),
+    'release workflow is not wired to the 5000 ms assertion',
+  )
+  check(
+    'the live-log assertion requires one video result and caps hands-off at both visible time and the configured limit',
+    /lines\.length !== 1/.test(liveAssertion) &&
+      /handsOffMs > visibleMs \|\| handsOffMs > limitMs/.test(liveAssertion),
+    'live assertion does not enforce a unique result within the limit',
   )
 }
 

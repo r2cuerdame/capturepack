@@ -61,6 +61,7 @@ import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
 import { collectGitState, gitPluginDeclaration, tryWriteGitPlugin } from './plugins/git'
+import { collectConsoleOutput, consolePluginDeclaration, tryWriteConsolePlugin } from './plugins/console'
 import { copyTextToClipboard } from './clipboard'
 import { isShareBundleArchive } from './packArchive'
 import {
@@ -1505,6 +1506,18 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     } catch {
       // Optional plugin failure must not fail the capture.
     }
+    let consoleDeclaration: NonNullable<Manifest['plugins']>[number] | undefined
+    try {
+      // The supplied console snapshot is bounded to 100 ms and optional. The
+      // writer publishes metadata last, so the declaration follows only a
+      // complete payload and every failure remains outside capture success.
+      const consoleOutput = await collectConsoleOutput()
+      if (await tryWriteConsolePlugin(dirPath, consoleOutput)) {
+        consoleDeclaration = consolePluginDeclaration()
+      }
+    } catch {
+      // Optional console context must never fail the capture.
+    }
     // Optional context lands before the manifest that declares it. Its writer
     // swallows every failure, so save-first remains a media-first guarantee.
     const contextDisposition = await reconcileWindowsContextPlugin(
@@ -1522,6 +1535,9 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       dirPath,
       imageCapture ? undefined : input.displays,
     )
+    const capturePlugins = [gitDeclaration, consoleDeclaration].filter(
+      (plugin): plugin is NonNullable<Manifest['plugins']>[number] => plugin !== undefined,
+    )
     const manifest = buildManifest({
       id,
       createdAt: input.capturedAt,
@@ -1538,7 +1554,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       replayDurationMs: input.replayDurationMs,
       snapshotTMs: null,
       plugins: withWindowsContextPlugin(
-        gitDeclaration ? [gitDeclaration] : undefined,
+        capturePlugins.length > 0 ? capturePlugins : undefined,
         contextDisposition,
       ),
       displays: writtenDisplays,
@@ -1901,10 +1917,40 @@ async function imagePluginEntryIsMetadata(sourcePath: string): Promise<boolean> 
   }
 }
 
-async function copyImagePluginMetadata(
+/** SPEC §5.4/§11.1: an ordinary meta.json whose name and version equal the declaration. */
+async function pluginMetadataMatches(
+  dir: string,
+  declaration: NonNullable<Manifest['plugins']>[number],
+): Promise<boolean> {
+  try {
+    const metaPath = join(dir, 'meta.json')
+    if (!(await lstat(metaPath)).isFile()) return false
+    const value = JSON.parse(stripUtf8Bom(await readFile(metaPath, 'utf8'))) as unknown
+    return value !== null
+      && typeof value === 'object'
+      && 'name' in value
+      && 'version' in value
+      && value.name === declaration.name
+      && value.version === declaration.version
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Copies only DECLARED, PUBLISHED plugin payloads into a Save As New pack and
+ * returns the declarations that actually landed. A source directory without a
+ * matching meta.json never finished (or is not this declaration's payload), so
+ * it is not copied at all; a copy that fails or loses its meta.json on the way
+ * (the image filter drops media-looking files) is removed from the new pack.
+ * Undeclared source directories never travel: the exporter declares every
+ * directory it writes (SPEC §5.4), and MCP lists plugins/ by directory.
+ */
+async function copySaveAsNewPlugins(
   sourceDir: string,
   targetDir: string,
   plugins: Manifest['plugins'] | undefined,
+  imageCapture: boolean,
 ): Promise<Manifest['plugins']> {
   const copied: Manifest['plugins'] = []
   const seen = new Set<string>()
@@ -1914,6 +1960,7 @@ async function copyImagePluginMetadata(
       typeof declaration !== 'object' ||
       typeof declaration.name !== 'string' ||
       !PLUGIN_DIRECTORY_NAME_RE.test(declaration.name) ||
+      typeof declaration.version !== 'string' ||
       seen.has(declaration.name)
     ) {
       continue
@@ -1921,16 +1968,20 @@ async function copyImagePluginMetadata(
     seen.add(declaration.name)
     const source = join(sourceDir, 'plugins', declaration.name)
     const target = join(targetDir, 'plugins', declaration.name)
-    if (!existsSync(source)) continue
-    await cp(source, target, {
-      recursive: true,
-      filter: imagePluginEntryIsMetadata,
-    })
+    if (!(await pluginMetadataMatches(source, declaration))) continue
     try {
-      const meta = await lstat(join(target, 'meta.json'))
-      if (meta.isFile()) copied.push(declaration)
+      await cp(source, target, {
+        recursive: true,
+        ...(imageCapture ? { filter: imagePluginEntryIsMetadata } : {}),
+      })
+      if (await pluginMetadataMatches(target, declaration)) {
+        copied.push(declaration)
+      } else {
+        await rm(target, { recursive: true, force: true })
+      }
     } catch {
-      // A declaration without ordinary meta.json is not a copied plugin.
+      // Plugin payloads are optional. A failed or partial copy is unpublished.
+      await rm(target, { recursive: true, force: true }).catch(() => {})
     }
   }
   return copied
@@ -2106,8 +2157,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   try {
     await mkdir(dirPath)
     // Copy pack-backed plugins first, then apply the caller's temporal-context
-    // disposition. For video, plugin payloads remain byte-for-byte. An image
-    // pack has a stricter boundary: only DECLARED plugin metadata may cross,
+    // disposition. Only declared payloads published by a matching meta.json
+    // cross; for video they remain byte-for-byte. An image pack has a stricter
+    // boundary: only DECLARED plugin metadata may cross,
     // and neither a media extension nor renamed raster/video magic is copied.
     // Otherwise Save As New could turn plugins/hidden.png from a malformed
     // source into an undeclared full-screen image in a newly trusted pack.
@@ -2117,12 +2169,8 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // authority for payloads copied from the source pack.
     let copiedPlugins = input.plugins ?? sourceManifest?.plugins
     if (existsSync(srcPlugins)) {
-      if (imageCapture) {
-        copiedPlugins = await copyImagePluginMetadata(sourceDir, dirPath, copiedPlugins)
-      } else {
-        await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
-      }
-    } else if (imageCapture) {
+      copiedPlugins = await copySaveAsNewPlugins(sourceDir, dirPath, copiedPlugins, imageCapture)
+    } else {
       copiedPlugins = []
     }
     const contextDisposition = await reconcileWindowsContextPlugin(
@@ -2168,6 +2216,10 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // A background render for the NEW folder always follows this save. Publish
     // its discovery commit only after every declared media copy has completed.
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+    // Nothing crossed: leave no plugins/ (empty, or holding what cleanup missed).
+    if ((manifest.plugins ?? []).length === 0) {
+      await rm(join(dirPath, 'plugins'), { recursive: true, force: true }).catch(() => {})
+    }
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })

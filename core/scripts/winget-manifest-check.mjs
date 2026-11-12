@@ -123,6 +123,13 @@ check(locale.includes(`License: ${packageJson.license}`) && locale.includes(`Pac
 check(locale.includes(`ReleaseNotesUrl: https://github.com/r2cuerdame/capturepack/releases/tag/v${version}`), 'ReleaseNotesUrl pins the tag')
 const notes = changelogSection(changelog, version)
 check(notes.split('\n').every((line) => line.length === 0 || locale.includes(`  ${line}`)), 'ReleaseNotes is the CHANGELOG section for this version')
+const candidateNotes = changelogSection(changelog, '0.6.1')
+check(
+  candidateNotes.includes('Git context is saved as a plugin')
+    && candidateNotes.includes('Share Copy can render blur regions as a solid opaque fill')
+    && !candidateNotes.includes('## 0.5.1'),
+  'the changelog parser extracts the complete 0.6.1 candidate section without adjacent releases',
+)
 for (const [name, text] of Object.entries(manifests.files)) {
   check(
     text.includes(`ManifestVersion: ${MANIFEST_VERSION}`) && text.includes(`PackageVersion: ${version}`) && text.includes(`PackageIdentifier: ${PACKAGE_IDENTIFIER}`) && !text.includes('\r') && text.endsWith('\n'),

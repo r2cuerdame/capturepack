@@ -171,6 +171,50 @@ try {
 
   console.log('\nChrome extension service worker')
   const manifest = shippedManifest
+  const builderConfig = readFileSync(path.join(here, '..', 'electron-builder.yml'), 'utf8')
+  const iconFiles = ['16', '32', '48', '128'].map((size) => manifest.icons?.[size])
+  const extensionFiles = [
+    'manifest.json',
+    'background.js',
+    'content-script.js',
+    'route-change.js',
+    'route-content.js',
+    'full-page-plan.js',
+    'full-page-capture.js',
+    'full-page-content.js',
+    'frame-geometry.js',
+    'document-snapshot.js',
+    ...iconFiles,
+  ]
+  check(
+    'Manifest V3 declares the worker, action, browser permissions, and four required icons',
+    manifest.manifest_version === 3
+      && manifest.background?.service_worker === 'background.js'
+      && manifest.action?.default_title?.includes('CapturePack')
+      && JSON.stringify(manifest.action?.default_icon) === JSON.stringify(manifest.icons)
+      && ['nativeMessaging', 'activeTab', 'scripting', 'tabs', 'alarms', 'storage', 'contextMenus']
+        .every((permission) => manifest.permissions?.includes(permission) === true)
+      && iconFiles.every((file) => typeof file === 'string' && file.length > 0),
+  )
+  const [extensionMajor, extensionMinor, extensionPatch] = manifest.version.split('.').map(Number)
+  check(
+    'extension version is a valid numeric release newer than the handoff floor 0.4.3',
+    /^\d+\.\d+\.\d+$/u.test(manifest.version)
+      && [extensionMajor, extensionMinor, extensionPatch].every(Number.isInteger)
+      && (extensionMajor > 0 || extensionMinor > 4 || (extensionMinor === 4 && extensionPatch > 3)),
+  )
+  check(
+    'electron-builder copies the extension folder to the unpacked installed extension path',
+    /extraResources:\s*\r?\n\s+- from: \.\.\/extensions\/chrome\s*\r?\n\s+to: extensions\/chrome(?:\s|$)/u.test(builderConfig),
+  )
+  check(
+    'extension manifest, worker scripts, route handlers, capture helpers, and icons exist and are non-empty',
+    extensionFiles.every((file) => {
+      if (typeof file !== 'string') return false
+      const filePath = path.join(here, '..', '..', 'extensions', 'chrome', file)
+      return existsSync(filePath) && readFileSync(filePath).length > 0
+    }),
+  )
   check('manifest ships the worker version under test', manifest.version === loadedExtensionVersion)
   check('manifest grants persistence for the one-shot reload guard',
     manifest.permissions?.includes('storage') === true)

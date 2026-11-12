@@ -34,6 +34,8 @@ export type CaptureFlowKind = 'video' | 'image' | 're-edit'
  */
 export type CaptureLatencyStage = 'frozen' | 'saved' | 'editor-visible'
 
+const STAGE_ORDER: readonly CaptureLatencyStage[] = ['frozen', 'saved', 'editor-visible']
+
 interface CaptureLatencyMark {
   stage: CaptureLatencyStage
   atMs: number
@@ -102,6 +104,13 @@ export function markCaptureLatency(
     state.refused = `${stage} is stamped before ${previous.stage}`
     return
   }
+  // A stage may be skipped, never reordered. Pixels frozen after the pack was
+  // written, or a pack written after the editor opened, means a call site moved
+  // and the offsets no longer describe the flow their names promise.
+  if (previous !== undefined && STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(previous.stage)) {
+    state.refused = `${stage} is recorded after ${previous.stage}`
+    return
+  }
   state.marks.push({ stage, atMs: nowMs })
 }
 
@@ -119,6 +128,13 @@ export function noteCaptureLatencyUserWait(state: CaptureLatencyState, waitedMs:
   }
   if (waitedMs < 0) {
     state.refused = 'a wait on the user cannot be negative'
+    return
+  }
+  if (state.marks.some((m) => m.stage === 'editor-visible')) {
+    // The hands-off total ends at editor-visible. A wait that finished after
+    // that boundary lies outside the span it would be subtracted from, so
+    // crediting it would make the app look faster than the person saw it.
+    state.refused = 'a wait on the user was noted after the editor became visible'
     return
   }
   state.waitedForUserMs += waitedMs
