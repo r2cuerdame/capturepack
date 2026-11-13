@@ -81,6 +81,19 @@ let lastDownloadedVersion: string | null = null
  */
 let manualCheckPending = false
 
+/**
+ * The state that earns the "you're up to date" notification: a finished check
+ * with nothing newer, and only when the user asked for it (#111). index.ts
+ * shows the notification on exactly this, and check:update-manual drives the
+ * real updater events through it.
+ */
+export function owesUpToDateNotice(s: UpdaterStatusPayload): boolean {
+  return s.state === 'up-to-date' && s.userRequested === true
+}
+
+// electron-updater reports a releases page with nothing on it as an error.
+const NO_PUBLISHED_VERSIONS = /no published versions/i
+
 function setStatus(incoming: UpdaterStatusPayload): void {
   // 'checking' and 'downloading' are progress, not answers; anything else ends
   // the question the user asked.
@@ -185,9 +198,14 @@ export function initUpdater(opts: {
     // up to date, and calling it a failure trains the user to ignore the one
     // message that should mean something when an update really cannot be
     // fetched.
-    if (/no published versions/i.test(message)) {
+    //
+    // So it is answered as up to date, not as idle (#523): 'idle' is not an
+    // answer, so a check the user asked for consumed its question here and
+    // then never said anything. The automatic check stays silent either way —
+    // only a pending manual check marks the result userRequested.
+    if (NO_PUBLISHED_VERSIONS.test(message)) {
       logInfo('[updater] no releases published yet — nothing to update to')
-      setStatus({ state: 'idle' })
+      setStatus({ state: 'up-to-date' })
       return
     }
     // Log and report only — a failed check or download leaves the running
@@ -261,7 +279,10 @@ export async function checkNow(): Promise<void> {
     // disabled "Checking for updates…". (Read through updaterState() — the
     // events above have re-assigned `status` while this call was awaited.)
     if (updaterState().state === 'checking') {
-      setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+      const message = err instanceof Error ? err.message : String(err)
+      // The same empty releases page as in the 'error' handler, reaching here
+      // without the event: still an answer, still not a failure.
+      setStatus(NO_PUBLISHED_VERSIONS.test(message) ? { state: 'up-to-date' } : { state: 'error', message })
     }
   }
 }

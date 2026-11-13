@@ -116,6 +116,11 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   when the capture is renamed. **Full ZIP** now refuses, with an error, to
   overwrite anything at `{capture}.zip` that is not a CapturePack archive
   ([#521](https://github.com/r2cuerdame/capturepack/issues/521)).
+- **Check for updates…** now answers when the releases page has nothing
+  published: the same one-time "up to date" notice as any other finished check,
+  instead of the "Checking…" label simply disappearing. The automatic check
+  stays silent, and a real connection failure is still reported as a failure
+  ([#523](https://github.com/r2cuerdame/capturepack/issues/523)).
 
 ### Documentation
 

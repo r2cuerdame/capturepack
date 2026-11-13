@@ -65,6 +65,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:about',
   'check:update-restart',
   'check:update-install',
+  'check:update-manual',
   'check:clipboard-contract',
   'check:source-first-save',
   'check:save-now',

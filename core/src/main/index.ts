@@ -66,6 +66,7 @@ import {
   holdSessionEndForUpdate,
   initUpdater,
   installPendingUpdateBeforeCapture,
+  owesUpToDateNotice,
   prepareSessionEnd,
   quitWhenIdle,
   restartAndUpdate,
@@ -857,7 +858,7 @@ function main(): void {
         // check the user actually requested — `userRequested` does not travel
         // with the four-hourly automatic one, which is precisely the routine
         // update noise #103 removed.
-        if (status.state === 'up-to-date' && status.userRequested === true) {
+        if (owesUpToDateNotice(status)) {
           new Notification({
             title: 'CapturePack', // product name — never translated
             body: uiT(settings)('app.upToDate', { version: app.getVersion() }),
