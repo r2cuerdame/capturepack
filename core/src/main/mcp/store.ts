@@ -75,6 +75,8 @@ export interface PackStore {
   setWatch(enabled: boolean): void
   /** Resolve id/path, or the pinned/newest pack when omitted. Does not re-pin. */
   resolve(idOrPath?: string): PackHandle
+  /** Open an already-indexed entry directly by its path and kind without rescanning. */
+  readEntry?(entry: Pick<RawPackEntry, 'id' | 'path' | 'kind'>): PackHandle
   /**
    * Newest-first raw index (no manifest reads) — the History window's listing
    * surface. Reuses the exact scan the MCP tools use; callers attach their own
@@ -108,35 +110,35 @@ export function createLivePackStore(
   options: () => { outputDir: string; watch: boolean },
 ): LivePackStore {
   let activeOptions = options()
-  let active = createPackStore(activeOptions)
+  let active = buildPackStore(activeOptions)
   return {
     current(): PackStore {
       const next = options()
       if (next.outputDir === activeOptions.outputDir && next.watch === activeOptions.watch) {
-        return active
+        return active.store
       }
       if (next.outputDir === activeOptions.outputDir) {
-        active.setWatch(next.watch)
+        active.store.setWatch(next.watch)
         activeOptions = next
-        return active
+        return active.store
       }
       const previous = active
-      const pinnedPath = previous.pinnedPath()
+      const pinned = previous.pinnedEntry()
       activeOptions = next
-      active = createPackStore(activeOptions)
-      if (pinnedPath !== null) {
+      active = buildPackStore(activeOptions)
+      if (pinned !== null) {
         try {
-          active.open(pinnedPath)
+          active.openPinned(pinned)
         } catch {
           // The old pin disappeared while Settings changed; resolve() will
           // honestly fall back to the new output folder's newest pack.
         }
       }
-      previous.dispose()
-      return active
+      previous.store.dispose()
+      return active.store
     },
     dispose(): void {
-      active.dispose()
+      active.store.dispose()
     },
   }
 }
@@ -151,7 +153,17 @@ export interface RawPackEntry {
 
 type RawEntry = RawPackEntry
 
+interface InternalPackStore {
+  store: PackStore
+  pinnedEntry(): { id: string; path: string; kind: PackKind } | null
+  openPinned(pinned: { id: string; path: string; kind: PackKind }): void
+}
+
 export function createPackStore(options: { outputDir: string; watch: boolean }): PackStore {
+  return buildPackStore(options).store
+}
+
+function buildPackStore(options: { outputDir: string; watch: boolean }): InternalPackStore {
   const outputDir = options.outputDir
   let watchEnabled = options.watch
   let disposed = false
@@ -242,6 +254,17 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
         // Directory vanished mid-scan: skip it.
       }
     }
+    const archiveCandidates: Array<{
+      rel: string
+      full: string
+      ext: string
+      stemLower: string
+      mtimeMs: number
+    }> = []
+    const archiveNameCounts = new Map<string, number>()
+    const countArchiveName = (nameLower: string): void => {
+      archiveNameCounts.set(nameLower, (archiveNameCounts.get(nameLower) ?? 0) + 1)
+    }
     for (const d of dirents) {
       const full = path.join(dir, d.name)
       const rel = relPrefix === '' ? d.name : `${relPrefix}/${d.name}`
@@ -250,6 +273,7 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
         if (ext !== null) {
           archives.push(full)
           const stem = d.name.slice(0, -ext.length)
+          const stemLower = stem.toLowerCase()
           // A `.zip` is only a pack if it CONTAINS one. `.capturepack` could be
           // taken on its name alone because nothing else writes that extension;
           // now that archives are ordinary zips (the name has to say what the
@@ -261,8 +285,11 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
           // renamed to that extension, or one copied in from elsewhere, would
           // otherwise be indexed as a capture and become renameable and
           // deletable through History. Both extensions now have to prove it.
-          if (!dirStems.has(stem.toLowerCase()) && archiveHoldsAPack(full)) {
-            out.push({ id: rel.slice(0, -ext.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
+          if (!dirStems.has(stemLower) && archiveHoldsAPack(full)) {
+            const mtimeMs = fs.statSync(full).mtimeMs
+            archiveCandidates.push({ rel, full, ext, stemLower, mtimeMs })
+            if (stemLower !== '') countArchiveName(stemLower)
+            countArchiveName(d.name.toLowerCase())
           }
         } else if (d.isDirectory()) {
           if (directoryHoldsCapturePack(full)) {
@@ -274,6 +301,20 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       } catch {
         // File vanished mid-scan: skip it.
       }
+    }
+    // Keep the short stem id only when it collides with neither another
+    // archive's stem nor another archive's qualified filename (e.g. Demo.zip,
+    // Demo.capturepack, and Demo.zip.capturepack); otherwise qualify with the
+    // archive extension so every pack remains individually openable.
+    for (const candidate of archiveCandidates) {
+      const collides =
+        candidate.stemLower === '' || (archiveNameCounts.get(candidate.stemLower) ?? 0) > 1
+      out.push({
+        id: collides ? candidate.rel : candidate.rel.slice(0, -candidate.ext.length),
+        path: candidate.full,
+        kind: 'zip',
+        mtimeMs: candidate.mtimeMs,
+      })
     }
   }
 
@@ -343,26 +384,80 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
   }
 
   function findEntry(ref: string): RawEntry | undefined {
-    const lower = ref.toLowerCase()
-    // index is newest-first, so an ambiguous base name resolves to the newest match.
-    return index.find(
-      (e) =>
-        e.id.toLowerCase() === lower ||
-        path.basename(e.path).toLowerCase() === lower ||
-        path.basename(e.id).toLowerCase() === lower,
+    if (path.isAbsolute(ref)) {
+      const target = path.resolve(ref)
+      const targetLower = target.toLowerCase()
+      return (
+        index.find((e) => path.resolve(e.path) === target) ??
+        index.find((e) => path.resolve(e.path).toLowerCase() === targetLower)
+      )
+    }
+    const norm = ref.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '').replace(/\/+$/, '')
+    if (norm === '') return undefined
+    const normLower = norm.toLowerCase()
+    const resolvedRoot = path.resolve(outputDir)
+    const relOf = (e: RawEntry): string =>
+      path.relative(resolvedRoot, path.resolve(e.path)).replace(/\\/g, '/')
+    // Priority order keeps exact id / output-relative matches ahead of the
+    // newest-first plain basename fallback.
+    return (
+      index.find((e) => e.id === norm) ??
+      index.find((e) => e.id.toLowerCase() === normLower) ??
+      index.find((e) => relOf(e) === norm) ??
+      index.find((e) => relOf(e).toLowerCase() === normLower) ??
+      index.find(
+        (e) =>
+          path.basename(e.path).toLowerCase() === normLower ||
+          path.basename(e.id).toLowerCase() === normLower,
+      )
     )
   }
 
+  function isWithinDir(base: string, candidate: string): boolean {
+    const resolvedBase = path.resolve(base)
+    const resolvedCandidate = path.resolve(candidate)
+    const rel = path.relative(
+      process.platform === 'win32' ? resolvedBase.toLowerCase() : resolvedBase,
+      process.platform === 'win32' ? resolvedCandidate.toLowerCase() : resolvedCandidate,
+    )
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+  }
+
   function handleFor(ref: string): PackHandle {
-    const entry = findEntry(ref)
+    let entry = findEntry(ref)
+    if (
+      !entry &&
+      watcher !== null &&
+      path.isAbsolute(ref) &&
+      isWithinDir(outputDir, ref) &&
+      fs.existsSync(ref)
+    ) {
+      // A brand-new pack inside outputDir may be opened before fs.watch's
+      // debounce fires; rescan once so it receives its full subfolder/qualified id.
+      scan()
+      entry = findEntry(ref)
+    }
     if (entry) return openPack(entry.path, entry.kind, entry.id)
+    if (
+      current !== null &&
+      path.isAbsolute(ref) &&
+      path.resolve(ref).toLowerCase() === path.resolve(current.path).toLowerCase() &&
+      fs.existsSync(current.path)
+    ) {
+      const stat = fs.statSync(current.path)
+      const kind: PackKind = stat.isDirectory() ? 'dir' : 'zip'
+      if (kind === current.kind) {
+        return openPack(current.path, current.kind, current.id)
+      }
+    }
     if (path.isAbsolute(ref) && fs.existsSync(ref)) {
-      const stat = fs.statSync(ref)
-      if (stat.isDirectory()) return openPack(ref, 'dir', path.basename(ref))
-      const base = path.basename(ref)
+      const resolvedRef = path.resolve(ref)
+      const stat = fs.statSync(resolvedRef)
+      if (stat.isDirectory()) return openPack(resolvedRef, 'dir', path.basename(resolvedRef))
+      const base = path.basename(resolvedRef)
       const ext = packArchiveExt(base)
-      const id = ext === null ? base : base.slice(0, -ext.length)
-      return openPack(ref, 'zip', id)
+      const id = ext !== null && base.length > ext.length ? base.slice(0, -ext.length) : base
+      return openPack(resolvedRef, 'zip', id)
     }
     throw new Error(
       `No pack matches "${ref}". Call capturepack_list for known ids, or pass an absolute path to a .capturepack file or extracted pack folder.`,
@@ -393,7 +488,7 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
   lastNotifiedSig = indexSignature()
   tryWatch()
 
-  return {
+  const store: PackStore = {
     outputDir,
     list(limit: number): { total: number; packs: PackIndexEntry[] } {
       ensureFresh()
@@ -431,10 +526,18 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       ensureFresh()
       if (idOrPath !== undefined && idOrPath.trim() !== '') return handleFor(idOrPath.trim())
       if (current) {
+        const indexed = findEntry(current.path)
+        if (indexed && indexed.kind === current.kind) {
+          current = { id: indexed.id, path: indexed.path, kind: indexed.kind }
+          return openPack(indexed.path, indexed.kind, indexed.id)
+        }
         if (fs.existsSync(current.path)) return openPack(current.path, current.kind, current.id)
         current = null // pinned pack was deleted: fall back to newest
       }
       return newestHandle()
+    },
+    readEntry(entry: Pick<RawPackEntry, 'id' | 'path' | 'kind'>): PackHandle {
+      return openPack(entry.path, entry.kind, entry.id)
     },
     entries(): RawPackEntry[] {
       ensureFresh()
@@ -455,6 +558,27 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       watcher?.close()
       watcher = null
       changeListeners.clear()
+    },
+  }
+
+  return {
+    store,
+    pinnedEntry(): { id: string; path: string; kind: PackKind } | null {
+      return current ? { ...current } : null
+    },
+    openPinned(pinned: { id: string; path: string; kind: PackKind }): void {
+      const entry = findEntry(pinned.path)
+      if (entry) {
+        current = { id: entry.id, path: entry.path, kind: entry.kind }
+        return
+      }
+      if (path.isAbsolute(pinned.path) && fs.existsSync(pinned.path)) {
+        const stat = fs.statSync(pinned.path)
+        const kind: PackKind = stat.isDirectory() ? 'dir' : 'zip'
+        current = { id: pinned.id, path: pinned.path, kind }
+        return
+      }
+      throw new Error(`Pinned pack no longer exists: ${pinned.path}`)
     },
   }
 }
