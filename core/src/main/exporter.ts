@@ -4,7 +4,7 @@
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync } from 'node:fs'
 import {
   copyFile,
   cp,
@@ -64,7 +64,7 @@ import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
 import { collectGitState, gitPluginDeclaration, tryWriteGitPlugin } from './plugins/git'
 import { collectConsoleOutput, consolePluginDeclaration, tryWriteConsolePlugin } from './plugins/console'
 import { copyTextToClipboard } from './clipboard'
-import { isShareBundleArchive } from './packArchive'
+import { isCapturePackArchive, isShareBundleArchive } from './packArchive'
 import {
   WINDOWS_CONTEXT_TIMELINE_SCHEMA,
   type WindowsContextTimelineV1,
@@ -2519,26 +2519,44 @@ export async function setManifestRenderOutputs(
  * The archive is written beside the destination to a unique temporary file and
  * atomically replaced upon completion, ensuring temporary files are cleaned up
  * on error and preexisting archives are unharmed (#177).
+ *
+ * Only a CapturePack archive is ever replaced (#521). The output folder may be
+ * Downloads or the Desktop, where `{folder}.zip` can just as well be the
+ * user's own photo zip, another program's archive, a folder or a link; any of
+ * those makes this refuse, and is checked again just before the replace.
  */
 export async function createPackZip(dirPath: string): Promise<string> {
   const zipPath = `${dirPath}.zip`
-  // `Foo.share.zip` is also the Share Copy path of a neighbouring pack named
-  // Foo. Never let Full ZIP overwrite a different archive identity.
-  if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
-    throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
-  }
+  assertFullZipReplaceable(zipPath)
   const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`
   const zip = new AdmZip()
   zip.addLocalFolder(dirPath)
   try {
     await zip.writeZipPromise(temporaryPath, { overwrite: true })
-    if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
-      throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
-    }
+    assertFullZipReplaceable(zipPath)
     await rename(temporaryPath, zipPath)
     return zipPath
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => {})
+  }
+}
+
+/** Throws unless `zipPath` is free or already holds a CapturePack archive. */
+function assertFullZipReplaceable(zipPath: string): void {
+  try {
+    lstatSync(zipPath)
+  } catch {
+    return // Nothing there: free to write.
+  }
+  // `Foo.share.zip` is also the Share Copy path of a neighbouring pack named
+  // Foo. Never let Full ZIP overwrite a different archive identity.
+  if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
+    throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
+  }
+  if (!isCapturePackArchive(zipPath)) {
+    throw new Error(
+      `The Full ZIP filename is occupied by a file that is not a CapturePack archive; it was left untouched: ${zipPath}`,
+    )
   }
 }
 

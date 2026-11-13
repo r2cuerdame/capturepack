@@ -65,23 +65,124 @@ export function archiveStem(p: string): string {
  * trashes both, and the storage total counts both — it is a distribution copy
  * of that pack and of nothing else, so leaving it behind would leave the user
  * with an orphan archive they cannot open from History and did not ask to keep.
+ *
+ * A NAME IS NOT A TWIN (#521). Because the twin is renamed, trashed and counted
+ * with the folder, only a regular file whose contents hold a CapturePack
+ * qualifies. A photo zip, a foreign manifest, a corrupt file, a directory or a
+ * link that merely shares the folder's name belongs to the user and is skipped
+ * — and the search goes on, so a stray `Foo.zip` cannot hide a real legacy
+ * `Foo.capturepack`. `Foo.share.zip` (Foo's Share Copy, or the full ZIP of a
+ * folder named Foo.share) is settled the same way: by what it holds.
+ *
+ * The returned path carries the name as it exists on disk, so a `.CapturePack`
+ * or `.ZIP` twin keeps its suffix when the folder is renamed. Identity answers
+ * are remembered while a file stats the same, so repeated listings read no
+ * archive twice.
  */
 export function siblingArchive(dirPath: string): string | null {
-  for (const ext of PACK_ARCHIVE_EXTS) {
-    const candidate = `${dirPath}${ext}`
-    if (!fs.existsSync(candidate)) continue
-    // `Foo.share.zip` can mean either Foo's Share Copy or the full ZIP of a
-    // different pack folder named Foo.share. Content identity, not the suffix,
-    // owns that namespace.
-    if (
-      candidate.toLowerCase().endsWith(SHARE_BUNDLE_SUFFIX) &&
-      rememberedShareBundle(candidate)
-    ) {
-      continue
-    }
-    return candidate
+  const resolved = path.resolve(dirPath)
+  const parent = path.dirname(resolved)
+  const stem = path.basename(resolved)
+  const names =
+    foldsCase(resolved) === true ? probedArchiveNames(parent, stem) : listedArchiveNames(parent, stem)
+  for (const name of names) {
+    const candidate = path.join(parent, name)
+    if (isRegularFile(candidate) && archiveHoldsAPack(candidate)) return candidate
   }
   return null
+}
+
+/** Regular file, not a link, directory or anything else. */
+function isRegularFile(file: string): boolean {
+  try {
+    const info = fs.lstatSync(file)
+    return info.isFile() && !info.isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether the directory holding `p` matches names case-insensitively, judged
+ * by `p` itself answering to its case-flipped name as the same file. Null when
+ * that cannot be told: `p` is missing or its name has no letters.
+ */
+function foldsCase(p: string): boolean | null {
+  const base = path.basename(p)
+  let flipped = ''
+  for (const ch of base) {
+    const lower = ch.toLowerCase()
+    flipped += ch === lower ? ch.toUpperCase() : lower
+  }
+  if (flipped === base) return null
+  try {
+    const own = fs.lstatSync(p, { bigint: true })
+    try {
+      const other = fs.lstatSync(path.join(path.dirname(p), flipped), { bigint: true })
+      return own.ino === other.ino && own.dev === other.dev
+    } catch {
+      return false
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Twin names on a case-insensitive directory: one probe per extension, the
+ * exact on-disk spelling read back from the file itself. No directory listing,
+ * so measuring N packs stays N probes rather than N listings of N entries.
+ */
+function probedArchiveNames(parent: string, stem: string): string[] {
+  const names: string[] = []
+  for (const ext of PACK_ARCHIVE_EXTS) {
+    const probe = path.join(parent, `${stem}${ext}`)
+    if (!isRegularFile(probe)) continue
+    let name = path.basename(probe)
+    try {
+      const real = path.basename(fs.realpathSync.native(probe))
+      if (real.toLowerCase() === name.toLowerCase()) name = real
+    } catch {
+      // Keep the probed spelling; the file is still there to be identified.
+    }
+    names.push(name)
+  }
+  return names
+}
+
+/**
+ * Twin names from the parent's real entries, for a directory that is case
+ * sensitive (or cannot be told): the stem must match exactly, the suffix in
+ * any case, `.zip` before `.capturepack`, an exact lower-case suffix first.
+ */
+function listedArchiveNames(parent: string, stem: string): string[] {
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(parent)
+  } catch {
+    return PACK_ARCHIVE_EXTS.map((ext) => `${stem}${ext}`)
+  }
+  const rank = (name: string): number => {
+    const suffix = archiveSuffix(name) ?? ''
+    const order = PACK_ARCHIVE_EXTS.indexOf(suffix.toLowerCase())
+    return order * 2 + (suffix === suffix.toLowerCase() ? 0 : 1)
+  }
+  return entries
+    .filter((name) => archiveSuffix(name) !== null && archiveStem(name) === stem)
+    .sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
+}
+
+/**
+ * True only when `file` is, right now, a regular file holding a CapturePack.
+ * Never remembered: the Full ZIP writer acts on this before replacing a file.
+ */
+export function isCapturePackArchive(file: string): boolean {
+  if (!isRegularFile(file)) return false
+  try {
+    return zipHoldsAPack(new AdmZip(fs.readFileSync(file)))
+  } catch {
+    return false
+  }
 }
 
 /**

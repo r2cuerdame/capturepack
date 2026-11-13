@@ -107,6 +107,15 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   actually reaches its budget, matching the bar's over colour. Retention and
   the budget decision are unchanged
   ([#517](https://github.com/r2cuerdame/capturepack/issues/517)).
+- A file that only shares a capture folder's name is no longer treated as that
+  capture's archive. A photo zip, another program's archive, a damaged file or
+  a folder named `{capture}.zip` beside a capture is no longer badged in
+  History, added to the storage total, renamed with the capture or sent to the
+  Recycle Bin with it. A real older `.capturepack` archive behind such a file is
+  still found, and an archive named `.ZIP` or `.CapturePack` keeps that spelling
+  when the capture is renamed. **Full ZIP** now refuses, with an error, to
+  overwrite anything at `{capture}.zip` that is not a CapturePack archive
+  ([#521](https://github.com/r2cuerdame/capturepack/issues/521)).
 
 ### Documentation
 
