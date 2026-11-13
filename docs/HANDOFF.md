@@ -117,7 +117,9 @@ failure leaves no partial plugin declaration or temporary file and does not
 fail the save. After these checks, require SPEC validation and all 100 automated
 QA checks to pass with no regression. The five-second workflow remains
 an independent acceptance condition throughout. The numbered criteria are in
-[RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md).
+[RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md); the design baseline
+— file layout, time budget, masking rules and write order — is
+[CONSOLE_PLUGIN.md](CONSOLE_PLUGIN.md).
 
 The one-month observation starts only when a public-release installer has
 successfully completed and its actual date and installed version are recorded.
