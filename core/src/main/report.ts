@@ -522,6 +522,7 @@ export function buildReport(
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
   includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
@@ -659,7 +660,11 @@ export function buildReport(
   if (includeAnnotationsFile) {
     lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
   }
-  if (!imageCapture) lines.push('- timeline.json — timestamped events from capture start to save')
+  // SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack, so
+  // the list names it only when the exporter found it on disk.
+  if (!imageCapture && includeTimelineFile) {
+    lines.push('- timeline.json — timestamped events from capture start to save')
+  }
   if (hasReplay) {
     // The DECLARED name (SPEC §5.3 allows replay.mp4 too) — never assumed.
     lines.push(
