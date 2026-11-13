@@ -99,11 +99,26 @@ function stripTerminalControls(value: string): string {
     .replace(/\x1b(?:[ -/]*[0-~]|$)/gu, '')
 }
 
+const SECRET_NAME_SOURCE = 'api[_-]?key|secret|token|password|passwd|pwd|passphrase|access[_-]?key|private[_-]?key'
+const SECRET_NAME = new RegExp(SECRET_NAME_SOURCE, 'iu')
+// Spelled [xX] per letter so a pattern can stay case-sensitive for the PWD/OLDPWD exception.
+const SECRET_NAME_CASELESS = SECRET_NAME_SOURCE.replace(/[a-z]/gu, (letter) => `[${letter}${letter.toUpperCase()}]`)
+// Match only secret names: a kept match would resume the scan after its value
+// and hide an assignment inside it (`INFO: password=...`). `&` is a valid
+// credential character here; URL parameters are split by the query pass.
+const SECRET_ASSIGNMENT = new RegExp(
+  String.raw`\b(?!(?:OLD)?PWD\s*[:=])(?=[\w.-]*(?:${SECRET_NAME_CASELESS}))([\w.-]+\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\[\]{}\r\n]*\]|(?!(?:\{\s*["'\w.-]+\s*[:=]|\[\s*\{))(?:[^\s,;}"']+(?:["'][^\s,;}\]\)"'>]+)*|["'][^\s,;}]*))`,
+  'gu',
+)
+// A following long option is the next flag, never this option's value.
+const SECRET_OPTION = new RegExp(
+  String.raw`(?<![\w-])(--(?=[\w-]*(?:${SECRET_NAME_CASELESS}))([\w-]+)[ \t]+)(?!--[A-Za-z])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)`,
+  'gu',
+)
+
 function secretName(name: string): boolean {
   // PWD and OLDPWD are conventional working-directory variables, not passwords.
-  return name !== 'PWD'
-    && name !== 'OLDPWD'
-    && /api[_-]?key|secret|token|password|passwd|pwd|passphrase|access[_-]?key|private[_-]?key/iu.test(name)
+  return name !== 'PWD' && name !== 'OLDPWD' && SECRET_NAME.test(name)
 }
 
 function redactSecrets(value: string): string {
@@ -147,24 +162,10 @@ function redactSecrets(value: string): string {
         return match
       },
     )
+    .replace(SECRET_ASSIGNMENT, '$1[REDACTED]')
     .replace(
-      /\b([\w.-]+)(\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\[\]{}\r\n]*\]|(?!(?:\{\s*["'\w.-]+\s*[:=]|\[\s*\{))(?:[^\s,;}&"']+(?:["'][^\s,;}&\]\)"'>]+)*|["'][^\s,;}&]*))/gu,
-      (match, name: string, separator: string) =>
-        secretName(name) ? `${name}${separator}[REDACTED]` : match,
-    )
-    .replace(
-      /(?<![\w-])(--([\w-]+)[ \t]+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gu,
-      (match, prefix: string, name: string) => {
-        if (!secretName(name)) return match
-        const val = match.slice(prefix.length)
-        if (
-          /^(?:no|without|skip|disable|use|enable|require|has|is)[_-]/iu.test(name)
-          && /^--[A-Za-z]/u.test(val)
-        ) {
-          return match
-        }
-        return `${prefix}[REDACTED]`
-      },
+      SECRET_OPTION,
+      (match, prefix: string, name: string) => secretName(name) ? `${prefix}[REDACTED]` : match,
     )
     .replace(
       /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|(?:AKIA|ASIA)[0-9A-Z]{16}|npm_[A-Za-z0-9]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,})\b/gu,

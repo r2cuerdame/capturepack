@@ -338,6 +338,26 @@ try {
       && compoundAndCli.output.includes('--token [REDACTED]')
       && compoundAndCli.output.includes('--client-secret [REDACTED]'))
 
+  const nestedAndFlags = await collectConsoleOutput(async () => [
+    'INFO: password=nestedPass1',
+    'message="password=nestedPass2"',
+    'PWD=/workspace&password=nestedPass3',
+    'password=ampLeft&ampRight',
+    'tool --verbose --password flagPass1',
+    'tool --no-password --token flagTok1',
+    'tool --token-file --api-key flagKey1',
+  ].join('\n'))
+  check('non-secret prefixes and boolean flags never hide a later secret, and & stays inside a value',
+    nestedAndFlags !== null
+      && ['nestedPass1', 'nestedPass2', 'nestedPass3', 'ampLeft', 'ampRight', 'flagPass1', 'flagTok1', 'flagKey1']
+        .every((secret) => !nestedAndFlags.output.includes(secret))
+      && nestedAndFlags.output.includes('INFO: password=[REDACTED]\n')
+      && nestedAndFlags.output.includes('PWD=/workspace&password=[REDACTED]\n')
+      && nestedAndFlags.output.includes('password=[REDACTED]\ntool')
+      && nestedAndFlags.output.includes('tool --verbose --password [REDACTED]\n')
+      && nestedAndFlags.output.includes('tool --no-password --token [REDACTED]\n')
+      && nestedAndFlags.output.includes('tool --token-file --api-key [REDACTED]\n'))
+
   const urlsHeadersAndTokens = await collectConsoleOutput(async () => [
     'https://alice:urlPass1@example.com/path',
     'postgres://admin:p@ssword@db.internal:5432/app',
