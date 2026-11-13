@@ -220,10 +220,17 @@ export function budgetLevel(totalBytes: number, maxBytes: number): BudgetLevel {
   return totalBytes / maxBytes >= BUDGET_NEAR_FRACTION ? 'near' : 'ok'
 }
 
-/** Whole percent, for the tooltip that carries the exact number. */
+/**
+ * Whole percent, for the tooltip that carries the exact number.
+ *
+ * Under the line it never reads 100: budgetLevel only turns the bar 'over' at
+ * the line itself, and "100%" beside a bar that is not over would have the
+ * number and the colour disagree about whether the folder is full.
+ */
 export function budgetPercent(totalBytes: number, maxBytes: number): number {
   if (!(maxBytes > 0)) return 0
-  return Math.round((totalBytes / maxBytes) * 100)
+  const percent = Math.round((totalBytes / maxBytes) * 100)
+  return totalBytes < maxBytes ? Math.min(99, percent) : percent
 }
 
 /**
@@ -232,18 +239,30 @@ export function budgetPercent(totalBytes: number, maxBytes: number): number {
  * SHARED BECAUSE THE BAR IS IN TWO WINDOWS. History and Settings both print the
  * same total beside the same bar, and two formatters that round differently
  * would have the two windows disagree about the size of one folder.
+ *
+ * The unit is chosen from the number that will be PRINTED, not the raw one:
+ * 1023.99 KB rounds to 1024 and is shown as 1.0 MB, and 99.98 KB rounds to 100
+ * and is shown without a decimal like every other three-digit value. GB is the
+ * last unit; anything larger stays in GB.
  */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${String(bytes)} B`
-  const units = ['KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 'B'
-  for (const next of units) {
-    if (value < 1024) break
+  const units = ['KB', 'MB', 'GB'] as const
+  let value = bytes / 1024
+  let index = 0
+  let shown = printedBytes(value)
+  while (Number(shown) >= 1024 && index < units.length - 1) {
     value /= 1024
-    unit = next
+    index++
+    shown = printedBytes(value)
   }
-  return `${value >= 100 ? String(Math.round(value)) : value.toFixed(1)} ${unit}`
+  return `${shown} ${units[index]}`
+}
+
+/** One decimal under 100, whole numbers from 100 — judged on the rounded value. */
+function printedBytes(value: number): string {
+  const tenths = value.toFixed(1)
+  return Number(tenths) >= 100 ? String(Math.round(value)) : tenths
 }
 
 /** Budget labels only: the choices are whole gigabytes, so "10 GB" beats "10.0 GB". */
