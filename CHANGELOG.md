@@ -100,6 +100,13 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   dropped when its file is gone. Writing or replacing a Share Copy still checks
   the file on disk every time
   ([#515](https://github.com/r2cuerdame/capturepack/issues/515)).
+- Storage sizes in History and Settings no longer read "1024 KB" or "1024 MB"
+  just below a unit boundary; they move to "1.0 MB" and "1.0 GB", and a value
+  that rounds to 100 or more is printed without a decimal ("100 KB", not
+  "100.0 KB"). The usage percent stays at 99% or below until the folder
+  actually reaches its budget, matching the bar's over colour. Retention and
+  the budget decision are unchanged
+  ([#517](https://github.com/r2cuerdame/capturepack/issues/517)).
 
 ### Documentation
 

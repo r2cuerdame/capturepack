@@ -189,6 +189,46 @@ check('at the line it is over', budgetLevel(100, 100) === 'over')
 check('percent is the exact number the tooltip carries', budgetPercent(33, 100) === 33)
 check('no budget is not a division by zero', budgetFraction(100, 0) === 0 && budgetLevel(100, 0) === 'ok')
 check('bytes read as a person reads them', formatBytes(0) === '0 B' && formatBytes(1536) === '1.5 KB')
+check('just under a byte boundary stays in bytes', formatBytes(1023) === '1023 B' && formatBytes(1024) === '1.0 KB')
+check(
+  'a value that rounds onto the next unit is printed in that unit',
+  formatBytes(1048575) === '1.0 MB' && formatBytes(1048064) === '1.0 MB' && formatBytes(1073741823) === '1.0 GB',
+)
+check('a value that rounds to 100 is printed without a decimal', formatBytes(102380) === '100 KB')
+check('the largest unit is GB', formatBytes(10 * 1073741824) === '10.0 GB')
+{
+  const misprinted: string[] = []
+  for (let power = 1; power <= 3; power++) {
+    const unit = 1024 ** power
+    for (const anchor of [unit, 100 * unit, 1024 * unit]) {
+      if (anchor >= 1024 ** 4) continue
+      for (const step of [1, Math.max(1, Math.floor(unit / 4096))]) {
+        for (let delta = -2048; delta <= 2048; delta++) {
+          const bytes = anchor + delta * step
+          if (bytes < 1024 || bytes >= 1024 ** 4) continue
+          const text = formatBytes(bytes)
+          const [digits = ''] = text.split(' ')
+          const value = Number(digits)
+          if (value >= 1024 || (value >= 100 && digits.includes('.'))) misprinted.push(`${String(bytes)} -> ${text}`)
+        }
+      }
+    }
+  }
+  check(
+    `no size from 1 KB to 1 TB prints 1024+ of a unit or a decimal past 100${misprinted.length ? ` (${misprinted.slice(0, 3).join(', ')})` : ''}`,
+    misprinted.length === 0,
+  )
+}
+check(
+  'under the line never reads 100%, at or past it reads the real number',
+  budgetPercent(9995, 10000) === 99 && budgetPercent(10000, 10000) === 100 && budgetPercent(15000, 10000) === 150,
+)
+check(
+  'the percent and the over colour agree on whether the folder is full',
+  [9949, 9950, 9995, 9999, 10000, 10001].every(
+    (total) => (budgetPercent(total, 10000) >= 100) === (budgetLevel(total, 10000) === 'over'),
+  ),
+)
 
 console.log('\nPERSISTED, AND VALIDATED THE SAME WAY ON EVERY ROUTE IN')
 const settingsStore = source('src/main/settings.ts')
