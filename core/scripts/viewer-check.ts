@@ -238,6 +238,35 @@ function pureContractChecks(): void {
   const legacyHtml = buildViewerHtml(legacy, annotations(), timeline(), 'en')
   check('legacy replay pack degrades to inferred video', legacyHtml.includes('<dd>video</dd>') && legacyHtml.includes('src="replay.mp4"'))
 
+  // Issue #502: report/README file lists follow the disk for timeline.json.
+  // An image pack never names one, even when the caller says one exists.
+  const imageReportTimeline = buildReport(image, annotations(), 'en', false, true, true, true)
+  const imageReadmeTimeline = buildReadme(image, annotations(), 'en', false, true, true, true)
+  check(
+    'image pack report/README never list timeline.json (#502)',
+    !imageReportTimeline.includes('timeline.json') && !imageReadmeTimeline.includes('timeline.json'),
+  )
+  const legacyWithTimeline: string[] = [
+    buildReport(legacy, annotations(), 'en', false, true, true, true),
+    buildReadme(legacy, annotations(), 'en', false, true, true, true),
+  ]
+  const legacyWithoutTimeline = [
+    buildReport(legacy, annotations(), 'en', false, true, true, false),
+    buildReadme(legacy, annotations(), 'en', false, true, true, false),
+  ]
+  check(
+    'legacy/video report/README list timeline.json only when it exists (#502)',
+    (legacyWithTimeline[0] ?? '').includes('- timeline.json —') &&
+      (legacyWithTimeline[1] ?? '').includes('| timeline.json |') &&
+      legacyWithoutTimeline.every((doc) => !doc.includes('timeline.json')),
+  )
+  const legacyNoTimelineHtml = buildViewerHtml(legacy, annotations(), undefined, 'en')
+  check(
+    'legacy/video viewer lists timeline.json only when one is passed (#502)',
+    legacyHtml.includes('<code>timeline.json</code>') &&
+      !legacyNoTimelineHtml.includes('<code>timeline.json</code>'),
+  )
+
   const multi = videoManifest({
     environment: {
       os: 'windows',
@@ -1340,6 +1369,24 @@ async function writerIntegrationChecks(): Promise<void> {
         refreshedReplayOverview.includes('screenshot only'),
     )
 
+    // Issue #502: a regenerated file list names timeline.json only when it is
+    // really in the folder (SPEC §12.4). Present first: the list keeps it.
+    const listsTimeline = (viewer: string, report: string, readme: string): boolean[] => [
+      viewer.includes('<code>timeline.json</code>'),
+      report.includes('- timeline.json —'),
+      readme.includes('| timeline.json |'),
+    ]
+    await refreshPackDocs(handle.dirPath, 'en')
+    check(
+      'refreshPackDocs lists timeline.json in viewer/report/README while it exists on disk',
+      existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        listsTimeline(
+          readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8'),
+          readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+          readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+        ).every(Boolean),
+    )
+
     // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
     rmSync(path.join(handle.dirPath, 'timeline.json'), { force: true })
     const capturedNoTimelineErrors: string[] = []
@@ -1373,6 +1420,10 @@ async function writerIntegrationChecks(): Promise<void> {
         noTimelineTimelineSkill.includes('No events were recorded.') &&
         !noTimelineTimelineSkill.includes('undefined'),
     )
+    check(
+      'refreshPackDocs does not list an absent timeline.json in viewer/report/README (#502)',
+      listsTimeline(noTimelineViewer, noTimelineReport, noTimelineReadme).every((listed) => !listed),
+    )
 
     const lateNoTimelinePluginDir = path.join(handle.dirPath, 'plugins', 'late-no-timeline')
     mkdirSync(lateNoTimelinePluginDir, { recursive: true })
@@ -1395,6 +1446,18 @@ async function writerIntegrationChecks(): Promise<void> {
         viewerAfterLateNoTimeline.includes('late-no-timeline') &&
         !viewerAfterLateNoTimeline.includes('undefined'),
     )
+    check(
+      'addManifestPlugin does not list an absent timeline.json in viewer/report/README (#502)',
+      !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        listsTimeline(
+          viewerAfterLateNoTimeline,
+          readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+          readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+        ).every((listed) => !listed) &&
+        readFileSync(path.join(handle.dirPath, 'skills', 'timeline.md'), 'utf8').includes(
+          'No events were recorded.',
+        ),
+    )
 
     // Issue #200: malformed timeline.json (SyntaxError and non-array events)
     writeFileSync(path.join(handle.dirPath, 'timeline.json'), '{"events": [corrupted json', 'utf8')
@@ -1407,6 +1470,14 @@ async function writerIntegrationChecks(): Promise<void> {
       'refreshPackDocs falls back to empty timeline on malformed JSON without throwing or aborting',
       malformedJsonSkill.includes('No events were recorded.') &&
         !malformedJsonSkill.includes('undefined'),
+    )
+    check(
+      'refreshPackDocs keeps a present-but-malformed timeline.json in viewer/report/README (#502)',
+      listsTimeline(
+        readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+      ).every(Boolean),
     )
 
     const lateMalformedPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed')
@@ -1426,6 +1497,103 @@ async function writerIntegrationChecks(): Promise<void> {
     check(
       'addManifestPlugin succeeds and updates manifest on pack with malformed timeline.json',
       (manifestAfterLateMalformed.plugins ?? []).some((p) => p.name === 'late-malformed'),
+    )
+    check(
+      'addManifestPlugin keeps a present timeline.json in viewer/report/README (#502)',
+      listsTimeline(
+        readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+      ).every(Boolean),
+    )
+
+    // Issue #502: pre-0.3 pack (capture_kind omitted, SPEC §14 minimal pack) and
+    // explicit image pack on disk follow the same file-inventory rules.
+    const legacyNoTimelineDir = path.join(outputDir, 'legacy-no-timeline-502')
+    mkdirSync(path.join(legacyNoTimelineDir, 'skills'), { recursive: true })
+    const legacyDiskManifest: Manifest = {
+      format: 'capturepack',
+      format_version: '0.2.0',
+      id: 'legacy-no-timeline-502',
+      created_at: '2026-07-30T03:00:00.000Z',
+      generator: { name: 'capturepack-test', version: '0.2.0' },
+      environment: { os: 'windows', screens: [{ width: 1920, height: 1080, scale: 1 }] },
+      media: { snapshot: 'snapshot.png', replay: null },
+    }
+    writeFileSync(
+      path.join(legacyNoTimelineDir, 'manifest.json'),
+      JSON.stringify(legacyDiskManifest, null, 2),
+      'utf8',
+    )
+    writeFileSync(path.join(legacyNoTimelineDir, 'snapshot.png'), pngHeader(1920, 1080))
+    await refreshPackDocs(legacyNoTimelineDir, 'en')
+    check(
+      'refreshPackDocs on pre-0.3 pack omitting timeline.json omits it from viewer/report/README while keeping timeline skill (#502)',
+      listsTimeline(
+        readFileSync(path.join(legacyNoTimelineDir, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'report.md'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'README.md'), 'utf8'),
+      ).every((listed) => !listed) &&
+        readFileSync(path.join(legacyNoTimelineDir, 'skills', 'timeline.md'), 'utf8').includes(
+          'No events were recorded.',
+        ),
+    )
+    mkdirSync(path.join(legacyNoTimelineDir, 'plugins', 'late-legacy'), { recursive: true })
+    writeFileSync(
+      path.join(legacyNoTimelineDir, 'plugins', 'late-legacy', 'meta.json'),
+      '{"name":"late-legacy","version":"1"}',
+    )
+    await addManifestPlugin(
+      { id: legacyDiskManifest.id, dirPath: legacyNoTimelineDir },
+      { name: 'late-legacy', version: '1.0.0', path: 'plugins/late-legacy/' },
+      'en',
+    )
+    check(
+      'addManifestPlugin on pre-0.3 pack omitting timeline.json omits it from viewer/report/README (#502)',
+      listsTimeline(
+        readFileSync(path.join(legacyNoTimelineDir, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'report.md'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'README.md'), 'utf8'),
+      ).every((listed) => !listed),
+    )
+
+    const imageDiskDir = path.join(outputDir, 'image-no-timeline-502')
+    mkdirSync(path.join(imageDiskDir, 'skills'), { recursive: true })
+    const imageDiskManifest: Manifest = {
+      format: 'capturepack',
+      format_version: '0.6.0',
+      id: 'image-no-timeline-502',
+      created_at: '2026-07-30T03:00:00.000Z',
+      capture_kind: 'image',
+      generator: { name: 'capturepack-test', version: '0.6.0' },
+      environment: { os: 'windows', screens: [{ width: 1920, height: 1080, scale: 1 }] },
+      media: { snapshot: 'snapshot.png', replay: null, image_scope: 'fullscreen' },
+    }
+    writeFileSync(
+      path.join(imageDiskDir, 'manifest.json'),
+      JSON.stringify(imageDiskManifest, null, 2),
+      'utf8',
+    )
+    writeFileSync(path.join(imageDiskDir, 'snapshot.png'), pngHeader(1920, 1080))
+    writeFileSync(path.join(imageDiskDir, 'timeline.json'), '{"t0":"2026-07-30T03:00:00.000Z","events":[]}', 'utf8')
+    await refreshPackDocs(imageDiskDir, 'en')
+    mkdirSync(path.join(imageDiskDir, 'plugins', 'late-image'), { recursive: true })
+    writeFileSync(
+      path.join(imageDiskDir, 'plugins', 'late-image', 'meta.json'),
+      '{"name":"late-image","version":"1"}',
+    )
+    await addManifestPlugin(
+      { id: imageDiskManifest.id, dirPath: imageDiskDir },
+      { name: 'late-image', version: '1.0.0', path: 'plugins/late-image/' },
+      'en',
+    )
+    check(
+      'image pack never lists timeline.json in viewer/report/README across refreshPackDocs and addManifestPlugin (#502)',
+      listsTimeline(
+        readFileSync(path.join(imageDiskDir, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(imageDiskDir, 'report.md'), 'utf8'),
+        readFileSync(path.join(imageDiskDir, 'README.md'), 'utf8'),
+      ).every((listed) => !listed),
     )
 
     // Invalid shape: events is not an array
