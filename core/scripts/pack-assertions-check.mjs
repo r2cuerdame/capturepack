@@ -260,6 +260,18 @@ try {
 
   // --- and the mutants that should not ---------------------------------------
 
+  const shortReplay = fixture('short-537ms', (manifest) => {
+    withReplay(manifest)
+    manifest.media.replay_duration_ms = 537
+  }, { 'replay.webm': webm({ count: 5, blockBytes: 2000, stepMs: 118 }) })
+  const shortVerdict = verdict(shortReplay, { expectReplay: true })
+  check(
+    '537 ms of real media still fails the warmed-up CI replay floor (#349)',
+    !shortVerdict.ok && shortVerdict.failures.length === 1 &&
+      shortVerdict.failures[0].includes('at least 1000 ms'),
+    shortVerdict.failures.join(' | '),
+  )
+
   const headerOnly = fixture('header-only', withReplay, {
     'replay.webm': webm({ count: 0, blockBytes: 0, stepMs: 0 }),
   })

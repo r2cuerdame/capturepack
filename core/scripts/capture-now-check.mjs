@@ -167,8 +167,40 @@ console.log('Unattended capture waits for proven recorder readiness')
   check('a recorder failure cancels the pending countdown', run.cancelled.has(1))
   run.setStatus('recording')
   check('recovery starts a fresh full countdown', run.scheduled.get(2)?.delay === 6_000)
+  run.fire(1)
+  check('a queued cancelled callback cannot capture the recovered short replay', run.captures === 0)
+  run.setStatus('recording')
+  check('a stale callback cannot clear the recovery timer', run.scheduled.size === 2)
   run.fire(2)
   check('recovered recorder produces one capture', run.captures === 1)
+}
+
+// Run 43169244932: the launch countdown expired at 06:37:17.032,
+// before frames were confirmed at 06:37:17.525, yielding only 537 ms.
+// Advance an actual fake clock so startup time cannot count as replay time.
+{
+  let now = 0
+  let state = { status: 'starting' }
+  let listener
+  let captureAt = null
+  let timer
+  scheduleCaptureWhenRecording(
+    6_000,
+    () => state,
+    (next) => { listener = next; return () => { listener = null } },
+    () => { captureAt = now },
+    (callback, delay) => { timer = { callback, due: now + delay }; return timer },
+    () => { timer = null },
+  )
+  now = 6_000
+  check('the old launch deadline cannot capture before frames are confirmed', timer === undefined && captureAt === null)
+  now = 6_493
+  state = { status: 'recording' }
+  listener(state)
+  check('delayed startup receives six seconds of proven recording', timer.due === 12_493)
+  now = timer.due
+  timer.callback()
+  check('capture follows readiness by the full interval', captureAt === 12_493)
 }
 {
   const run = harness('recording')
