@@ -3,32 +3,11 @@
 // adm-zip (zip) or fs (dir). Read-only: nothing here writes to disk.
 import AdmZip from 'adm-zip'
 import { stripUtf8Bom } from '../../shared/json'
-import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../../shared/packIdentity'
+import { directoryHoldsCapturePack } from '../../shared/packIdentity'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { AnnotationsFile, Manifest, TimelineFile } from '../../shared/types'
-import { packArchiveExt } from '../packArchive'
-
-/**
- * True when a zip has a manifest.json at its root.
- *
- * Reads the central directory only — adm-zip parses the entry table without
- * inflating anything, so this costs one small read per candidate file.
- */
-function zipHoldsAPack(zipPath: string): boolean {
-  try {
-    // NAMED `manifest.json` IS NOT ENOUGH. Any npm, Electron or Rust archive
-    // carries one; this index is what History renames and deletes through, so
-    // it asks the manifest whether it names this format (SPEC 13.1) rather
-    // than trusting the entry name. Still one small read — adm-zip parses the
-    // central directory without inflating the body.
-    const entry = new AdmZip(zipPath).getEntry('manifest.json')
-    if (entry === null || entry.isDirectory) return false
-    return manifestNamesCapturePack(entry.getData().toString('utf8'))
-  } catch {
-    return false
-  }
-}
+import { archiveHoldsAPack, forgetMissingArchiveIdentities, packArchiveExt } from '../packArchive'
 
 const RESCAN_DEBOUNCE_MS = 300
 const MAX_DIR_FILES = 2000
@@ -39,7 +18,9 @@ const MAX_DIR_FILES = 2000
 const MAX_SCAN_DEPTH = 1
 // Even with a live watcher, rescan when the index is older than this: a
 // silently dead watcher (network/OneDrive-redirected folders) must not freeze
-// the index for a whole session. scan() is dirent/stat only, so this is cheap.
+// the index for a whole session. scan() is dirent/stat only for anything it has
+// seen before (an archive's contents are read once per change, #515), so this
+// is cheap.
 const STALE_RESCAN_MS = 5000
 // How many of the newest entries latest() probes for a readable pack before
 // falling back to the newest entry regardless of warnings.
@@ -212,7 +193,12 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
   // is attached lazily by getMeta() for just the entries a tool actually returns.
   function scan(): void {
     const found: RawEntry[] = []
-    scanDir(outputDir, '', 0, found)
+    const listedDirs: string[] = []
+    const archives: string[] = []
+    scanDir(outputDir, '', 0, found, listedDirs, archives)
+    // An archive that left a folder we just listed takes its remembered
+    // identity with it; folders we could not list keep theirs.
+    forgetMissingArchiveIdentities(listedDirs, archives)
     found.sort(
       (a, b) =>
         b.mtimeMs - a.mtimeMs || a.id.localeCompare(b.id) || a.kind.localeCompare(b.kind),
@@ -226,13 +212,21 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
     }
   }
 
-  function scanDir(dir: string, relPrefix: string, depth: number, out: RawEntry[]): void {
+  function scanDir(
+    dir: string,
+    relPrefix: string,
+    depth: number,
+    out: RawEntry[],
+    listedDirs: string[],
+    archives: string[],
+  ): void {
     let dirents: fs.Dirent[]
     try {
       dirents = fs.readdirSync(dir, { withFileTypes: true })
     } catch {
       return // dir missing or unreadable: nothing to add, no crash
     }
+    listedDirs.push(dir)
     // Folder-first (SPEC §3): the FOLDER is the pack; a same-stem sibling
     // CapturePack_X.capturepack is an on-demand distribution copy created by
     // the toast's [Create ZIP] — possibly stale (e.g. made before the
@@ -254,26 +248,27 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       try {
         const ext = d.isFile() ? packArchiveExt(d.name) : null
         if (ext !== null) {
+          archives.push(full)
           const stem = d.name.slice(0, -ext.length)
           // A `.zip` is only a pack if it CONTAINS one. `.capturepack` could be
           // taken on its name alone because nothing else writes that extension;
           // now that archives are ordinary zips (the name has to say what the
           // file is), the output folder may hold zips from anywhere, and
           // indexing a holiday photo album as a capture would be worse than
-          // missing one. The check reads the archive's central directory, not
-          // its contents.
+          // missing one. The check reads the whole archive once, then trusts
+          // that answer until the file stats differently (#515).
           // `.capturepack` is NO LONGER taken on its name either: an archive
           // renamed to that extension, or one copied in from elsewhere, would
           // otherwise be indexed as a capture and become renameable and
           // deletable through History. Both extensions now have to prove it.
-          if (!dirStems.has(stem.toLowerCase()) && zipHoldsAPack(full)) {
+          if (!dirStems.has(stem.toLowerCase()) && archiveHoldsAPack(full)) {
             out.push({ id: rel.slice(0, -ext.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
           }
         } else if (d.isDirectory()) {
           if (directoryHoldsCapturePack(full)) {
             out.push({ id: rel, path: full, kind: 'dir', mtimeMs: fs.statSync(full).mtimeMs })
           } else if (depth < MAX_SCAN_DEPTH) {
-            scanDir(full, rel, depth + 1, out)
+            scanDir(full, rel, depth + 1, out, listedDirs, archives)
           }
         }
       } catch {
