@@ -80,7 +80,10 @@ const checks = [
     // few seconds and did nothing else, so pressing it looked the same as
     // pressing it while it was broken.
     'pressing Check for updates says so when there is nothing to update',
-    index.includes("status.state === 'up-to-date' && status.userRequested === true") &&
+    // The state transitions themselves are driven through the real updater by
+    // check:update-manual (#523); this pins the wiring to that predicate.
+    index.includes('if (owesUpToDateNotice(status)) {') &&
+      updater.includes("return s.state === 'up-to-date' && s.userRequested === true") &&
       (index.match(/'app\.upToDate'/gu) ?? []).length === 1,
   ],
   [

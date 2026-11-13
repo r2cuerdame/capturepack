@@ -21,9 +21,9 @@ match the workflow files. Prose is still judged by the reader.
 | Release | A step of [release.yml](../.github/workflows/release.yml) | Only when a person dispatches it |
 | Field | A measurement on real hardware, a real install or a real month | Recorded by a person; unverified until recorded |
 
-The gate discovers 101 checks today. `npm run qa:checks` runs those 101 plus type
-checking (102 steps); `npm run qa:rc` adds the production build and the
-isolated Electron smoke (104 steps). The count moves when a check is added, and
+The gate discovers 102 checks today. `npm run qa:checks` runs those 102 plus type
+checking (103 steps); `npm run qa:rc` adds the production build and the
+isolated Electron smoke (105 steps). The count moves when a check is added, and
 this document must move with it.
 
 ## Standing condition — the five-second workflow
@@ -58,7 +58,7 @@ installer yet.
 | 2 | Single-page route detection | The tab's current URL and title are forwarded, never the hint's; inactive-tab, cross-origin, closed-tab, unreadable-URL and malformed hints are dropped without throwing; a long route is delivered with the URL capped at 2,048 characters and the title at 512 | `check:chrome-route-change` |
 | 3 | Git context saved safely ([#442](https://github.com/r2cuerdame/capturepack/issues/442)) | Repository, branch, commit, dirty flag and changed paths are collected within 100 ms or omitted. State and metadata go through a temporary file and an atomic replace, metadata last. A failed write leaves no declaration, no temporary file and no unpublished directory, keeps a plugin an earlier write published, and the capture still saves | `check:git-plugin` |
 | 4 | Opaque Share Copy masking | Each blur active at a still's time is filled with solid `#1a1a1a` and the label gutter is cleared where it is active; pixels outside it are kept; Share Copy still holds only declared annotated stills re-encoded from pixels | `check:share-bundle` |
-| 5 | No regression anywhere | `npm run qa:checks` finishes with all 101 discovered checks passing and type checking clean — zero failures, zero skipped checks | The whole gate |
+| 5 | No regression anywhere | `npm run qa:checks` finishes with all 102 discovered checks passing and type checking clean — zero failures, zero skipped checks | The whole gate |
 | 6 | Five-second workflow | The standing condition above, on the candidate's own head | See the standing condition |
 
 Promoting the candidate to 0.6.1 is a separate act that this document does not
