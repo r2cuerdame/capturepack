@@ -34,6 +34,105 @@ The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
 values when checking 0.6.0.
 
+## 0.6.1 candidate baseline — not released
+
+The following behaviors are present in the current source baseline and have
+focused regression checks. They are release-candidate scope, not a claim that
+0.6.1 has been published; **0.6.0 remains the current stable release**.
+Each item's completion condition, the five-second workflow condition every
+stage keeps, and the 0.6.2 acceptance criteria are fixed in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md).
+
+- **Open Shadow DOM** (`check:document-snapshot`, `check:chrome-bridge`,
+  [#345](https://github.com/r2cuerdame/capturepack/issues/345)). The document
+  snapshot records what an open shadow root draws, nested roots included, and
+  keeps its password, typed-value and hidden refusals inside the shadow tree.
+  The picker highlights and picks an element inside an open root and names it
+  through each boundary (`host >>> inner`); a closed root is picked as its host
+  and nothing inside it is read.
+- **Git capture context** (`check:git-plugin`). At save, before the manifest is
+  written, `exporter.ts` reads the repository containing the CapturePack
+  process's working directory — not the captured window's — and writes
+  `plugins/git/meta.json` and `plugins/git/state.json`: repository folder name,
+  branch (`HEAD` when detached), commit, dirty flag and root-relative changed
+  paths, both sides of a rename included. Every Git read passes
+  `--no-optional-locks`. It records repository state, never file contents. A
+  Git error, a folder outside any repository, or the 100 ms deadline leaves no
+  `plugins/git/` and no manifest declaration; the pack still saves. State and
+  metadata are written to temporary files and atomically replaced, metadata
+  last; a write that fails part-way removes its temporary file and the
+  unpublished directory, keeps a plugin an earlier write already published,
+  and the capture still saves
+  ([#442](https://github.com/r2cuerdame/capturepack/issues/442)).
+- **Opaque Share Copy redaction** (`check:share-bundle`). History plans and
+  creates Share Copy with `opaqueRedaction: true`. Each blur visible at a
+  still's time, at its resolved tracked or keyframed position, is filled with
+  solid `#1a1a1a`, the same bytes whatever lay beneath; pixels outside it are
+  kept. A labeled blur no longer blocks the copy and its text leaves the review
+  list. Where it is active, the whole label gutter below that still's frame is
+  filled too, because rendered label bounds depend on the font; a blur that is
+  not yet active leaves an earlier still and its gutter untouched. Share Copy
+  still contains only declared annotated stills, re-encoded from pixels;
+  original media and structured capture context are excluded. Review every
+  image before sending: visual redaction is risk reduction, not proof that
+  every sensitive pixel is covered.
+- **Chrome SPA route updates** (`check:chrome-route-change`). The hook that
+  `background.js` injects into the page's main world watches `pushState`,
+  `replaceState`, `popstate`, `hashchange` and title mutations; once the URL or
+  title has changed and 100 ms pass without another change, `route-content.js`
+  relays a hint to the worker. `route-change.js` then reads the tab again: the
+  tab's current URL and title are forwarded, not the hint's, and a hint from an
+  inactive tab or for a different origin is dropped. The check pins those three
+  cases and the boundaries around them: a hint with a missing message, sender,
+  sender tab or tab id is dropped without throwing; a hint for a closed tab,
+  whose tab lookup fails, is dropped; a tab whose current URL is empty or not a
+  valid URL is dropped; and a long route is still delivered with its URL capped
+  at 2,048 characters and its title at 512. It also pins that the worker loads
+  and calls this resolver, and that the extension manifest version moved past
+  0.4.3 so installed copies resync.
+
+The complete candidate gate is `npm run qa:checks`; release preparation and
+publication still follow [RELEASING.md](RELEASING.md). The website deploy
+remains the `pages.yml` path; the Windows `release.yml` workflow is manually
+dispatched.
+
+## Next milestone — 2026-12 (0.6.2 candidate; planning only)
+
+The next milestone is a no-cost V2 console context provider prototype plus
+continued observation of one month of use without manual reinstall. The console
+prototype is implemented in source, but is not a release claim. Its current
+supported input is an explicit `CAPTUREPACK_CONSOLE_OUTPUT` snapshot; it does
+not scrape other processes or terminal windows. Preserve the existing
+five-second capture workflow: console collection must never hold capture open
+past its 100 ms deadline. When available, write a SPEC-compatible
+`plugins/console/` payload and metadata; if the console is absent, inaccessible,
+slow, or collection or writing fails, omit the plugin and let the pack save
+normally.
+
+The deterministic console check must cover all four outcomes: successful
+collection produces the declared payload and metadata; absent or denied access
+produces no plugin declaration and does not fail the save; a request that
+exceeds 100 ms is abandoned and does not fail the save; and an atomic-write
+failure leaves no partial plugin declaration or temporary file and does not
+fail the save. After these checks, require SPEC validation and all 100 automated
+QA checks to pass with no regression. The five-second workflow remains
+an independent acceptance condition throughout. The numbered criteria are in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](RELEASE_SCOPE_0_6_1_0_6_2.md).
+
+The one-month observation starts only when a public-release installer has
+successfully completed and its actual date and installed version are recorded.
+Review weekly and at day 30 or later; record confirmed ordinary-use dates,
+automatic updates, any manual reinstall, interruptions, and the evidence
+reviewed. Pass only with at least 30 calendar days, confirmed ordinary use, no
+manual reinstall, and evidence for the starting and final versions and any
+automatic update (or an explicit `unknown`). A manual reinstall fails that
+period; missing dates or evidence are inconclusive, never guessed. Follow
+[`OBSERVATION.md`](OBSERVATION.md) for the evidence rules and record each
+period, weekly review and verdict in
+[`OBSERVATION-LOG.md`](OBSERVATION-LOG.md), which stays `not started` until a
+verified public-release install gives the period its day 0.
+Planned additional cost is 0, using existing local resources only.
+
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
@@ -639,8 +738,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 98 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **101 gate steps** — 99 with
+`qa:rc` currently runs 101 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **104 gate steps** — 102 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,

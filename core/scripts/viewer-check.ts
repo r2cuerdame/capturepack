@@ -238,6 +238,35 @@ function pureContractChecks(): void {
   const legacyHtml = buildViewerHtml(legacy, annotations(), timeline(), 'en')
   check('legacy replay pack degrades to inferred video', legacyHtml.includes('<dd>video</dd>') && legacyHtml.includes('src="replay.mp4"'))
 
+  // Issue #502: report/README file lists follow the disk for timeline.json.
+  // An image pack never names one, even when the caller says one exists.
+  const imageReportTimeline = buildReport(image, annotations(), 'en', false, true, true, true)
+  const imageReadmeTimeline = buildReadme(image, annotations(), 'en', false, true, true, true)
+  check(
+    'image pack report/README never list timeline.json (#502)',
+    !imageReportTimeline.includes('timeline.json') && !imageReadmeTimeline.includes('timeline.json'),
+  )
+  const legacyWithTimeline: string[] = [
+    buildReport(legacy, annotations(), 'en', false, true, true, true),
+    buildReadme(legacy, annotations(), 'en', false, true, true, true),
+  ]
+  const legacyWithoutTimeline = [
+    buildReport(legacy, annotations(), 'en', false, true, true, false),
+    buildReadme(legacy, annotations(), 'en', false, true, true, false),
+  ]
+  check(
+    'legacy/video report/README list timeline.json only when it exists (#502)',
+    (legacyWithTimeline[0] ?? '').includes('- timeline.json —') &&
+      (legacyWithTimeline[1] ?? '').includes('| timeline.json |') &&
+      legacyWithoutTimeline.every((doc) => !doc.includes('timeline.json')),
+  )
+  const legacyNoTimelineHtml = buildViewerHtml(legacy, annotations(), undefined, 'en')
+  check(
+    'legacy/video viewer lists timeline.json only when one is passed (#502)',
+    legacyHtml.includes('<code>timeline.json</code>') &&
+      !legacyNoTimelineHtml.includes('<code>timeline.json</code>'),
+  )
+
   const multi = videoManifest({
     environment: {
       os: 'windows',
@@ -704,6 +733,230 @@ function pureContractChecks(): void {
   }
 }
 
+/** The first bytes of a PNG whose IHDR declares width x height (#500). */
+function pngHeader(width: number, height: number): Buffer {
+  const head = Buffer.alloc(33)
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(head, 0)
+  head.writeUInt32BE(13, 8)
+  head.write('IHDR', 12, 'latin1')
+  head.writeUInt32BE(width, 16)
+  head.writeUInt32BE(height, 20)
+  head[24] = 8
+  head[25] = 6
+  return head
+}
+
+/** The four documents that print the reference frame, as written on disk. */
+function packDocs(dir: string): { report: string; readme: string; overview: string; annotation: string } {
+  return {
+    report: readFileSync(path.join(dir, 'report.md'), 'utf8'),
+    readme: readFileSync(path.join(dir, 'README.md'), 'utf8'),
+    overview: readFileSync(path.join(dir, 'skills', 'overview.md'), 'utf8'),
+    annotation: readFileSync(path.join(dir, 'skills', 'annotation.md'), 'utf8'),
+  }
+}
+
+/** Every document names `size` as snapshot.png's frame, and none prints 0×0. */
+function docsAgreeOn(
+  docs: ReturnType<typeof packDocs>,
+  size: string,
+  imageCapture: boolean,
+): boolean {
+  return (
+    docs.report.includes(`snapshot.png — captured frame, ${size} `) &&
+    docs.readme.includes(`| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${size} `) &&
+    (imageCapture
+      ? docs.overview.includes(`**Media:** ${size} still image in snapshot.png`)
+      : docs.overview.includes(`**Media:** ${size} snapshot.png`)) &&
+    docs.annotation.includes(`snapshot.png, ${size} pixels`) &&
+    Object.values(docs).every((doc) => !/(^|[^0-9])0×0([^0-9]|$)/u.test(doc))
+  )
+}
+
+// Issue #500: with annotations.json absent, damaged or missing its reference
+// size, every document still names the FOCUSED display's snapshot.png frame —
+// never displays[0], and never 0×0 beside a readable raster (SPEC §8.2).
+async function referenceFrameFallbackChecks(outputDir: string): Promise<void> {
+  const writeHandPack = (name: string, manifest: Manifest, png: Buffer): { id: string; dirPath: string } => {
+    const dirPath = path.join(outputDir, name)
+    mkdirSync(path.join(dirPath, 'skills'), { recursive: true })
+    writeFileSync(path.join(dirPath, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
+    writeFileSync(path.join(dirPath, 'snapshot.png'), png)
+    return { id: manifest.id, dirPath }
+  }
+  const lateDeclaration = (name: string): NonNullable<Manifest['plugins']>[number] => ({
+    name,
+    version: '1.0.0',
+    path: `plugins/${name}/`,
+  })
+  const attachLatePlugin = async (handle: { id: string; dirPath: string }, name: string): Promise<void> => {
+    mkdirSync(path.join(handle.dirPath, 'plugins', name), { recursive: true })
+    writeFileSync(path.join(handle.dirPath, 'plugins', name, 'meta.json'), `{"name":"${name}","version":"1"}`)
+    await addManifestPlugin(handle, lateDeclaration(name), 'en')
+  }
+
+  // Display 1 is a portrait screen the cursor was NOT on; display 2 is focused.
+  const multiManifest = videoManifest({
+    id: 'reference-frame-multi',
+    environment: {
+      os: 'windows',
+      screens: [
+        { width: 1080, height: 1920, scale: 1 },
+        { width: 2560, height: 1440, scale: 1 },
+      ],
+    },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.mp4',
+      replay_duration_ms: 5_000,
+      displays: [
+        {
+          index: 1,
+          focused: false,
+          snapshot: 'snapshot-d1.png',
+          snapshot_width: 1080,
+          snapshot_height: 1920,
+          replay: null,
+          bounds: { x: -1080, y: 0, width: 1080, height: 1920 },
+          scale: 1,
+        },
+        {
+          index: 2,
+          focused: true,
+          snapshot: 'snapshot.png',
+          snapshot_width: 2560,
+          snapshot_height: 1440,
+          replay: 'replay.mp4',
+          replay_duration_ms: 5_000,
+          replay_clock_offset_ms: 0,
+          bounds: { x: 0, y: 0, width: 2560, height: 1440 },
+          scale: 1,
+        },
+      ],
+    },
+  })
+  const multiHandle = writeHandPack('reference-frame-multi', multiManifest, pngHeader(2560, 1440))
+  writeFileSync(path.join(multiHandle.dirPath, 'replay.mp4'), 'REPLAY')
+
+  await refreshPackDocs(multiHandle.dirPath, 'en')
+  const multiOmitted = packDocs(multiHandle.dirPath)
+  check(
+    '#500 multi-display pack without annotations.json: every document names the focused display 2560×1440',
+    docsAgreeOn(multiOmitted, '2560×1440', false) &&
+      !multiOmitted.report.includes('captured frame, 1080×1920') &&
+      !multiOmitted.annotation.includes('snapshot.png, 1080×1920'),
+  )
+
+  for (const [label, json] of [
+    ['zero', { reference_width: 0, reference_height: 0, annotations: [] }],
+    ['negative', { reference_width: -1080, reference_height: -1920, annotations: [] }],
+    ['non-numeric', { reference_width: '1080', reference_height: null, annotations: [] }],
+    ['missing', { annotations: [] }],
+  ] as const) {
+    writeFileSync(path.join(multiHandle.dirPath, 'annotations.json'), JSON.stringify(json), 'utf8')
+    await refreshPackDocs(multiHandle.dirPath, 'en')
+    const safe = await readAnnotationsSafe(multiHandle.dirPath, multiManifest)
+    check(
+      `#500 multi-display pack with ${label} reference size falls back to the focused display`,
+      safe.reference_width === 2560 &&
+        safe.reference_height === 1440 &&
+        docsAgreeOn(packDocs(multiHandle.dirPath), '2560×1440', false),
+    )
+  }
+
+  writeFileSync(path.join(multiHandle.dirPath, 'annotations.json'), '{"reference_width": [broken', 'utf8')
+  await refreshPackDocs(multiHandle.dirPath, 'en')
+  check(
+    '#500 multi-display pack with damaged annotations.json names the focused display',
+    docsAgreeOn(packDocs(multiHandle.dirPath), '2560×1440', false),
+  )
+
+  rmSync(path.join(multiHandle.dirPath, 'annotations.json'), { force: true })
+  await attachLatePlugin(multiHandle, 'late-reference-multi')
+  check(
+    '#500 late plugin on a multi-display pack without annotations.json keeps the focused display size',
+    docsAgreeOn(packDocs(multiHandle.dirPath), '2560×1440', false),
+  )
+
+  // A positive stated size is kept as written, even where it differs.
+  writeFileSync(
+    path.join(multiHandle.dirPath, 'annotations.json'),
+    JSON.stringify({ reference_width: 1280, reference_height: 720, annotations: [] }),
+    'utf8',
+  )
+  const statedSafe = await readAnnotationsSafe(multiHandle.dirPath, multiManifest)
+  await refreshPackDocs(multiHandle.dirPath, 'en')
+  check(
+    '#500 a positive stated reference size is preserved, not replaced',
+    statedSafe.reference_width === 1280 &&
+      statedSafe.reference_height === 720 &&
+      docsAgreeOn(packDocs(multiHandle.dirPath), '1280×720', false),
+  )
+
+  // An image pack declares no displays (SPEC §5.6): the raster's own header
+  // is the only statement of its size.
+  const imageManifest = videoManifest({
+    id: 'reference-frame-image',
+    capture_kind: 'image',
+    media: { snapshot: 'snapshot.png', replay: null, image_scope: 'region' },
+  })
+  delete imageManifest.media.replay_duration_ms
+  const imageHandle = writeHandPack('reference-frame-image', imageManifest, pngHeader(1366, 768))
+  await refreshPackDocs(imageHandle.dirPath, 'en')
+  const safeImage = await readAnnotationsSafe(imageHandle.dirPath, imageManifest)
+  check(
+    '#500 image pack without annotations.json reads snapshot.png 1366×768 instead of 0×0',
+    safeImage.reference_width === 1366 &&
+      safeImage.reference_height === 768 &&
+      docsAgreeOn(packDocs(imageHandle.dirPath), '1366×768', true),
+  )
+  await attachLatePlugin(imageHandle, 'late-reference-image')
+  check(
+    '#500 late plugin on an image pack without annotations.json keeps snapshot.png 1366×768',
+    docsAgreeOn(packDocs(imageHandle.dirPath), '1366×768', true),
+  )
+  writeFileSync(
+    path.join(imageHandle.dirPath, 'annotations.json'),
+    JSON.stringify({ reference_width: 0, reference_height: -1, annotations: [] }),
+    'utf8',
+  )
+  await refreshPackDocs(imageHandle.dirPath, 'en')
+  check(
+    '#500 image pack with a zero/negative reference size reads snapshot.png instead',
+    docsAgreeOn(packDocs(imageHandle.dirPath), '1366×768', true),
+  )
+
+  // The pure builders apply the same rule to an in-memory file (NaN included)
+  // and a pre-0.7.0 entry that states no snapshot size (bounds × scale).
+  const nanFile = { reference_width: Number.NaN, reference_height: Number.NaN, annotations: [] }
+  const nanSkills = buildSkills(multiManifest, nanFile, timeline(), 'en', false)
+  check(
+    '#500 builders replace a NaN reference size with the focused display',
+    buildReport(multiManifest, nanFile, 'en').includes('captured frame, 2560×1440 ') &&
+      buildReadme(multiManifest, nanFile, 'en').includes('The captured frame, 2560×1440 ') &&
+      nanSkills.overview.includes('**Media:** 2560×1440 snapshot.png') &&
+      nanSkills.annotation.includes('snapshot.png, 2560×1440 pixels'),
+  )
+  const legacyManifest = videoManifest({
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.mp4',
+      replay_duration_ms: 5_000,
+      displays: (multiManifest.media.displays ?? []).map((d) =>
+        d.focused
+          ? { ...d, snapshot_width: 0, snapshot_height: 0, bounds: { x: 0, y: 0, width: 1707, height: 960 }, scale: 1.5 }
+          : d,
+      ),
+    },
+  })
+  check(
+    '#500 builders derive a legacy focused entry from bounds × scale, not displays[0]',
+    buildReport(legacyManifest, { annotations: [] } as unknown as AnnotationsFile, 'en').includes(
+      'captured frame, 2561×1440 ',
+    ),
+  )
+}
+
 async function writerIntegrationChecks(): Promise<void> {
   console.log('\nWRITER / REGENERATION CONTRACT')
   const outputDir = mkdtempSync(path.join(tmpdir(), 'capturepack-viewer-check-'))
@@ -1116,6 +1369,24 @@ async function writerIntegrationChecks(): Promise<void> {
         refreshedReplayOverview.includes('screenshot only'),
     )
 
+    // Issue #502: a regenerated file list names timeline.json only when it is
+    // really in the folder (SPEC §12.4). Present first: the list keeps it.
+    const listsTimeline = (viewer: string, report: string, readme: string): boolean[] => [
+      viewer.includes('<code>timeline.json</code>'),
+      report.includes('- timeline.json —'),
+      readme.includes('| timeline.json |'),
+    ]
+    await refreshPackDocs(handle.dirPath, 'en')
+    check(
+      'refreshPackDocs lists timeline.json in viewer/report/README while it exists on disk',
+      existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        listsTimeline(
+          readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8'),
+          readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+          readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+        ).every(Boolean),
+    )
+
     // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
     rmSync(path.join(handle.dirPath, 'timeline.json'), { force: true })
     const capturedNoTimelineErrors: string[] = []
@@ -1149,6 +1420,10 @@ async function writerIntegrationChecks(): Promise<void> {
         noTimelineTimelineSkill.includes('No events were recorded.') &&
         !noTimelineTimelineSkill.includes('undefined'),
     )
+    check(
+      'refreshPackDocs does not list an absent timeline.json in viewer/report/README (#502)',
+      listsTimeline(noTimelineViewer, noTimelineReport, noTimelineReadme).every((listed) => !listed),
+    )
 
     const lateNoTimelinePluginDir = path.join(handle.dirPath, 'plugins', 'late-no-timeline')
     mkdirSync(lateNoTimelinePluginDir, { recursive: true })
@@ -1171,6 +1446,18 @@ async function writerIntegrationChecks(): Promise<void> {
         viewerAfterLateNoTimeline.includes('late-no-timeline') &&
         !viewerAfterLateNoTimeline.includes('undefined'),
     )
+    check(
+      'addManifestPlugin does not list an absent timeline.json in viewer/report/README (#502)',
+      !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        listsTimeline(
+          viewerAfterLateNoTimeline,
+          readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+          readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+        ).every((listed) => !listed) &&
+        readFileSync(path.join(handle.dirPath, 'skills', 'timeline.md'), 'utf8').includes(
+          'No events were recorded.',
+        ),
+    )
 
     // Issue #200: malformed timeline.json (SyntaxError and non-array events)
     writeFileSync(path.join(handle.dirPath, 'timeline.json'), '{"events": [corrupted json', 'utf8')
@@ -1183,6 +1470,14 @@ async function writerIntegrationChecks(): Promise<void> {
       'refreshPackDocs falls back to empty timeline on malformed JSON without throwing or aborting',
       malformedJsonSkill.includes('No events were recorded.') &&
         !malformedJsonSkill.includes('undefined'),
+    )
+    check(
+      'refreshPackDocs keeps a present-but-malformed timeline.json in viewer/report/README (#502)',
+      listsTimeline(
+        readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+      ).every(Boolean),
     )
 
     const lateMalformedPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed')
@@ -1202,6 +1497,103 @@ async function writerIntegrationChecks(): Promise<void> {
     check(
       'addManifestPlugin succeeds and updates manifest on pack with malformed timeline.json',
       (manifestAfterLateMalformed.plugins ?? []).some((p) => p.name === 'late-malformed'),
+    )
+    check(
+      'addManifestPlugin keeps a present timeline.json in viewer/report/README (#502)',
+      listsTimeline(
+        readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8'),
+        readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8'),
+      ).every(Boolean),
+    )
+
+    // Issue #502: pre-0.3 pack (capture_kind omitted, SPEC §14 minimal pack) and
+    // explicit image pack on disk follow the same file-inventory rules.
+    const legacyNoTimelineDir = path.join(outputDir, 'legacy-no-timeline-502')
+    mkdirSync(path.join(legacyNoTimelineDir, 'skills'), { recursive: true })
+    const legacyDiskManifest: Manifest = {
+      format: 'capturepack',
+      format_version: '0.2.0',
+      id: 'legacy-no-timeline-502',
+      created_at: '2026-07-30T03:00:00.000Z',
+      generator: { name: 'capturepack-test', version: '0.2.0' },
+      environment: { os: 'windows', screens: [{ width: 1920, height: 1080, scale: 1 }] },
+      media: { snapshot: 'snapshot.png', replay: null },
+    }
+    writeFileSync(
+      path.join(legacyNoTimelineDir, 'manifest.json'),
+      JSON.stringify(legacyDiskManifest, null, 2),
+      'utf8',
+    )
+    writeFileSync(path.join(legacyNoTimelineDir, 'snapshot.png'), pngHeader(1920, 1080))
+    await refreshPackDocs(legacyNoTimelineDir, 'en')
+    check(
+      'refreshPackDocs on pre-0.3 pack omitting timeline.json omits it from viewer/report/README while keeping timeline skill (#502)',
+      listsTimeline(
+        readFileSync(path.join(legacyNoTimelineDir, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'report.md'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'README.md'), 'utf8'),
+      ).every((listed) => !listed) &&
+        readFileSync(path.join(legacyNoTimelineDir, 'skills', 'timeline.md'), 'utf8').includes(
+          'No events were recorded.',
+        ),
+    )
+    mkdirSync(path.join(legacyNoTimelineDir, 'plugins', 'late-legacy'), { recursive: true })
+    writeFileSync(
+      path.join(legacyNoTimelineDir, 'plugins', 'late-legacy', 'meta.json'),
+      '{"name":"late-legacy","version":"1"}',
+    )
+    await addManifestPlugin(
+      { id: legacyDiskManifest.id, dirPath: legacyNoTimelineDir },
+      { name: 'late-legacy', version: '1.0.0', path: 'plugins/late-legacy/' },
+      'en',
+    )
+    check(
+      'addManifestPlugin on pre-0.3 pack omitting timeline.json omits it from viewer/report/README (#502)',
+      listsTimeline(
+        readFileSync(path.join(legacyNoTimelineDir, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'report.md'), 'utf8'),
+        readFileSync(path.join(legacyNoTimelineDir, 'README.md'), 'utf8'),
+      ).every((listed) => !listed),
+    )
+
+    const imageDiskDir = path.join(outputDir, 'image-no-timeline-502')
+    mkdirSync(path.join(imageDiskDir, 'skills'), { recursive: true })
+    const imageDiskManifest: Manifest = {
+      format: 'capturepack',
+      format_version: '0.6.0',
+      id: 'image-no-timeline-502',
+      created_at: '2026-07-30T03:00:00.000Z',
+      capture_kind: 'image',
+      generator: { name: 'capturepack-test', version: '0.6.0' },
+      environment: { os: 'windows', screens: [{ width: 1920, height: 1080, scale: 1 }] },
+      media: { snapshot: 'snapshot.png', replay: null, image_scope: 'fullscreen' },
+    }
+    writeFileSync(
+      path.join(imageDiskDir, 'manifest.json'),
+      JSON.stringify(imageDiskManifest, null, 2),
+      'utf8',
+    )
+    writeFileSync(path.join(imageDiskDir, 'snapshot.png'), pngHeader(1920, 1080))
+    writeFileSync(path.join(imageDiskDir, 'timeline.json'), '{"t0":"2026-07-30T03:00:00.000Z","events":[]}', 'utf8')
+    await refreshPackDocs(imageDiskDir, 'en')
+    mkdirSync(path.join(imageDiskDir, 'plugins', 'late-image'), { recursive: true })
+    writeFileSync(
+      path.join(imageDiskDir, 'plugins', 'late-image', 'meta.json'),
+      '{"name":"late-image","version":"1"}',
+    )
+    await addManifestPlugin(
+      { id: imageDiskManifest.id, dirPath: imageDiskDir },
+      { name: 'late-image', version: '1.0.0', path: 'plugins/late-image/' },
+      'en',
+    )
+    check(
+      'image pack never lists timeline.json in viewer/report/README across refreshPackDocs and addManifestPlugin (#502)',
+      listsTimeline(
+        readFileSync(path.join(imageDiskDir, 'viewer.html'), 'utf8'),
+        readFileSync(path.join(imageDiskDir, 'report.md'), 'utf8'),
+        readFileSync(path.join(imageDiskDir, 'README.md'), 'utf8'),
+      ).every((listed) => !listed),
     )
 
     // Invalid shape: events is not an array
@@ -1385,7 +1777,8 @@ async function writerIntegrationChecks(): Promise<void> {
     const safeDimensionsAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), 1920, 1080)
     check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
     const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
-    check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    const lateMalformedFocused = manifestAfterLateMalformedAnn.media.displays?.find((d) => d.focused)
+    check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (lateMalformedFocused?.snapshot_width ?? 0) && safeManifestAnn.reference_height === (lateMalformedFocused?.snapshot_height ?? 0) && safeManifestAnn.annotations.length === 0)
     const safeOmittedAnn = await readAnnotationsSafe(handle.dirPath)
     check('readAnnotationsSafe preserves dimensions and defaults annotations when annotations array is omitted', safeOmittedAnn.reference_width === 1920 && safeOmittedAnn.reference_height === 1080 && safeOmittedAnn.annotations.length === 0)
     writeFileSync(
@@ -1399,6 +1792,8 @@ async function writerIntegrationChecks(): Promise<void> {
     )
     const safeValidAnn = await readAnnotationsSafe(handle.dirPath)
     check('readAnnotationsSafe preserves valid annotations', safeValidAnn.annotations.length === 1 && safeValidAnn.annotations[0]?.annotation_id === 'ann_safe_check')
+
+    await referenceFrameFallbackChecks(outputDir)
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))

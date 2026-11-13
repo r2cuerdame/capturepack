@@ -17,6 +17,7 @@ import {
   addManifestPlugin,
   createPackZip,
   domPluginDeclaration,
+  buildManifest,
   savePack,
   saveAsNewPack,
   setManifestRenderOutputs,
@@ -508,6 +509,75 @@ async function main(): Promise<void> {
 
     const copied = await observeManifestPublication('saveAsNewPack', () =>
       saveAsNewPack(handle.dirPath, finalInput),
+    )
+    const copiedManifest = JSON.parse(
+      readFileSync(path.join(copied.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const copiedPluginNames = (copiedManifest.plugins ?? []).map((plugin) => plugin.name)
+    const copiedPluginDirectories = existsSync(path.join(copied.dirPath, 'plugins'))
+      ? readdirSync(path.join(copied.dirPath, 'plugins')).filter((name) =>
+          statSync(path.join(copied.dirPath, 'plugins', name)).isDirectory(),
+        )
+      : []
+    check(
+      'video Save As New preserves source manifest plugin declarations when input.plugins is undefined',
+      finalInput.plugins === undefined &&
+        copiedPluginNames.length > 0 &&
+        copiedPluginNames.every((name) => copiedPluginDirectories.includes(name)) &&
+        copiedPluginDirectories.every((name) => copiedPluginNames.includes(name)),
+      `manifest=${copiedPluginNames.length}, directories=${copiedPluginDirectories.length}`,
+    )
+    check(
+      'video Save As New overview reports the exact copied plugin count',
+      readFileSync(path.join(copied.dirPath, 'skills', 'overview.md'), 'utf8').includes(
+        `${copiedPluginNames.length} plugins.`,
+      ),
+    )
+
+    console.log('\nIMAGE SAVE AS NEW PLUGIN METADATA')
+    const imageSource = path.join(outputDir, 'image-plugin-source')
+    mkdirSync(path.join(imageSource, 'plugins', 'sample'), { recursive: true })
+    writeFileSync(
+      path.join(imageSource, 'plugins', 'sample', 'meta.json'),
+      JSON.stringify({ name: 'sample', version: '1.0.0' }),
+    )
+    writeFileSync(path.join(imageSource, 'plugins', 'sample', 'data.json'), '{"value":1}')
+    writeFileSync(path.join(imageSource, 'plugins', 'sample', 'frame.png'), Buffer.from([137, 80, 78, 71]))
+    mkdirSync(path.join(imageSource, 'plugins', 'unlisted'), { recursive: true })
+    writeFileSync(path.join(imageSource, 'plugins', 'unlisted', 'meta.json'), 'unlisted')
+    const imageDeclaration = { name: 'sample', version: '1.0.0', path: 'plugins/sample/' }
+    const imageSourceManifest = buildManifest({
+      id: 'source-image',
+      createdAt: capturedAt,
+      generatorVersion: '0.6.0',
+      title: 'image plugin source',
+      note: '',
+      captureKind: 'image',
+      imageScope: 'fullscreen',
+      hasReplay: false,
+      replayDurationMs: 0,
+      snapshotTMs: null,
+      plugins: [imageDeclaration],
+    })
+    writeFileSync(path.join(imageSource, 'manifest.json'), JSON.stringify(imageSourceManifest))
+    const imageInput: ExportInput = {
+      snapshotPng: Buffer.from('IMAGE SNAPSHOT'), width: 100, height: 80,
+      captureKind: 'image', imageScope: 'fullscreen', capturedAt, replayWebm: null, replayDurationMs: 0,
+      annotations: [], title: 'image copy', note: '', snapshotTMs: null,
+      timeline: { t0: capturedAt.toISOString(), events: [] },
+      clipboardAfterSave: 'off',
+    }
+    const copiedImage = await saveAsNewPack(imageSource, imageInput)
+    const copiedImageManifest = JSON.parse(
+      readFileSync(path.join(copiedImage.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'image Save As New falls back to source declarations and copies safe metadata only',
+      copiedImageManifest.plugins?.some((plugin) => plugin.name === 'sample') === true &&
+        existsSync(path.join(copiedImage.dirPath, 'plugins', 'sample', 'meta.json')) &&
+        existsSync(path.join(copiedImage.dirPath, 'plugins', 'sample', 'data.json')) &&
+        !existsSync(path.join(copiedImage.dirPath, 'plugins', 'sample', 'frame.png')) &&
+        !existsSync(path.join(copiedImage.dirPath, 'plugins', 'unlisted')),
     )
     check(
       'Save As New publishes a complete independent media set',

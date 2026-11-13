@@ -6,6 +6,7 @@
 // test can load without a browser. `importScripts` is synchronous, so both are
 // defined before anything below can be called.
 importScripts('full-page-plan.js', 'full-page-capture.js')
+importScripts('route-change.js')
 
 const HOST = 'com.capturepack.host'
 const PROTOCOL = 1
@@ -939,21 +940,7 @@ if (chrome.commands && chrome.commands.onCommand) {
 // Element selections from the content script.
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.type === 'route-changed') {
-    const tabId = sender.tab && sender.tab.id
-    const url = typeof msg.url === 'string' ? msg.url.slice(0, 2048) : ''
-    const title = typeof msg.title === 'string' ? msg.title.slice(0, 512) : ''
-    if (tabId === undefined || !url) return
-    // Ignore a delayed message from a tab that is no longer the active tab in
-    // its window; this is context for the active page used by the next capture.
-    chrome.tabs.get(tabId).then((tab) => {
-      if (!tab.active || tab.url !== url) return
-      send({
-        type: 'url.changed',
-        protocol: PROTOCOL,
-        timestamp: Date.now(),
-        tab: { url, title },
-      })
-    }).catch(() => {})
+    void self.capturepackRouteChanged(msg, sender, chrome.tabs, send, PROTOCOL)
     return
   }
   // ARMED IS A STATE THE USER CAN SEE. Clicking the toolbar icon used to do

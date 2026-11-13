@@ -1542,6 +1542,13 @@ plugins/
 }
 ```
 
+For the well-known `git` payload, `state.json` MUST be a JSON object with all five fields shown
+above: `repository` and `branch` are non-empty strings; `commit` is a 40- to 64-character
+hexadecimal Git object id; `dirty` is a boolean; and `changed_files` is an array containing only
+strings. An empty `changed_files` array is valid. Readers and validators MUST reject a missing
+`state.json` or any missing or malformed required field, while continuing to ignore unknown fields
+for forward compatibility.
+
 ### 11.3 `windows-uia` (Windows UI Automation)
 
 `plugins/windows-uia/` is the well-known payload for **what was on screen as objects** at the

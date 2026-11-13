@@ -2,7 +2,18 @@
 //
 // This exercises the registered tools, not only the shared classifier. A region
 // pack has no API path by which MCP can ask for pixels outside snapshot.png.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { openPack } from '../src/main/mcp/store'
 import { registerTools } from '../src/main/mcp/tools'
+import {
+  GIT_PLUGIN_VERSION,
+  gitPluginDeclaration,
+  writeGitPlugin,
+  type GitState,
+} from '../src/main/plugins/git'
+import { consolePluginDeclaration, writeConsolePlugin } from '../src/main/plugins/console'
 import type { Annotation } from '../src/shared/types'
 import { z } from 'zod'
 
@@ -16,6 +27,8 @@ type ToolDefinition = {
   description?: string
   inputSchema?: Record<string, unknown>
 }
+
+const gitPackRoot = mkdtempSync(path.join(tmpdir(), 'capturepack-mcp-git-'))
 
 let failed = 0
 function check(ok: boolean, message: string): void {
@@ -395,6 +408,89 @@ async function main(): Promise<void> {
     timeline: () => null,
     readText: () => null,
   }
+  // A git plugin exactly as a capture saves it: the real writer lays down
+  // plugins/git/state.json and meta.json, the manifest carries the real
+  // declaration, and the MCP store reopens the folder from disk — so the tools
+  // read the files an assistant reads rather than a stubbed PackHandle.
+  const gitState: GitState = {
+    repository: 'capturepack-mcp-fixture',
+    branch: 'feature/mcp-git-lookup',
+    commit: '89abcdef0123456789abcdef0123456789abcdef',
+    dirty: true,
+    changed_files: ['src/main/mcp/tools.ts', 'src/main/plugins/git.ts'],
+  }
+  const gitPackDir = path.join(gitPackRoot, 'git-plugin-pack')
+  mkdirSync(gitPackDir)
+  writeFileSync(
+    path.join(gitPackDir, 'manifest.json'),
+    JSON.stringify({
+      format: '0.8.0',
+      id: 'git-plugin-pack',
+      capture_kind: 'image',
+      title: 'Git context capture',
+      created_at: '2026-11-11T09:00:00+09:00',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      plugins: [gitPluginDeclaration()],
+    }),
+  )
+  await writeGitPlugin(gitPackDir, gitState)
+  const gitPack = openPack(gitPackDir, 'dir', 'git-plugin-pack')
+  const consolePackDir = path.join(gitPackRoot, 'console-plugin-pack')
+  mkdirSync(consolePackDir)
+  writeFileSync(
+    path.join(consolePackDir, 'manifest.json'),
+    JSON.stringify({
+      format: '0.8.0',
+      id: 'console-plugin-pack',
+      capture_kind: 'image',
+      title: 'Console context capture',
+      created_at: '2026-11-11T09:00:00+09:00',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      plugins: [consolePluginDeclaration()],
+    }),
+  )
+  const consoleOutput = 'Build started\n\nTypeError: CapturePackConsoleSignal was not defined\nBuild exited with code 1\n'
+  await writeConsolePlugin(consolePackDir, {
+    output: consoleOutput,
+    source: 'environment',
+    truncated: false,
+  })
+  const consolePack = openPack(consolePackDir, 'dir', 'console-plugin-pack')
+  const emptyConsolePackDir = path.join(gitPackRoot, 'console-plugin-empty-pack')
+  mkdirSync(emptyConsolePackDir)
+  writeFileSync(
+    path.join(emptyConsolePackDir, 'manifest.json'),
+    JSON.stringify({
+      format: '0.8.0',
+      id: 'console-plugin-empty-pack',
+      capture_kind: 'image',
+      title: 'Console metadata missing',
+      created_at: '2026-11-11T09:00:00+09:00',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      plugins: [consolePluginDeclaration()],
+    }),
+  )
+  const emptyConsolePack = openPack(emptyConsolePackDir, 'dir', 'console-plugin-empty-pack')
+  const damagedConsolePackDir = path.join(gitPackRoot, 'console-plugin-damaged-pack')
+  mkdirSync(damagedConsolePackDir)
+  writeFileSync(
+    path.join(damagedConsolePackDir, 'manifest.json'),
+    JSON.stringify({
+      format: '0.8.0',
+      id: 'console-plugin-damaged-pack',
+      capture_kind: 'image',
+      title: 'Console metadata damaged',
+      created_at: '2026-11-11T09:00:00+09:00',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      plugins: [consolePluginDeclaration()],
+    }),
+  )
+  const damagedConsoleDir = path.join(damagedConsolePackDir, 'plugins', 'console')
+  mkdirSync(damagedConsoleDir, { recursive: true })
+  writeFileSync(path.join(damagedConsoleDir, 'meta.json'), '{"name":"console","version":"0.1.0"}\n')
+  writeFileSync(path.join(damagedConsoleDir, 'state.json'), '{"truncated":')
+  writeFileSync(path.join(damagedConsoleDir, 'output.log'), Buffer.from([0xff, 0xfe, 0x0a]))
+  const damagedConsolePack = openPack(damagedConsolePackDir, 'dir', 'console-plugin-damaged-pack')
   const store = {
     outputDir: 'C:\\packs',
     latest: () => pack,
@@ -414,6 +510,10 @@ async function main(): Promise<void> {
       if (id === videoOmittedTimelinePack.id) return videoOmittedTimelinePack
       if (id === videoMalformedTimelinePack.id) return videoMalformedTimelinePack
       if (id === legacyNoTimelinePack.id) return legacyNoTimelinePack
+      if (id === gitPack.id) return gitPack
+      if (id === consolePack.id) return consolePack
+      if (id === emptyConsolePack.id) return emptyConsolePack
+      if (id === damagedConsolePack.id) return damagedConsolePack
       return pack
     },
     list: () => ({
@@ -432,6 +532,12 @@ async function main(): Promise<void> {
   registerTools(server as never, store as never, { logRequests: false })
 
   console.log('SUMMARY')
+  const domDescription = definitions.get('capturepack_dom')?.description ?? ''
+  check(
+    domDescription.includes('returned as-is. On Windows') &&
+      !domDescription.includes('returned as-is. returned as-is.'),
+    'capturepack_dom description does not repeat the returned-as-is phrase',
+  )
   const latest = await callbacks.get('capturepack_latest')?.({})
   check(latest !== undefined, 'capturepack_latest is registered')
   const summary = textJson(latest as ToolResult)
@@ -745,6 +851,199 @@ async function main(): Promise<void> {
     'capturepack_windows explains when both window metadata and events are absent',
   )
 
+  console.log('GIT PLUGIN')
+  const gitSummary = textJson(
+    await callbacks.get('capturepack_summary')?.({ id: gitPack.id }) as ToolResult,
+  )
+  check(
+    JSON.stringify(gitSummary.plugins) === JSON.stringify(['git']),
+    'capturepack_summary lists the saved git plugin',
+  )
+  const gitDom = await callbacks.get('capturepack_dom')?.({ id: gitPack.id })
+  const gitDomJson = textJson(gitDom as ToolResult)
+  const gitDomPlugins = (gitDomJson.plugins ?? []) as Array<Record<string, unknown>>
+  const gitDomFiles = (gitDomPlugins[0]?.files ?? []) as Array<Record<string, unknown>>
+  check(
+    gitDom?.isError !== true &&
+      gitDomPlugins.length === 1 &&
+      gitDomPlugins[0]?.name === 'git' &&
+      gitDomPlugins[0]?.version === GIT_PLUGIN_VERSION &&
+      JSON.stringify(gitDomFiles.map((file) => file.file)) ===
+        JSON.stringify(['plugins/git/meta.json', 'plugins/git/state.json']) &&
+      gitDomFiles.every((file) => !('error' in file)),
+    'capturepack_dom returns the declared git plugin version and both of its JSON files',
+  )
+  check(
+    JSON.stringify(gitDomFiles[0]?.json) === JSON.stringify({ name: 'git', version: GIT_PLUGIN_VERSION }),
+    'capturepack_dom returns git meta.json as written',
+  )
+  check(
+    JSON.stringify(gitDomFiles[1]?.json) === JSON.stringify(gitState),
+    'capturepack_dom returns git state.json repository, branch, commit, dirty flag and changed files as written',
+  )
+  const gitMarkdown = await callbacks.get('capturepack_export_markdown')?.({ id: gitPack.id })
+  const gitMarkdownText = gitMarkdown?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    gitMarkdown?.isError !== true &&
+      gitMarkdownText.includes(
+        `- **git** v${GIT_PLUGIN_VERSION}: plugins/git/meta.json, plugins/git/state.json`,
+      ),
+    'capturepack_export_markdown lists the git plugin and its files',
+  )
+  const gitSearchCases: Array<[keyword: string, jsonPath: string, value: string]> = [
+    ['capturepack-mcp-fixture', 'repository', gitState.repository],
+    ['FEATURE/MCP-GIT-LOOKUP', 'branch', gitState.branch],
+    ['89abcdef01', 'commit', gitState.commit],
+    ['plugins/git.ts', 'changed_files[1]', 'src/main/plugins/git.ts'],
+  ]
+  for (const [keyword, jsonPath, value] of gitSearchCases) {
+    const gitSearch = await callbacks.get('capturepack_search')?.({ id: gitPack.id, keyword })
+    const gitSearchJson = textJson(gitSearch as ToolResult)
+    const gitSearchHits = (gitSearchJson.hits as Record<string, unknown>).plugins as Array<Record<string, unknown>>
+    check(
+      gitSearch?.isError !== true &&
+        gitSearchJson.total_hits === 1 &&
+        gitSearchHits.length === 1 &&
+        gitSearchHits[0]?.plugin === 'git' &&
+        gitSearchHits[0]?.file === 'plugins/git/state.json' &&
+        gitSearchHits[0]?.json_path === jsonPath &&
+        gitSearchHits[0]?.value === value,
+      `capturepack_search finds the git ${jsonPath} by "${keyword}"`,
+    )
+  }
+  const gitMiss = textJson(
+    await callbacks.get('capturepack_search')?.({ id: gitPack.id, keyword: 'no-such-branch' }) as ToolResult,
+  )
+  check(
+    gitMiss.total_hits === 0 && !('plugin_warnings' in gitMiss),
+    'capturepack_search reports a git miss without plugin warnings',
+  )
+  const gitFindDom = textJson(
+    await callbacks.get('capturepack_find_dom')?.({ id: gitPack.id, selector: 'mcp-git-lookup' }) as ToolResult,
+  )
+  const gitFindMatches = (gitFindDom.matches ?? []) as Array<Record<string, unknown>>
+  check(
+    gitFindDom.count === 1 &&
+      gitFindMatches[0]?.plugin === 'git' &&
+      gitFindMatches[0]?.file === 'plugins/git/state.json' &&
+      gitFindMatches[0]?.json_path === 'branch' &&
+      gitFindMatches[0]?.value === gitState.branch,
+    'capturepack_find_dom finds the git branch in plugin metadata',
+  )
+
+  console.log('CONSOLE PLUGIN')
+  const consoleSummary = textJson(
+    await callbacks.get('capturepack_summary')?.({ id: consolePack.id }) as ToolResult,
+  )
+  check(
+    JSON.stringify(consoleSummary.plugins) === JSON.stringify(['console']),
+    'capturepack_summary lists the saved console plugin',
+  )
+  const consoleDom = await callbacks.get('capturepack_dom')?.({ id: consolePack.id })
+  const consoleDomJson = textJson(consoleDom as ToolResult)
+  const consoleDomPlugins = (consoleDomJson.plugins ?? []) as Array<Record<string, unknown>>
+  const consoleDomFiles = (consoleDomPlugins[0]?.files ?? []) as Array<Record<string, unknown>>
+  check(
+    consoleDom?.isError !== true &&
+      consoleDomPlugins.length === 1 &&
+      consoleDomPlugins[0]?.name === 'console' &&
+      consoleDomPlugins[0]?.version === '0.1.0' &&
+      JSON.stringify(consoleDomFiles.map((file) => file.file)) ===
+        JSON.stringify([
+          'plugins/console/meta.json',
+          'plugins/console/output.log',
+          'plugins/console/state.json',
+        ]) &&
+      consoleDomFiles.every((file) => !('error' in file)),
+    'capturepack_dom returns the console declaration and its three payload files',
+  )
+  check(
+    JSON.stringify(consoleDomFiles[1]?.text) === JSON.stringify(consoleOutput),
+    'capturepack_dom returns output.log as bounded plain text',
+  )
+  check(
+    JSON.stringify(consoleDomFiles[2]?.json) === JSON.stringify({
+      source: 'environment',
+      truncated: false,
+      lines: 4,
+      bytes: Buffer.byteLength(consoleOutput, 'utf8'),
+    }),
+    'capturepack_dom parses console state.json',
+  )
+  const consoleMarkdown = await callbacks.get('capturepack_export_markdown')?.({ id: consolePack.id })
+  const consoleMarkdownText = consoleMarkdown?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    consoleMarkdown?.isError !== true &&
+      consoleMarkdownText.includes(
+        '- **console** v0.1.0: plugins/console/meta.json, plugins/console/output.log, plugins/console/state.json',
+      ),
+    'capturepack_export_markdown lists the console plugin and its files',
+  )
+  const consoleSearch = textJson(
+    await callbacks.get('capturepack_search')?.({ id: consolePack.id, keyword: 'CAPTUREPACKCONSOLESIGNAL' }) as ToolResult,
+  )
+  const consoleSearchHits = (consoleSearch.hits as Record<string, unknown>).plugins as Array<Record<string, unknown>>
+  check(
+    consoleSearch.total_hits === 1 &&
+      consoleSearchHits.length === 1 &&
+      consoleSearchHits[0]?.plugin === 'console' &&
+      consoleSearchHits[0]?.file === 'plugins/console/output.log' &&
+      consoleSearchHits[0]?.json_path === 'line[3]' &&
+      consoleSearchHits[0]?.value === 'TypeError: CapturePackConsoleSignal was not defined',
+    'capturepack_search finds console log text case-insensitively with its line number',
+  )
+  const consoleFindDom = textJson(
+    await callbacks.get('capturepack_find_dom')?.({ id: consolePack.id, selector: 'CAPTUREPACKCONSOLESIGNAL' }) as ToolResult,
+  )
+  const consoleFindMatches = (consoleFindDom.matches ?? []) as Array<Record<string, unknown>>
+  check(
+    consoleFindDom.count === 1 &&
+      consoleFindMatches[0]?.plugin === 'console' &&
+      consoleFindMatches[0]?.file === 'plugins/console/output.log' &&
+      consoleFindMatches[0]?.json_path === 'line[3]',
+    'capturepack_find_dom searches console log lines without a failure',
+  )
+  const emptyConsoleDom = await callbacks.get('capturepack_dom')?.({ id: emptyConsolePack.id })
+  const emptyConsoleJson = textJson(emptyConsoleDom as ToolResult)
+  const emptyConsolePlugins = (emptyConsoleJson.plugins ?? []) as Array<Record<string, unknown>>
+  check(
+    emptyConsoleDom?.isError !== true &&
+      emptyConsolePlugins.length === 1 &&
+      Array.isArray(emptyConsolePlugins[0]?.files) &&
+      (emptyConsolePlugins[0]?.files as unknown[]).length === 0,
+    'capturepack_dom handles a declared console plugin with no files',
+  )
+  const emptyConsoleSearch = await callbacks.get('capturepack_search')?.({
+    id: emptyConsolePack.id,
+    keyword: 'missing-console-line',
+  })
+  check(
+    emptyConsoleSearch?.isError !== true &&
+      textJson(emptyConsoleSearch as ToolResult).total_hits === 0,
+    'capturepack_search handles a console plugin with no files',
+  )
+  const damagedConsoleDom = await callbacks.get('capturepack_dom')?.({ id: damagedConsolePack.id })
+  const damagedConsoleJson = textJson(damagedConsoleDom as ToolResult)
+  const damagedConsolePlugins = (damagedConsoleJson.plugins ?? []) as Array<Record<string, unknown>>
+  const damagedConsoleFiles = (damagedConsolePlugins[0]?.files ?? []) as Array<Record<string, unknown>>
+  check(
+    damagedConsoleDom?.isError !== true &&
+      typeof damagedConsoleFiles.find((file) => file.file === 'plugins/console/output.log')?.text === 'string' &&
+      String(damagedConsoleFiles.find((file) => file.file === 'plugins/console/state.json')?.error).startsWith('invalid JSON:'),
+    'capturepack_dom returns damaged console files as text or a file-level parse error',
+  )
+  const damagedConsoleSearch = await callbacks.get('capturepack_search')?.({
+    id: damagedConsolePack.id,
+    keyword: 'no-such-console-line',
+  })
+  const damagedConsoleSearchJson = textJson(damagedConsoleSearch as ToolResult)
+  check(
+    damagedConsoleSearch?.isError !== true &&
+      damagedConsoleSearchJson.total_hits === 0 &&
+      Array.isArray(damagedConsoleSearchJson.plugin_warnings),
+    'capturepack_search safely reports malformed console state while scanning remaining files',
+  )
+
   console.log('FRAME')
   check(
     definitions.get('capturepack_frame')?.inputSchema?.display !== undefined,
@@ -949,7 +1248,9 @@ async function main(): Promise<void> {
   process.exitCode = failed === 0 ? 0 : 1
 }
 
-void main().catch((err: unknown) => {
-  console.error(err)
-  process.exitCode = 1
-})
+void main()
+  .catch((err: unknown) => {
+    console.error(err)
+    process.exitCode = 1
+  })
+  .finally(() => rmSync(gitPackRoot, { recursive: true, force: true }))

@@ -168,8 +168,7 @@ verification history. These are the current additions and next gates:
   can honestly reach and cannot stand in for the machine. Beyond that: code
   signing ([#21](https://github.com/r2cuerdame/capturepack/issues/21)), continued
   physical mixed-DPI/long-running recording, save/reopen, installer/update and
-  Chrome reconnection QA, plus stronger share-specific opaque redaction whose
-  pixels are proven independent of the covered source region.
+  Chrome reconnection QA.
 
 ---
 
@@ -235,7 +234,10 @@ usage habit that the whole project is measured by.
       keyframe stills as media through a closed media allowlist, accompanied by
       a generated README, offline viewer and minimal inventory; it canonicalizes
       the PNG pixels, excludes originals, all videos and structured context, and
-      remains distinct from the CapturePack evidence contract
+      remains distinct from the CapturePack evidence contract. Opaque redaction
+      re-renders covered pixels as a fixed solid color independent of the source
+      pixels and removes sensitive labels from the shared image; people must
+      still review unmarked pixels before sharing.
 - [x] `viewer.html`, `README.md`, `report.md` and `skills/` generated from the
       source contract
 - [x] Video packs may contain `timeline.json`; explicit image packs never do
@@ -349,11 +351,55 @@ a password field renders dots, which is the case the DOM walker already refuses
       inside open shadow roots, a picked element is named through each shadow
       boundary (`host >>> inner`), and closed roots are skipped as their host
       ([#345](https://github.com/r2cuerdame/capturepack/issues/345))
-- [ ] Extension Phase 2, the rest: SPA route detection
+- [x] Extension Phase 2, SPA route detection: same-origin route hints resolve
+      against the latest active tab URL, with isolated race, inactive-tab and
+      cross-origin regression coverage (`check:chrome-route-change`)
 - [x] Chromium-family registration (Chrome, Edge, Brave and Chromium)
 - [x] Built-in Windows UI Automation context provider
-- [ ] Git plugin · Console plugin
+- [x] Git plugin: captures repository, branch, commit, dirty state and changed paths
+      in the saved pack (`check:git-plugin`)
+- [x] Console plugin: bounded, redacted optional context with `check:console-plugin`
 - [ ] Unreal plugin · Unity plugin
+
+## Next milestone — 2026-12 (0.6.2 candidate; planning only)
+
+**Goal:** prototype the V2 console context provider without changing the
+five-second capture workflow, and continue the one-month no-manual-reinstall
+observation. The console prototype is implemented in source with an explicit
+`CAPTUREPACK_CONSOLE_OUTPUT` input; this remains a milestone plan, not a version
+release or a claim that the observation has passed.
+
+- Preserve the five-second capture workflow: collection has a 100 ms deadline
+  and cannot hold capture open beyond it. A supported console produces a
+  SPEC-compatible `plugins/console/` payload and metadata; absent, inaccessible,
+  slow, or failed collection is omitted and the pack still saves normally.
+- Deterministic checks cover four outcomes: successful collection writes the
+  declared payload and metadata; absent or denied access adds no plugin and
+  does not fail saving; collection exceeding 100 ms is abandoned without
+  affecting saving; and atomic-write failure leaves no partial declaration or
+  temporary file and does not fail saving.
+- Require SPEC validation and all 100 automated QA checks to pass with
+  no regression; preserve the five-second workflow as an independent acceptance
+  condition.
+- Start the one-month observation only after a public-release installer
+  completes and its actual date and installed version are recorded. Review
+  weekly and at day 30 or later, recording confirmed ordinary-use dates,
+  automatic updates, manual reinstalls, interruptions, and reviewed evidence.
+  Pass only after at least 30 calendar days of confirmed ordinary use with no
+  manual reinstall and evidence for the starting/final versions and updates (or
+  an explicit `unknown`). A manual reinstall fails the period; missing dates or
+  evidence make it inconclusive. Follow [OBSERVATION.md](docs/OBSERVATION.md)
+  for the evidence rules, and keep the dated record, weekly checklist and
+  verdict in [OBSERVATION-LOG.md](docs/OBSERVATION-LOG.md); it records the
+  observation as not started until that install is verified.
+- Cost: 0; use existing local development and QA resources. No new service,
+  infrastructure, or paid API is part of this milestone.
+
+The numbered completion conditions for this milestone and for the 0.6.1
+candidate before it, the five-second condition both keep, and the publication
+contract (`pages.yml` for the website, a hand-dispatched `release.yml` for the
+Windows release) are in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](docs/RELEASE_SCOPE_0_6_1_0_6_2.md).
 
 ---
 
@@ -385,10 +431,6 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 
 ## Later — noted, not scheduled
 
-- **Share-specific opaque redaction** — re-render Share Copy media so covered
-  pixels are input-independent, rather than reusing the pack's editable
-  pixelation view; retain mandatory human review because unmarked pixels can
-  still contain secrets.
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
   findByApplication/URL/WindowTitle; true replay-frame extraction for `frame(time_s)`
@@ -419,7 +461,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 5 | Annotation editor | V1 | Done — unified box editor with scrub timeline and lifetimes (shipped) |
 | 6 | Export CapturePack | V1 | Done — folder-first packs with README/skills/annotated replay (shipped) |
 | 7 | Plugin API | V2 | Done — After Save Actions host and pipeline shipped in 0.5.0; temporal provider protocol v1 documented; on-disk plugin contract (SPEC §11) implemented |
-| 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration, open Shadow DOM. SPA routes pending |
+| 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration, open Shadow DOM and SPA route detection (`check:chrome-route-change`) |
 | 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
 | 10 | Public release | V1 | Done (0.6.0 live; auto-update chain proven from 0.1.0) |
 
