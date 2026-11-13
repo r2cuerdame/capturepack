@@ -1049,6 +1049,65 @@ try {
       [0, 1, 4, 5, 8, 9, 12, 13, 16, 19, 20, 21, 22, 23].every((pixel) => temporalSecond[pixel * 4] !== 0x1a) &&
       Array.from({ length: 16 }, (_, index) => index + 32).every((pixel) => temporalSecond[pixel * 4] === 0x1a))
 
+  const crossDisplay = makeFixture(
+    'opaque-cross-display-motion',
+    false,
+    solidPatternPng(4, 4, 0x51),
+  )
+  const crossDisplayManifestPath = path.join(crossDisplay.dir, 'manifest.json')
+  const crossDisplayManifest = JSON.parse(readFileSync(crossDisplayManifestPath, 'utf8'))
+  const crossDisplayStill1 = { file: 'frames/frame-01_00-01.000.png', t_ms: 1_000, width: 4, height: 4 }
+  const crossDisplayStill2 = { file: 'frames-d2/frame-01_00-01.000.png', t_ms: 1_000, width: 4, height: 4 }
+  crossDisplayManifest.media.keyframes = [crossDisplayStill1]
+  crossDisplayManifest.media.displays[1].keyframes = [crossDisplayStill2]
+  writeFileSync(crossDisplayManifestPath, `${JSON.stringify(crossDisplayManifest, null, 2)}\n`)
+  const crossDisplayAnnotationPath = path.join(crossDisplay.dir, 'annotations.json')
+  const crossDisplayAnnotations = JSON.parse(readFileSync(crossDisplayAnnotationPath, 'utf8'))
+  crossDisplayAnnotations.reference_width = 4
+  crossDisplayAnnotations.reference_height = 4
+  crossDisplayAnnotations.annotations = [{
+    ...crossDisplayAnnotations.annotations[0],
+    annotation_id: 'ann_000007',
+    text: '',
+    display: 1,
+    bounds: { x: 0, y: 1, width: 1, height: 1 },
+    start_ms: 0,
+    end_ms: 1_000,
+    keyframes: [
+      { t_ms: 0, display: 1, x: 0, y: 1, width: 1, height: 1 },
+      { t_ms: 1_000, display: 2, x: 2, y: 1, width: 1, height: 1 },
+    ],
+  }]
+  writeFileSync(crossDisplayAnnotationPath, `${JSON.stringify(crossDisplayAnnotations, null, 2)}\n`)
+  writeFileSync(
+    path.join(crossDisplay.dir, 'frames/frame-01_00-01.000.png'),
+    solidPatternPng(4, 4, 0x51),
+  )
+  writeFileSync(
+    path.join(crossDisplay.dir, 'frames-d2/frame-01_00-01.000.png'),
+    solidPatternPng(4, 4, 0x51),
+  )
+  const crossDisplayPlan = await planShareBundle(crossDisplay.dir, { opaqueRedaction: true })
+  const crossDisplayPixels = await Promise.all(crossDisplayPlan.entries.map(async (entry) => ({
+    display: entry.display,
+    pixels: canonicalRgbaPixels((await readCanonicalShareStill(entry)).bytes),
+  })))
+  const firstDisplayPixels = crossDisplayPixels.find((entry) => entry.display === 1)?.pixels
+  const secondDisplayPixels = crossDisplayPixels.find((entry) => entry.display === 2)?.pixels
+  const maskedPixelIsSolid = (pixels: Buffer | undefined, x: number, y: number): boolean => {
+    if (pixels === undefined) return false
+    const at = (y * 4 + x) * 4
+    return pixels[at] === 0x1a && pixels[at + 1] === 0x1a &&
+      pixels[at + 2] === 0x1a && pixels[at + 3] === 0xff
+  }
+  const firstDisplayMaskStayedClear = firstDisplayPixels !== undefined &&
+    firstDisplayPixels.subarray((1 * 4) * 4, (1 * 4 + 1) * 4).equals(
+      canonicalRgbaPixels(solidPatternPng(4, 4, 0x51)).subarray((1 * 4) * 4, (1 * 4 + 1) * 4),
+    )
+  check('authored blur motion crossing displays masks only its resolved destination lane',
+    firstDisplayMaskStayedClear && maskedPixelIsSolid(secondDisplayPixels, 2, 1) &&
+      secondDisplayPixels !== undefined && !maskedPixelIsSolid(secondDisplayPixels, 0, 1))
+
   // Screenshot-only lanes use stored bounds and every annotation, just like
   // renderStill's null clock, even when imported metadata has lifetimes/motion.
   temporalManifest.media.replay = null

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const execFileAsync = promisify(execFile)
@@ -94,11 +94,57 @@ async function writeAtomicFile(filePath: string, contents: string): Promise<void
   }
 }
 
+/**
+ * Cleanup after a failed write. meta.json is published last, so a directory
+ * without an ordinary meta.json never finished and is removed rather than left
+ * for a reader that lists plugins/ by directory (the MCP store, a full ZIP) to
+ * find. A directory an earlier write already published is left alone: each of
+ * its files is replaced atomically, so it still holds a complete payload.
+ */
+async function removeUnpublishedGitPlugin(pluginDir: string): Promise<void> {
+  try {
+    if ((await lstat(join(pluginDir, 'meta.json'))).isFile()) return
+  } catch {
+    // No metadata at all: this write never published the plugin.
+  }
+  await rm(pluginDir, { recursive: true, force: true }).catch(() => {})
+}
+
 export async function writeGitPlugin(dirPath: string, state: GitState): Promise<void> {
-  const pluginDir = join(dirPath, 'plugins', 'git')
-  await mkdir(pluginDir, { recursive: true })
-  // Publish metadata last so readers never discover a plugin before its state
-  // file has been written successfully.
-  await writeAtomicFile(join(pluginDir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
-  await writeAtomicFile(join(pluginDir, 'meta.json'), `${JSON.stringify({ name: 'git', version: GIT_PLUGIN_VERSION }, null, 2)}\n`)
+  const pluginsDir = join(dirPath, 'plugins')
+  const pluginDir = join(pluginsDir, 'git')
+  // A recursive mkdir that creates anything creates its last component, so a
+  // returned path means plugins/ is new to this write.
+  const createdPluginsDir = await mkdir(pluginsDir, { recursive: true }) !== undefined
+  try {
+    await mkdir(pluginDir, { recursive: true })
+    // Publish metadata last so readers never discover a plugin before its state
+    // file has been written successfully.
+    await writeAtomicFile(join(pluginDir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
+    await writeAtomicFile(join(pluginDir, 'meta.json'), `${JSON.stringify({ name: 'git', version: GIT_PLUGIN_VERSION }, null, 2)}\n`)
+  } catch (error) {
+    await removeUnpublishedGitPlugin(pluginDir)
+    // plugins/ itself goes too when this write created it and nothing else
+    // has landed there since; rmdir refuses a directory that is not empty.
+    if (createdPluginsDir) await rmdir(pluginsDir).catch(() => {})
+    throw error
+  }
+}
+
+/**
+ * writeGitPlugin() that can never fail a save: returns whether the plugin was
+ * published, which is exactly when it may be declared. A write that did not
+ * finish leaves no state file, temporary file or half-made directory behind.
+ */
+export async function tryWriteGitPlugin(dirPath: string, state: GitState): Promise<boolean> {
+  try {
+    await writeGitPlugin(dirPath, state)
+    return true
+  } catch (err) {
+    console.error(
+      'capturepack: writing plugins/git failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return false
+  }
 }

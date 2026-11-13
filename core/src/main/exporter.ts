@@ -57,10 +57,12 @@ import {
   replayMimeType,
 } from '../shared/replayMedia'
 export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
-import { buildReport } from './report'
+import { buildReport, manifestReferenceSize, positivePixels } from './report'
+import { pngPixelSize } from './png'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
-import { collectGitState, gitPluginDeclaration, writeGitPlugin } from './plugins/git'
+import { collectGitState, gitPluginDeclaration, tryWriteGitPlugin } from './plugins/git'
+import { collectConsoleOutput, consolePluginDeclaration, tryWriteConsolePlugin } from './plugins/console'
 import { copyTextToClipboard } from './clipboard'
 import { isShareBundleArchive } from './packArchive'
 import {
@@ -377,7 +379,9 @@ async function writeViewerNonFatal(
   dirPath: string,
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
-  timeline: TimelineFile,
+  // undefined when the pack holds no timeline.json (SPEC §4: OPTIONAL for a
+  // video pack) — the viewer's file list then does not name one.
+  timeline: TimelineFile | undefined,
   docLanguage: Language,
 ): Promise<boolean> {
   const viewerPath = join(dirPath, 'viewer.html')
@@ -837,6 +841,17 @@ export async function readTimelineSafe(
 }
 
 /**
+ * The pack's top-level still, as a plain file name inside the pack. A name that
+ * would leave the folder is not followed; snapshot.png is what SPEC §5.3 names.
+ */
+function packSnapshotName(manifest: Manifest): string {
+  const name = manifest.media?.snapshot
+  return typeof name === 'string' && /^[^/\\:]+\.png$/iu.test(name)
+    ? name
+    : 'snapshot.png'
+}
+
+/**
  * Safely reads annotations.json from a pack directory.
  *
  * SPEC §4, §8, and §14 declare annotations.json as OPTIONAL.
@@ -844,6 +859,13 @@ export async function readTimelineSafe(
  * or invalid annotations array, falls back to a safe empty AnnotationsFile
  * ({ reference_width: fallbackWidth, reference_height: fallbackHeight, annotations: [] })
  * rather than throwing or aborting doc refresh.
+ *
+ * reference_width/reference_height are the FOCUSED display's snapshot.png
+ * pixels (SPEC §8.2). A stated value is kept only when it is a positive number;
+ * otherwise, given the manifest, the fallback is the focused display's entry
+ * and, for a pack that declares no displays (an image pack), the size the
+ * saved snapshot.png's own header declares — never displays[0], never 0×0
+ * beside a readable raster.
  */
 export async function readAnnotationsSafe(
   dirPath: string,
@@ -853,14 +875,14 @@ export async function readAnnotationsSafe(
   let fallbackWidth = 0
   let fallbackHeight = 0
   if (typeof fallbackWidthOrManifest === 'number') {
-    fallbackWidth = Number.isFinite(fallbackWidthOrManifest) ? fallbackWidthOrManifest : 0
-    fallbackHeight =
-      typeof fallbackHeightParam === 'number' && Number.isFinite(fallbackHeightParam)
-        ? fallbackHeightParam
-        : 0
+    fallbackWidth = positivePixels(fallbackWidthOrManifest) ?? 0
+    fallbackHeight = positivePixels(fallbackHeightParam) ?? 0
   } else if (fallbackWidthOrManifest && typeof fallbackWidthOrManifest === 'object') {
-    fallbackWidth = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_width ?? 0
-    fallbackHeight = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_height ?? 0
+    const size =
+      manifestReferenceSize(fallbackWidthOrManifest) ??
+      pngPixelSize(join(dirPath, packSnapshotName(fallbackWidthOrManifest)))
+    fallbackWidth = size?.width ?? 0
+    fallbackHeight = size?.height ?? 0
   }
   const fallback: AnnotationsFile = {
     reference_width: fallbackWidth,
@@ -880,14 +902,8 @@ export async function readAnnotationsSafe(
         reference_height?: unknown
         annotations?: unknown
       }
-      const reference_width =
-        typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
-          ? candidate.reference_width
-          : fallbackWidth
-      const reference_height =
-        typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
-          ? candidate.reference_height
-          : fallbackHeight
+      const reference_width = positivePixels(candidate.reference_width) ?? fallbackWidth
+      const reference_height = positivePixels(candidate.reference_height) ?? fallbackHeight
       const rawAnnotations = candidate.annotations
       const annotations: AnnotationsFile['annotations'] =
         Array.isArray(rawAnnotations) &&
@@ -933,16 +949,15 @@ export async function addManifestPlugin(
     const nextManifest: Manifest = declared
       ? manifest
       : { ...manifest, plugins: [...plugins, declaration] }
-    const annotationsFile = await readAnnotationsSafe(
-      handle.dirPath,
-      nextManifest.media.displays?.[0]?.snapshot_width ?? 0,
-      nextManifest.media.displays?.[0]?.snapshot_height ?? 0,
-    )
+    const annotationsFile = await readAnnotationsSafe(handle.dirPath, nextManifest)
     const timeline = await readTimelineSafe(
       handle.dirPath,
       nextManifest.created_at,
       nextManifest.capture_kind,
     )
+    // readTimelineSafe returns an empty stand-in when the file is absent (it
+    // feeds skills/timeline.md); the file lists must follow the disk instead.
+    const hasTimelineFile = timelineFileExists(handle.dirPath, nextManifest)
 
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
@@ -952,7 +967,7 @@ export async function addManifestPlugin(
       handle.dirPath,
       nextManifest,
       annotationsFile,
-      timeline,
+      hasTimelineFile ? timeline : undefined,
       docLanguage,
     )
     await writeDocs(
@@ -963,6 +978,8 @@ export async function addManifestPlugin(
       docLanguage,
       false,
       viewerWritten,
+      existsSync(join(handle.dirPath, 'annotations.json')),
+      hasTimelineFile,
     )
     if (!declared || nextManifest.format_version !== previousFormatVersion) {
       await writeSourceFile(manifestPath, toJson(nextManifest))
@@ -1497,12 +1514,24 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     let gitDeclaration: NonNullable<Manifest['plugins']>[number] | undefined
     try {
       const gitState = await collectGitState(process.cwd())
-      if (gitState) {
-        await writeGitPlugin(dirPath, gitState)
+      // A failed write cleans up after itself, so only a published plugin is declared.
+      if (gitState && await tryWriteGitPlugin(dirPath, gitState)) {
         gitDeclaration = gitPluginDeclaration()
       }
     } catch {
       // Optional plugin failure must not fail the capture.
+    }
+    let consoleDeclaration: NonNullable<Manifest['plugins']>[number] | undefined
+    try {
+      // The supplied console snapshot is bounded to 100 ms and optional. The
+      // writer publishes metadata last, so the declaration follows only a
+      // complete payload and every failure remains outside capture success.
+      const consoleOutput = await collectConsoleOutput()
+      if (await tryWriteConsolePlugin(dirPath, consoleOutput)) {
+        consoleDeclaration = consolePluginDeclaration()
+      }
+    } catch {
+      // Optional console context must never fail the capture.
     }
     // Optional context lands before the manifest that declares it. Its writer
     // swallows every failure, so save-first remains a media-first guarantee.
@@ -1521,6 +1550,9 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       dirPath,
       imageCapture ? undefined : input.displays,
     )
+    const capturePlugins = [gitDeclaration, consoleDeclaration].filter(
+      (plugin): plugin is NonNullable<Manifest['plugins']>[number] => plugin !== undefined,
+    )
     const manifest = buildManifest({
       id,
       createdAt: input.capturedAt,
@@ -1537,7 +1569,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       replayDurationMs: input.replayDurationMs,
       snapshotTMs: null,
       plugins: withWindowsContextPlugin(
-        gitDeclaration ? [gitDeclaration] : undefined,
+        capturePlugins.length > 0 ? capturePlugins : undefined,
         contextDisposition,
       ),
       displays: writtenDisplays,
@@ -1900,10 +1932,40 @@ async function imagePluginEntryIsMetadata(sourcePath: string): Promise<boolean> 
   }
 }
 
-async function copyImagePluginMetadata(
+/** SPEC §5.4/§11.1: an ordinary meta.json whose name and version equal the declaration. */
+async function pluginMetadataMatches(
+  dir: string,
+  declaration: NonNullable<Manifest['plugins']>[number],
+): Promise<boolean> {
+  try {
+    const metaPath = join(dir, 'meta.json')
+    if (!(await lstat(metaPath)).isFile()) return false
+    const value = JSON.parse(stripUtf8Bom(await readFile(metaPath, 'utf8'))) as unknown
+    return value !== null
+      && typeof value === 'object'
+      && 'name' in value
+      && 'version' in value
+      && value.name === declaration.name
+      && value.version === declaration.version
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Copies only DECLARED, PUBLISHED plugin payloads into a Save As New pack and
+ * returns the declarations that actually landed. A source directory without a
+ * matching meta.json never finished (or is not this declaration's payload), so
+ * it is not copied at all; a copy that fails or loses its meta.json on the way
+ * (the image filter drops media-looking files) is removed from the new pack.
+ * Undeclared source directories never travel: the exporter declares every
+ * directory it writes (SPEC §5.4), and MCP lists plugins/ by directory.
+ */
+async function copySaveAsNewPlugins(
   sourceDir: string,
   targetDir: string,
   plugins: Manifest['plugins'] | undefined,
+  imageCapture: boolean,
 ): Promise<Manifest['plugins']> {
   const copied: Manifest['plugins'] = []
   const seen = new Set<string>()
@@ -1913,6 +1975,7 @@ async function copyImagePluginMetadata(
       typeof declaration !== 'object' ||
       typeof declaration.name !== 'string' ||
       !PLUGIN_DIRECTORY_NAME_RE.test(declaration.name) ||
+      typeof declaration.version !== 'string' ||
       seen.has(declaration.name)
     ) {
       continue
@@ -1920,16 +1983,20 @@ async function copyImagePluginMetadata(
     seen.add(declaration.name)
     const source = join(sourceDir, 'plugins', declaration.name)
     const target = join(targetDir, 'plugins', declaration.name)
-    if (!existsSync(source)) continue
-    await cp(source, target, {
-      recursive: true,
-      filter: imagePluginEntryIsMetadata,
-    })
+    if (!(await pluginMetadataMatches(source, declaration))) continue
     try {
-      const meta = await lstat(join(target, 'meta.json'))
-      if (meta.isFile()) copied.push(declaration)
+      await cp(source, target, {
+        recursive: true,
+        ...(imageCapture ? { filter: imagePluginEntryIsMetadata } : {}),
+      })
+      if (await pluginMetadataMatches(target, declaration)) {
+        copied.push(declaration)
+      } else {
+        await rm(target, { recursive: true, force: true })
+      }
     } catch {
-      // A declaration without ordinary meta.json is not a copied plugin.
+      // Plugin payloads are optional. A failed or partial copy is unpublished.
+      await rm(target, { recursive: true, force: true }).catch(() => {})
     }
   }
   return copied
@@ -2105,8 +2172,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   try {
     await mkdir(dirPath)
     // Copy pack-backed plugins first, then apply the caller's temporal-context
-    // disposition. For video, plugin payloads remain byte-for-byte. An image
-    // pack has a stricter boundary: only DECLARED plugin metadata may cross,
+    // disposition. Only declared payloads published by a matching meta.json
+    // cross; for video they remain byte-for-byte. An image pack has a stricter
+    // boundary: only DECLARED plugin metadata may cross,
     // and neither a media extension nor renamed raster/video magic is copied.
     // Otherwise Save As New could turn plugins/hidden.png from a malformed
     // source into an undeclared full-screen image in a newly trusted pack.
@@ -2116,12 +2184,8 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // authority for payloads copied from the source pack.
     let copiedPlugins = input.plugins ?? sourceManifest?.plugins
     if (existsSync(srcPlugins)) {
-      if (imageCapture) {
-        copiedPlugins = await copyImagePluginMetadata(sourceDir, dirPath, copiedPlugins)
-      } else {
-        await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
-      }
-    } else if (imageCapture) {
+      copiedPlugins = await copySaveAsNewPlugins(sourceDir, dirPath, copiedPlugins, imageCapture)
+    } else {
       copiedPlugins = []
     }
     const contextDisposition = await reconcileWindowsContextPlugin(
@@ -2167,6 +2231,10 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     // A background render for the NEW folder always follows this save. Publish
     // its discovery commit only after every declared media copy has completed.
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+    // Nothing crossed: leave no plugins/ (empty, or holding what cleanup missed).
+    if ((manifest.plugins ?? []).length === 0) {
+      await rm(join(dirPath, 'plugins'), { recursive: true, force: true }).catch(() => {})
+    }
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
@@ -2238,15 +2306,33 @@ async function writeDocs(
   docLanguage: Language,
   renderPending: boolean,
   includeViewer: boolean,
+  includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): Promise<void> {
   const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
   await writeSourceFile(
     join(dirPath, 'report.md'),
-    buildReport(manifest, annotationsFile, docLanguage, renderPending, includeViewer),
+    buildReport(
+      manifest,
+      annotationsFile,
+      docLanguage,
+      renderPending,
+      includeViewer,
+      includeAnnotationsFile,
+      includeTimelineFile,
+    ),
   )
   await writeSourceFile(
     join(dirPath, 'README.md'),
-    buildReadme(manifest, annotationsFile, docLanguage, renderPending, includeViewer),
+    buildReadme(
+      manifest,
+      annotationsFile,
+      docLanguage,
+      renderPending,
+      includeViewer,
+      includeAnnotationsFile,
+      includeTimelineFile,
+    ),
   )
   const skillFiles =
     manifest.capture_kind === 'image'
@@ -2279,16 +2365,13 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
     const manifest = JSON.parse(
       stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
     ) as Manifest
-    const annotationsFile = await readAnnotationsSafe(
-      dirPath,
-      manifest.media.displays?.[0]?.snapshot_width ?? 0,
-      manifest.media.displays?.[0]?.snapshot_height ?? 0,
-    )
+    const annotationsFile = await readAnnotationsSafe(dirPath, manifest)
     const timeline = await readTimelineSafe(
       dirPath,
       manifest.created_at,
       manifest.capture_kind,
     )
+    const hasTimelineFile = timelineFileExists(dirPath, manifest)
     // The render has already run: nothing further will write stills, so an
     // undeclared keyframe set is an ABSENT one, not a pending one.
     const previousFormatVersion = manifest.format_version
@@ -2296,7 +2379,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       dirPath,
       manifest,
       annotationsFile,
-      timeline,
+      hasTimelineFile ? timeline : undefined,
       docLanguage,
     )
     if (manifest.format_version !== previousFormatVersion) {
@@ -2310,8 +2393,19 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       docLanguage,
       false,
       viewerWritten,
+      existsSync(join(dirPath, 'annotations.json')),
+      hasTimelineFile,
     )
   })
+}
+
+/**
+ * SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack, and
+ * a regenerated document names only files that are really in the folder. A
+ * present-but-empty or damaged file still exists, so it stays listed.
+ */
+function timelineFileExists(dirPath: string, manifest: Manifest): boolean {
+  return manifest.capture_kind !== 'image' && existsSync(join(dirPath, 'timeline.json'))
 }
 
 /**

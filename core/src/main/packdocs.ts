@@ -26,6 +26,8 @@ import {
   keyframeSet,
   lifetimeLabel,
   packFocusedDisplay,
+  pluginFiles,
+  referenceFrameSize,
 } from './report'
 
 const px = (n: number): number => Math.round(n)
@@ -85,17 +87,12 @@ export function buildReadme(
   renderPending = false,
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
+  includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -165,10 +162,19 @@ export function buildReadme(
   for (const f of extraDisplayFiles(manifest)) {
     lines.push(`| ${f.name} | ${f.what} |`)
   }
+  for (const f of pluginFiles(manifest)) {
+    lines.push(`| ${f.name} | ${f.what} |`)
+  }
   const framesEntry = keyframeFileEntry(keyframes, imageCapture)
   if (framesEntry !== null) lines.push(`| ${framesEntry.name} | ${framesEntry.what} |`)
-  lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
-  if (!imageCapture) lines.push('| timeline.json | When the capture and each annotation happened |')
+  if (includeAnnotationsFile) {
+    lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
+  }
+  // SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack;
+  // name it only when the exporter found it on disk.
+  if (!imageCapture && includeTimelineFile) {
+    lines.push('| timeline.json | When the capture and each annotation happened |')
+  }
   lines.push('| report.md | The full generated narrative of this pack |')
   lines.push('| skills/ | Context documents structured for AI readers |')
   if (includeViewer) {
@@ -261,14 +267,7 @@ function buildOverviewSkill(
   renderPending: boolean,
 ): string {
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -496,14 +495,7 @@ function buildAnnotationSkill(
   t: TranslateFn,
 ): string {
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const numbers = computeDisplayNumbers(annotations)
   const multi = isMultiDisplay(manifest)
@@ -646,26 +638,17 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
   lines.push(`# ${t('pack.skillDom')}`)
   lines.push('')
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  const domPlugins = plugins.filter((p) => p.name === 'chrome-dom' || p.name === 'windows-uia')
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
   const targeted = annotations.filter((a) => a.target !== undefined)
-  if (plugins.length === 0 && targeted.length === 0) {
-    // Honest empty: no invented structure when no plugin contributed data.
+  if (domPlugins.length === 0 && targeted.length === 0) {
     lines.push('No DOM metadata in this pack.')
-    lines.push('')
-    lines.push(
-      'No plugin contributed semantic object data (there is no `plugins/` payload and no annotation',
-    )
-    lines.push(
-      'carries a `target`). If a future pack includes it, DOM metadata lives under `plugins/<name>/`',
-    )
-    lines.push('and semantic object references appear as the reserved `target` field on annotation boxes.')
-    lines.push('')
     return lines.join('\n')
   }
-  if (plugins.length > 0) {
+  if (domPlugins.length > 0) {
     lines.push('Plugins that contributed data (see `plugins/`):')
     lines.push('')
-    for (const p of plugins) {
+    for (const p of domPlugins) {
       lines.push(`- **${p.name}** v${p.version} — files under \`${p.path}\``)
     }
     lines.push('')
@@ -675,7 +658,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // what is ABSENT from that structure changes what it may conclude. A model
     // that does not know field values were withheld will read an empty form as
     // an empty form; a model that does knows it is looking at a redaction.
-    const dom = plugins.find((p) => p.name === 'chrome-dom')
+    const dom = domPlugins.find((p) => p.name === 'chrome-dom')
     if (dom !== undefined) {
       lines.push(
         'A `chrome-dom` pick from extension 0.2.0 or newer carries a `document`: every element',
@@ -697,7 +680,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // page rectangles land on the neighbouring thing, so the walk throws them
     // away — and a model that does not know they were thrown away will read a
     // window with no controls as a window that HAD no controls.
-    const uia = plugins.find((p) => p.name === 'windows-uia')
+    const uia = domPlugins.find((p) => p.name === 'windows-uia')
     if (uia !== undefined) {
       lines.push(
         'In `windows-uia` 0.4.0 or newer, read `geometry_refused` before concluding anything from',

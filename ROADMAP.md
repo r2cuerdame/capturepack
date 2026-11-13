@@ -358,27 +358,50 @@ a password field renders dots, which is the case the DOM walker already refuses
 - [x] Built-in Windows UI Automation context provider
 - [x] Git plugin: captures repository, branch, commit, dirty state and changed paths
       in the saved pack (`check:git-plugin`)
-- [ ] Console plugin
+- [x] Console plugin: bounded, redacted optional context with `check:console-plugin`
 - [ ] Unreal plugin · Unity plugin
 
 ## Next milestone — 2026-12 (0.6.2 candidate; planning only)
 
 **Goal:** prototype the V2 console context provider without changing the
 five-second capture workflow, and continue the one-month no-manual-reinstall
-observation. This is a milestone plan, not a version release or a claim that
-the observation has passed.
+observation. The console prototype is implemented in source with an explicit
+`CAPTUREPACK_CONSOLE_OUTPUT` input; this remains a milestone plan, not a version
+release or a claim that the observation has passed.
 
-- A supported console produces a SPEC-compatible `plugins/console/` payload
-  and metadata. Collection completes within 100 ms; missing, inaccessible, or
-  slow console data is omitted and the pack still saves normally. The layout,
-  budget, masking rules and write order are fixed in
-  [docs/CONSOLE_PLUGIN.md](docs/CONSOLE_PLUGIN.md) before code is written.
-- Deterministic checks cover successful collection, absent/denied console
-  access, timeout, and write failure; the full QA gate and SPEC validation pass.
-- The one-month observation records actual install/update dates and any manual
-  reinstall. It remains in progress until a full month has elapsed without one.
+- Preserve the five-second capture workflow: collection has a 100 ms deadline
+  and cannot hold capture open beyond it. A supported console produces a
+  SPEC-compatible `plugins/console/` payload and metadata; absent, inaccessible,
+  slow, or failed collection is omitted and the pack still saves normally.
+  The layout, budget, masking rules and write order are the design baseline
+  in [docs/CONSOLE_PLUGIN.md](docs/CONSOLE_PLUGIN.md).
+- Deterministic checks cover four outcomes: successful collection writes the
+  declared payload and metadata; absent or denied access adds no plugin and
+  does not fail saving; collection exceeding 100 ms is abandoned without
+  affecting saving; and atomic-write failure leaves no partial declaration or
+  temporary file and does not fail saving.
+- Require SPEC validation and all 100 automated QA checks to pass with
+  no regression; preserve the five-second workflow as an independent acceptance
+  condition.
+- Start the one-month observation only after a public-release installer
+  completes and its actual date and installed version are recorded. Review
+  weekly and at day 30 or later, recording confirmed ordinary-use dates,
+  automatic updates, manual reinstalls, interruptions, and reviewed evidence.
+  Pass only after at least 30 calendar days of confirmed ordinary use with no
+  manual reinstall and evidence for the starting/final versions and updates (or
+  an explicit `unknown`). A manual reinstall fails the period; missing dates or
+  evidence make it inconclusive. Follow [OBSERVATION.md](docs/OBSERVATION.md)
+  for the evidence rules, and keep the dated record, weekly checklist and
+  verdict in [OBSERVATION-LOG.md](docs/OBSERVATION-LOG.md); it records the
+  observation as not started until that install is verified.
 - Cost: 0; use existing local development and QA resources. No new service,
   infrastructure, or paid API is part of this milestone.
+
+The numbered completion conditions for this milestone and for the 0.6.1
+candidate before it, the five-second condition both keep, and the publication
+contract (`pages.yml` for the website, a hand-dispatched `release.yml` for the
+Windows release) are in
+[RELEASE_SCOPE_0_6_1_0_6_2.md](docs/RELEASE_SCOPE_0_6_1_0_6_2.md).
 
 ---
 

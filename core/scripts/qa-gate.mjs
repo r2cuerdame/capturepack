@@ -69,6 +69,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:source-first-save',
   'check:save-now',
   'check:pack-assertions',
+  'check:capture-now',
   'check:background-media',
   'check:viewer',
   'check:chrome-lifecycle',
