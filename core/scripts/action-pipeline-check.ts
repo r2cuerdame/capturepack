@@ -13,7 +13,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { app } from 'electron'
-import { clearPackLedger, runActionsForPack } from '../src/main/actions/host'
+import {
+  clearPackLedger,
+  onActionResultsChange,
+  parseActionResults,
+  persistActionResults,
+  readActionResults,
+  runActionsForPack,
+} from '../src/main/actions/host'
 import { clearSaveActionSessions, runActionsAtState } from '../src/main/actions/onSave'
 import { deliverWebhook, readPackSummary } from '../src/main/actions/webhook'
 import type { Settings } from '../src/shared/types'
@@ -1789,6 +1796,105 @@ console.log('\nAFTER SAVE ACTION EXECUTION RESULTS & RETRY (#165)')
     )
   } finally {
     rmSync(testRerunPackDir, { recursive: true, force: true })
+  }
+}
+
+console.log('\nACTION RESULTS FOLLOW THE PACK, ANNOUNCE THEMSELVES AND SURVIVE A BOM (#513)')
+{
+  const work = mkdtempSync(path.join(tmpdir(), 'capturepack-action-results-513-'))
+  const failedResult: ActionResult = {
+    actionId: 'webhook', configId: 'cfg-513', outcome: 'failed', attempts: 1, durationMs: 9, message: 'refused', retryable: true,
+  }
+  const okResult: ActionResult = {
+    actionId: 'webhook', configId: 'cfg-513', outcome: 'ok', attempts: 1, durationMs: 7, retryable: false,
+  }
+  const otherResult: ActionResult = {
+    actionId: 'webhook', configId: 'cfg-513-other', outcome: 'ok', attempts: 1, durationMs: 5, retryable: false,
+  }
+  const notified: string[] = []
+  const unsubscribe = onActionResultsChange((packDir) => notified.push(packDir))
+  try {
+    // A pack renamed or binned while its delivery was in flight: nothing is left at the old path.
+    const renamedAway = path.join(work, 'Renamed-Away')
+    persistActionResults(renamedAway, [failedResult])
+    check(
+      'a result for a pack that is no longer there does not recreate its old folder',
+      !existsSync(renamedAway),
+      existsSync(renamedAway) ? 'old path recreated' : '',
+    )
+
+    // The old name still exists as a folder, but no pack lives in it any more.
+    const emptied = path.join(work, 'Emptied')
+    mkdirSync(emptied)
+    persistActionResults(emptied, [failedResult])
+    check(
+      'a folder that holds no manifest gets no plugins/ subfolder and no results file',
+      !existsSync(path.join(emptied, 'plugins')),
+    )
+    check('and nobody is told results changed for either path', notified.length === 0, JSON.stringify(notified))
+
+    const packDir = path.join(work, 'Saved')
+    mkdirSync(packDir)
+    writeFileSync(path.join(packDir, 'manifest.json'), JSON.stringify({ id: PACK }), 'utf8')
+    persistActionResults(packDir, [failedResult])
+    check(
+      'a saved pack records its result in plugins/action-results.json',
+      readActionResults(packDir)[0]?.outcome === 'failed',
+    )
+    check('a recorded result announces the pack it changed', notified.length === 1 && notified[0] === packDir, JSON.stringify(notified))
+
+    persistActionResults(packDir, [okResult])
+    check(
+      'a retry that succeeds replaces the failed result and announces again',
+      readActionResults(packDir).length === 1 && readActionResults(packDir)[0]?.outcome === 'ok' && notified.length === 2,
+      JSON.stringify({ results: readActionResults(packDir), notified: notified.length }),
+    )
+
+    persistActionResults(packDir, [])
+    check('an empty run writes nothing and announces nothing', notified.length === 2)
+
+    // A results file a Windows editor saved with a BOM, holding entries of the wrong shape.
+    const resultsFile = path.join(packDir, 'plugins', 'action-results.json')
+    const mixed = [failedResult, null, 7, 'text', { actionId: 'webhook', configId: 'broken' }, otherResult]
+    writeFileSync(resultsFile, `﻿${JSON.stringify(mixed)}`, 'utf8')
+    const parsedWithBom = readActionResults(packDir)
+    check(
+      'a BOM-prefixed results file is read, keeping only the well-formed entries',
+      parsedWithBom.length === 2
+        && parsedWithBom[0]?.configId === 'cfg-513'
+        && parsedWithBom[1]?.configId === 'cfg-513-other',
+      JSON.stringify(parsedWithBom),
+    )
+    check(
+      'the shared parser applies the same rules to text read from a zipped pack',
+      parseActionResults(`﻿${JSON.stringify(mixed)}`).length === 2
+        && parseActionResults('{"not":"an array"}').length === 0,
+    )
+    let threw = false
+    try {
+      parseActionResults('{ not json')
+    } catch {
+      threw = true
+    }
+    check('the shared parser leaves text that is not JSON to its caller', threw)
+
+    persistActionResults(packDir, [okResult])
+    const afterBomMerge = readActionResults(packDir)
+    check(
+      'persisting over a BOM-prefixed file merges with it instead of discarding the earlier results',
+      afterBomMerge.length === 2
+        && afterBomMerge.find((r) => r.configId === 'cfg-513')?.outcome === 'ok'
+        && afterBomMerge.find((r) => r.configId === 'cfg-513-other')?.outcome === 'ok',
+      JSON.stringify(afterBomMerge),
+    )
+
+    unsubscribe()
+    const before = notified.length
+    persistActionResults(packDir, [failedResult])
+    check('an unsubscribed listener is no longer told', notified.length === before)
+  } finally {
+    unsubscribe()
+    rmSync(work, { recursive: true, force: true })
   }
 }
 

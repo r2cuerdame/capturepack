@@ -2,7 +2,9 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
 import { IPC } from '../src/shared/ipc'
-import type { HistoryListResult, HistoryRenameResult } from '../src/shared/ipc'
+import type { ActionRetryResult, HistoryListResult, HistoryRenameResult } from '../src/shared/ipc'
+import { BUILTIN_WEBHOOK_ACTION_ID, type ActionResult } from '../src/shared/actions'
+import { persistActionResults } from '../src/main/actions/host'
 import { loadSettings } from '../src/main/settings'
 import { uiT } from '../src/main/locale'
 import {
@@ -673,6 +675,208 @@ async function run(): Promise<void> {
         JSON.stringify({ caseOnlyUpper, caseOnlyPlain, entriesAfterCaseOnly }),
       )
     }
+
+    console.log('\n--- 4c. After Save Action results reach an open History window (#513) ---')
+    const sizeHandler = electronStub.__handlers.get(IPC.historySize)
+    const retryHandler = electronStub.__handlers.get(IPC.historyActionRetry)
+    const resultsHandler = electronStub.__handlers.get(IPC.historyActionResults)
+    check(
+      'IPC.historySize, historyActionRetry and historyActionResults handlers registered',
+      typeof sizeHandler === 'function' && typeof retryHandler === 'function' && typeof resultsHandler === 'function',
+    )
+    if (
+      typeof listHandler === 'function'
+      && typeof sizeHandler === 'function'
+      && typeof retryHandler === 'function'
+      && typeof resultsHandler === 'function'
+    ) {
+      const mockEvent = { sender: electronStub.__historyWebContents }
+      const actionsDir = path.join(tmpBase, 'action-results')
+      fs.mkdirSync(actionsDir, { recursive: true })
+      settings.outputDir = actionsDir
+      disposeHistory()
+
+      const BOM = '﻿'
+      const configId = 'cfg-history-513'
+      const failedResult: ActionResult = {
+        actionId: BUILTIN_WEBHOOK_ACTION_ID, configId, outcome: 'failed', attempts: 1, durationMs: 4, message: 'refused', retryable: true,
+      }
+      const writeBomPack = (dirPath: string, id: string): void => {
+        // The built-in context providers create plugins/ during the save, so
+        // the results file later lands inside a folder that already exists.
+        fs.mkdirSync(path.join(dirPath, 'plugins'), { recursive: true })
+        fs.writeFileSync(
+          path.join(dirPath, 'manifest.json'),
+          BOM + JSON.stringify({ ...manifestScreenshotOnly, id }),
+          'utf8',
+        )
+        fs.writeFileSync(path.join(dirPath, 'snapshot.png'), 'fake-snapshot')
+      }
+      const cardFor = async (packPath: string) =>
+        ((await listHandler(mockEvent)) as HistoryListResult).packs.find((p) => p.path === packPath)
+      const historyChangedCount = (): number =>
+        electronStub.__sentMessages.filter(
+          (message: { channel: string }) => message.channel === IPC.historyChanged,
+        ).length
+
+      const actionPack = path.join(actionsDir, 'Action_Pack')
+      writeBomPack(actionPack, 'action-pack-513')
+      const firstCard = await cardFor(actionPack)
+      const sizeBefore = (await sizeHandler(mockEvent, actionPack)) as number | null
+      check(
+        'a BOM-prefixed pack is listed with no action results before any delivery',
+        firstCard !== undefined && (firstCard.actionResults ?? []).length === 0 && typeof sizeBefore === 'number',
+        JSON.stringify({ found: firstCard !== undefined, sizeBefore }),
+      )
+
+      // A delivery that lands while History is open. The file's mtime is then
+      // put back before the cached stamp, so only the explicit notification
+      // can make the card change — the same-millisecond case.
+      electronStub.__sentMessages.length = 0
+      persistActionResults(actionPack, [failedResult])
+      const resultsFile = path.join(actionPack, 'plugins', 'action-results.json')
+      fs.utimesSync(resultsFile, new Date(1_000), new Date(1_000))
+      check(
+        'a recorded delivery result sends history:changed to the open window',
+        historyChangedCount() === 1,
+        `history:changed sent ${String(historyChangedCount())} time(s)`,
+      )
+      const failedCard = await cardFor(actionPack)
+      check(
+        'the re-listed card shows the new result even when no file stamp moved',
+        failedCard?.actionResults?.[0]?.outcome === 'failed',
+        JSON.stringify(failedCard?.actionResults),
+      )
+      const sizeAfter = (await sizeHandler(mockEvent, actionPack)) as number | null
+      check(
+        'the card folder size is measured again and includes the results file',
+        typeof sizeBefore === 'number' && typeof sizeAfter === 'number' && sizeAfter > sizeBefore,
+        JSON.stringify({ sizeBefore, sizeAfter }),
+      )
+
+      // A results file replaced by anything else is caught by the cache stamp.
+      fs.writeFileSync(resultsFile, JSON.stringify([{ ...failedResult, message: 'stamped' }]), 'utf8')
+      const later = new Date(Date.now() + 5_000)
+      fs.utimesSync(resultsFile, later, later)
+      const stampedCard = await cardFor(actionPack)
+      check(
+        'a cached summary is rebuilt when plugins/action-results.json changes on disk',
+        stampedCard?.actionResults?.[0]?.message === 'stamped',
+        JSON.stringify(stampedCard?.actionResults),
+      )
+
+      const { createServer } = await import('node:http')
+      const received: string[] = []
+      let holdNext = false
+      let held: (() => void) | null = null
+      const server = createServer((req, res) => {
+        received.push(req.url ?? '')
+        req.resume()
+        req.on('end', () => {
+          const reply = (): void => {
+            // No keep-alive: a pooled client socket still closing when the
+            // script calls process.exit aborts Node on Windows.
+            res.writeHead(200, { 'content-type': 'application/json', connection: 'close' })
+            res.end('{}')
+          }
+          if (holdNext) {
+            holdNext = false
+            held = reply
+          } else {
+            reply()
+          }
+        })
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      const port = (server.address() as { port: number }).port
+      const savedConfigs = settings.actionConfigs
+      const savedWebhooks = settings.actionWebhooks
+      settings.actionConfigs = [{
+        actionId: BUILTIN_WEBHOOK_ACTION_ID, configId, enabled: true, order: 10, continueOnFailure: false, timeoutMs: 5_000, retries: 0,
+      }]
+      settings.actionWebhooks = { [configId]: { url: `http://127.0.0.1:${String(port)}/hook` } }
+      try {
+        electronStub.__sentMessages.length = 0
+        const retried = (await retryHandler(mockEvent, actionPack, configId)) as ActionRetryResult
+        check(
+          'History retry reads a BOM-prefixed manifest and delivers',
+          retried.ok === true && retried.result?.outcome === 'ok' && received.length === 1,
+          JSON.stringify({ retried, received }),
+        )
+        const retriedCard = await cardFor(actionPack)
+        check(
+          'a successful retry replaces the failed result on the card and refreshes the window',
+          retriedCard?.actionResults?.length === 1
+            && retriedCard.actionResults[0]?.outcome === 'ok'
+            && historyChangedCount() >= 1,
+          JSON.stringify({ results: retriedCard?.actionResults, changed: historyChangedCount() }),
+        )
+
+        // A pack renamed while its retry is still waiting on the receiver.
+        const movingPack = path.join(actionsDir, 'Moving_Pack')
+        writeBomPack(movingPack, 'moving-pack-513')
+        fs.rmSync(path.join(movingPack, 'plugins'), { recursive: true, force: true })
+        disposeHistory()
+        await cardFor(movingPack)
+        holdNext = true
+        let settledEarly: ActionRetryResult | null = null
+        const inFlight = (retryHandler(mockEvent, movingPack, configId) as Promise<ActionRetryResult>)
+          .then((result) => {
+            if (held === null) settledEarly = result
+            return result
+          })
+        await waitFor(() => held !== null || settledEarly !== null, 5_000)
+        if (settledEarly !== null) {
+          throw new Error(`retry of the moving pack never reached the receiver: ${JSON.stringify(settledEarly)}`)
+        }
+        const movedTo = path.join(actionsDir, 'Moved_Pack')
+        fs.renameSync(movingPack, movedTo)
+        ;(held as (() => void) | null)?.()
+        const movedResult = await inFlight
+        check(
+          'a result for a pack renamed mid-delivery does not recreate the old folder',
+          movedResult.ok === true && !fs.existsSync(movingPack),
+          JSON.stringify({ movedResult, oldPathExists: fs.existsSync(movingPack) }),
+        )
+        check(
+          'and writes no results file into the renamed pack it never knew about',
+          !fs.existsSync(path.join(movedTo, 'plugins', 'action-results.json')),
+        )
+      } finally {
+        settings.actionConfigs = savedConfigs
+        settings.actionWebhooks = savedWebhooks
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+
+      // A zipped pack whose results file has a BOM and entries of the wrong shape.
+      const zipPath = path.join(actionsDir, 'Zipped_Results.zip')
+      const archive = new AdmZip()
+      archive.addFile(
+        'manifest.json',
+        Buffer.from(BOM + JSON.stringify({ ...manifestScreenshotOnly, id: 'zipped-results-513' }), 'utf8'),
+      )
+      archive.addFile('snapshot.png', Buffer.from('fake-snapshot', 'utf8'))
+      archive.addFile(
+        'plugins/action-results.json',
+        Buffer.from(
+          BOM + JSON.stringify([failedResult, null, 3, { configId: 'half' }, { ...failedResult, configId: 'second', outcome: 'ok' }]),
+          'utf8',
+        ),
+      )
+      archive.writeZip(zipPath)
+      disposeHistory()
+      const zipCard = await cardFor(zipPath)
+      const zipResults = (await resultsHandler(mockEvent, zipPath)) as ActionResult[]
+      check(
+        'a zipped pack with a BOM-prefixed results file lists only its well-formed entries',
+        zipCard?.kind === 'zip'
+          && zipCard.actionResults?.length === 2
+          && zipResults.length === 2
+          && zipResults.every((r) => typeof r.configId === 'string' && typeof r.outcome === 'string'),
+        JSON.stringify({ card: zipCard?.actionResults, zipResults }),
+      )
+    }
   }
 
   console.log('\n--- 5. Static contract & source checks ---')
@@ -704,6 +908,18 @@ async function run(): Promise<void> {
     historyRendererSource.includes(
       "playBtn.title =\n    !p.hasReplay\n      ? t('history.playNoReplay')",
     ),
+  )
+  const toastSource = fs.readFileSync(path.resolve('src/main/saveToast.ts'), 'utf8')
+  check(
+    'save-toast retry strips a manifest BOM before parsing, as History retry does (#513)',
+    toastSource.includes('JSON.parse(stripUtf8Bom(raw))')
+      && historySource.includes('JSON.parse(stripUtf8Bom(raw))')
+      && !toastSource.includes('JSON.parse(raw)'),
+  )
+  check(
+    'History reads zipped action results through the shared validating parser (#513)',
+    historySource.includes('return parseActionResults(text)')
+      && !historySource.includes('parsed as ActionResult[]'),
   )
   check(
     'historyWindow.ts preserves archive suffix case and checks folder/sibling archive stem collisions',
