@@ -93,6 +93,13 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   display, not the first one, and an image pack reads the size from its saved
   `snapshot.png` instead of printing 0×0. A positive stated size is kept
   ([#500](https://github.com/r2cuerdame/capturepack/issues/500)).
+- History, the storage bar and the MCP index no longer read every Share Copy
+  and stray archive in the output folder from start to finish on each refresh.
+  The app reads an archive once and keeps the answer until its size, modified
+  time or file identity changes. Up to 512 answers are kept, and an answer is
+  dropped when its file is gone. Writing or replacing a Share Copy still checks
+  the file on disk every time
+  ([#515](https://github.com/r2cuerdame/capturepack/issues/515)).
 - Storage sizes in History and Settings no longer read "1024 KB" or "1024 MB"
   just below a unit boundary; they move to "1.0 MB" and "1.0 GB", and a value
   that rounds to 100 or more is printed without a decimal ("100 KB", not
