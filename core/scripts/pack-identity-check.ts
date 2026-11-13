@@ -418,6 +418,26 @@ const demoCapturepack = writeZipPack(
   { id: 'demo-cap', capture_kind: 'video', title: 'Demo capturepack', media: { snapshot: 'snapshot.png', replay: 'replay.mp4', replay_duration_ms: 1000 } },
   40_000,
 )
+const demoZipCapturepack = writeZipPack(
+  'Demo.zip.capturepack',
+  { id: 'demo-zip-cap', capture_kind: 'image', title: 'Demo zip capturepack', media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' } },
+  45_000,
+)
+const demoZipCapturepackZip = writeZipPack(
+  'Demo.zip.capturepack.zip',
+  { id: 'demo-zip-cap-zip', capture_kind: 'image', title: 'Demo zip capturepack zip', media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' } },
+  47_000,
+)
+const chainZip = writeZipPack(
+  'Chain.zip',
+  { id: 'chain-zip', capture_kind: 'image', title: 'Chain zip', media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' } },
+  48_000,
+)
+const chainZipCapturepack = writeZipPack(
+  'Chain.zip.capturepack',
+  { id: 'chain-zip-cap', capture_kind: 'image', title: 'Chain zip capturepack', media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' } },
+  49_000,
+)
 const rootSoloZip = writeZipPack(
   'Solo.zip',
   { id: 'solo-root', capture_kind: 'image', title: 'Solo root', media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' } },
@@ -446,12 +466,18 @@ const nestedDemoCapturepack = writeZipPack(
 )
 
 const collisionStore = createPackStore({ outputDir: collisionRoot, watch: false })
-const indexedIds = new Set(collisionStore.entries().map((e) => e.id))
+const collisionEntries = collisionStore.entries()
+const indexedIds = new Set(collisionEntries.map((e) => e.id))
 checkLive(
-  indexedIds.has('BugReport') &&
+  indexedIds.size === collisionEntries.length &&
+    indexedIds.has('BugReport') &&
     indexedIds.has('2026-11-13/BugReport') &&
     indexedIds.has('Demo.zip') &&
     indexedIds.has('Demo.capturepack') &&
+    indexedIds.has('Demo.zip.capturepack') &&
+    indexedIds.has('Demo.zip.capturepack.zip') &&
+    indexedIds.has('Chain') &&
+    indexedIds.has('Chain.zip.capturepack') &&
     indexedIds.has('Solo') &&
     indexedIds.has('2026-11-13/Solo') &&
     indexedIds.has('LegacyOnly') &&
@@ -483,10 +509,16 @@ checkLive(
 checkLive(
   collisionStore.open('Demo.zip').path === demoZip &&
     collisionStore.open('Demo.capturepack').path === demoCapturepack &&
+    collisionStore.open('Demo.zip.capturepack').path === demoZipCapturepack &&
+    collisionStore.open('Demo.zip.capturepack.zip').path === demoZipCapturepackZip &&
     collisionStore.open(demoZip).id === 'Demo.zip' &&
+    collisionStore.open(demoZipCapturepack).id === 'Demo.zip.capturepack' &&
+    collisionStore.open('Chain').path === chainZip &&
+    collisionStore.open('Chain.zip').path === chainZip &&
+    collisionStore.open('Chain.zip.capturepack').path === chainZipCapturepack &&
     collisionStore.open('2026-11-13/NestedDemo.zip').path === nestedDemoZip &&
     collisionStore.open('2026-11-13/NestedDemo.capturepack').path === nestedDemoCapturepack,
-  'colliding .zip and .capturepack archives open independently in root and subfolders',
+  'colliding .zip, .capturepack, and extension-qualified stem archives open independently in root and subfolders',
 )
 let ambiguousDemoThrew = false
 try {
@@ -504,6 +536,18 @@ checkLive(
   'single archive short ids and output-relative archive paths resolve accurately',
 )
 collisionStore.dispose()
+
+const watchStore = createPackStore({ outputDir: collisionRoot, watch: true })
+const watchFreshSubDir = writeDirPack(
+  path.join('2026-11-13', 'WatchFresh'),
+  { id: 'watch-fresh', capture_kind: 'image', title: 'Watch fresh', media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' } },
+  95_000,
+)
+checkLive(
+  watchStore.open(watchFreshSubDir).id === '2026-11-13/WatchFresh',
+  'opening an unindexed subfolder pack inside watched outputDir rescans and keeps subfolder id',
+)
+watchStore.dispose()
 
 let liveSubDir = collisionRoot
 const subLiveStore = createLivePackStore(() => ({ outputDir: liveSubDir, watch: false }))

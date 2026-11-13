@@ -1373,6 +1373,24 @@ async function main(): Promise<void> {
     30_000,
   )
   makeZipPack(
+    'Demo.zip.capturepack',
+    {
+      'manifest.json': JSON.stringify({
+        format: 'capturepack',
+        format_version: '0.8.0',
+        id: 'demo-zip-cap',
+        capture_kind: 'image',
+        title: 'Archive stem-qualified image',
+        note: 'zipcap-note-zeta',
+        created_at: '2026-11-13T11:30:00Z',
+        environment: { os: 'windows', app: 'Edge' },
+        media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      }),
+      'snapshot.png': 'zipcap-png',
+    },
+    35_000,
+  )
+  makeZipPack(
     'Solo.zip',
     {
       'manifest.json': JSON.stringify({
@@ -1419,16 +1437,17 @@ async function main(): Promise<void> {
     const allRows = (allHistory.packs ?? []) as Array<Record<string, unknown>>
     check(
       outputDirReads === 1,
-      `unwatched capturepack_history scans outputDir once across 5 packs (got ${outputDirReads})`,
+      `unwatched capturepack_history scans outputDir once across 6 packs (got ${outputDirReads})`,
     )
     const byId = new Map(allRows.map((row) => [String(row.id), row]))
     const rootRow = byId.get('BugReport')
     const subRow = byId.get('2026-11-13/BugReport')
     const zipRow = byId.get('Demo.zip')
     const capRow = byId.get('Demo.capturepack')
+    const zipCapRow = byId.get('Demo.zip.capturepack')
     const soloRow = byId.get('Solo')
     check(
-      allRows.length === 5 &&
+      allRows.length === 6 &&
         rootRow?.title === 'Root image bug' &&
         rootRow?.note === 'root-note-alpha' &&
         rootRow?.capture_kind === 'image' &&
@@ -1444,9 +1463,12 @@ async function main(): Promise<void> {
         capRow?.note === 'cap-note-delta' &&
         capRow?.capture_kind === 'video' &&
         (capRow?.counts as Record<string, unknown>)?.timeline_events === 2 &&
+        zipCapRow?.title === 'Archive stem-qualified image' &&
+        zipCapRow?.note === 'zipcap-note-zeta' &&
+        zipCapRow?.capture_kind === 'image' &&
         soloRow?.title === 'Solo archive image' &&
         soloRow?.note === 'solo-note-epsilon',
-      'capturepack_history preserves distinct title/note/kind/counts for colliding names and archives',
+      'capturepack_history preserves distinct id/title/note/kind/counts for colliding names and archives',
     )
 
     outputDirReads = 0
@@ -1456,8 +1478,8 @@ async function main(): Promise<void> {
     const imageIds = ((imageHistory.packs ?? []) as Array<Record<string, unknown>>).map((row) => row.id)
     check(
       outputDirReads === 1 &&
-        imageHistory.matched_total === 3 &&
-        JSON.stringify(imageIds) === JSON.stringify(['Solo', 'Demo.zip', 'BugReport']),
+        imageHistory.matched_total === 4 &&
+        JSON.stringify(imageIds) === JSON.stringify(['Solo', 'Demo.zip.capturepack', 'Demo.zip', 'BugReport']),
       `kind=image history filter separates root/zip images from newer colliding videos (scans=${outputDirReads})`,
     )
 
@@ -1494,6 +1516,17 @@ async function main(): Promise<void> {
         ((zipQuery.packs as Array<Record<string, unknown>>)[0]?.id) === 'Demo.zip',
       'query search matches colliding .zip archive by its own note',
     )
+
+    outputDirReads = 0
+    const zipCapQuery = textJson(
+      (await realCallbacks.get('capturepack_history')?.({ query: 'zipcap-note-zeta' })) as ToolResult,
+    )
+    check(
+      outputDirReads === 1 &&
+        zipCapQuery.matched_total === 1 &&
+        ((zipCapQuery.packs as Array<Record<string, unknown>>)[0]?.id) === 'Demo.zip.capturepack',
+      'query search matches stem-qualified .zip.capturepack archive by its own note',
+    )
   } finally {
     nodeFs.readdirSync = originalReaddirSync
   }
@@ -1528,6 +1561,9 @@ async function main(): Promise<void> {
   const openedCap = textJson(
     (await realCallbacks.get('capturepack_open')?.({ id: 'Demo.capturepack' })) as ToolResult,
   )
+  const openedZipCap = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: 'Demo.zip.capturepack' })) as ToolResult,
+  )
   const openedSolo = textJson(
     (await realCallbacks.get('capturepack_open')?.({ id: 'Solo' })) as ToolResult,
   )
@@ -1536,6 +1572,8 @@ async function main(): Promise<void> {
       openedZip.title === 'Archive zip image' &&
       openedCap.id === 'Demo.capturepack' &&
       openedCap.title === 'Archive legacy video' &&
+      openedZipCap.id === 'Demo.zip.capturepack' &&
+      openedZipCap.title === 'Archive stem-qualified image' &&
       openedSolo.id === 'Solo' &&
       openedSolo.title === 'Solo archive image',
     'capturepack_open distinguishes colliding archives and keeps unique archive short id',

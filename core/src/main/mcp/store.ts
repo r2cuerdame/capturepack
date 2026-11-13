@@ -261,7 +261,10 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
       stemLower: string
       mtimeMs: number
     }> = []
-    const archiveStemCounts = new Map<string, number>()
+    const archiveNameCounts = new Map<string, number>()
+    const countArchiveName = (nameLower: string): void => {
+      archiveNameCounts.set(nameLower, (archiveNameCounts.get(nameLower) ?? 0) + 1)
+    }
     for (const d of dirents) {
       const full = path.join(dir, d.name)
       const rel = relPrefix === '' ? d.name : `${relPrefix}/${d.name}`
@@ -285,7 +288,8 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
           if (!dirStems.has(stemLower) && archiveHoldsAPack(full)) {
             const mtimeMs = fs.statSync(full).mtimeMs
             archiveCandidates.push({ rel, full, ext, stemLower, mtimeMs })
-            archiveStemCounts.set(stemLower, (archiveStemCounts.get(stemLower) ?? 0) + 1)
+            if (stemLower !== '') countArchiveName(stemLower)
+            countArchiveName(d.name.toLowerCase())
           }
         } else if (d.isDirectory()) {
           if (directoryHoldsCapturePack(full)) {
@@ -298,11 +302,13 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
         // File vanished mid-scan: skip it.
       }
     }
-    // Keep the short stem id when only one standalone archive has that name in
-    // this folder; qualify colliding `.zip` and `.capturepack` files with their
-    // extension so both remain individually openable.
+    // Keep the short stem id only when it collides with neither another
+    // archive's stem nor another archive's qualified filename (e.g. Demo.zip,
+    // Demo.capturepack, and Demo.zip.capturepack); otherwise qualify with the
+    // archive extension so every pack remains individually openable.
     for (const candidate of archiveCandidates) {
-      const collides = (archiveStemCounts.get(candidate.stemLower) ?? 0) > 1
+      const collides =
+        candidate.stemLower === '' || (archiveNameCounts.get(candidate.stemLower) ?? 0) > 1
       out.push({
         id: collides ? candidate.rel : candidate.rel.slice(0, -candidate.ext.length),
         path: candidate.full,
@@ -407,8 +413,30 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
     )
   }
 
+  function isWithinDir(base: string, candidate: string): boolean {
+    const resolvedBase = path.resolve(base)
+    const resolvedCandidate = path.resolve(candidate)
+    const rel = path.relative(
+      process.platform === 'win32' ? resolvedBase.toLowerCase() : resolvedBase,
+      process.platform === 'win32' ? resolvedCandidate.toLowerCase() : resolvedCandidate,
+    )
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+  }
+
   function handleFor(ref: string): PackHandle {
-    const entry = findEntry(ref)
+    let entry = findEntry(ref)
+    if (
+      !entry &&
+      watcher !== null &&
+      path.isAbsolute(ref) &&
+      isWithinDir(outputDir, ref) &&
+      fs.existsSync(ref)
+    ) {
+      // A brand-new pack inside outputDir may be opened before fs.watch's
+      // debounce fires; rescan once so it receives its full subfolder/qualified id.
+      scan()
+      entry = findEntry(ref)
+    }
     if (entry) return openPack(entry.path, entry.kind, entry.id)
     if (
       current !== null &&
@@ -423,12 +451,13 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
       }
     }
     if (path.isAbsolute(ref) && fs.existsSync(ref)) {
-      const stat = fs.statSync(ref)
-      if (stat.isDirectory()) return openPack(ref, 'dir', path.basename(ref))
-      const base = path.basename(ref)
+      const resolvedRef = path.resolve(ref)
+      const stat = fs.statSync(resolvedRef)
+      if (stat.isDirectory()) return openPack(resolvedRef, 'dir', path.basename(resolvedRef))
+      const base = path.basename(resolvedRef)
       const ext = packArchiveExt(base)
-      const id = ext === null ? base : base.slice(0, -ext.length)
-      return openPack(ref, 'zip', id)
+      const id = ext !== null && base.length > ext.length ? base.slice(0, -ext.length) : base
+      return openPack(resolvedRef, 'zip', id)
     }
     throw new Error(
       `No pack matches "${ref}". Call capturepack_list for known ids, or pass an absolute path to a .capturepack file or extracted pack folder.`,
@@ -497,6 +526,11 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
       ensureFresh()
       if (idOrPath !== undefined && idOrPath.trim() !== '') return handleFor(idOrPath.trim())
       if (current) {
+        const indexed = findEntry(current.path)
+        if (indexed && indexed.kind === current.kind) {
+          current = { id: indexed.id, path: indexed.path, kind: indexed.kind }
+          return openPack(indexed.path, indexed.kind, indexed.id)
+        }
         if (fs.existsSync(current.path)) return openPack(current.path, current.kind, current.id)
         current = null // pinned pack was deleted: fall back to newest
       }
