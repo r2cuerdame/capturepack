@@ -7,13 +7,34 @@
 // Electron / Rust project folder, one confirmation away from the Recycle Bin.
 //
 // Run: npm run check:identity
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../src/shared/packIdentity'
-import { createLivePackStore } from '../src/main/mcp/store'
-import { archiveStem, archiveSuffix, hasOtherSiblingArchive } from '../src/main/packArchive'
+import type { Settings } from '../src/shared/types'
+import { createLivePackStore, createPackStore } from '../src/main/mcp/store'
+import {
+  ARCHIVE_IDENTITY_CACHE_LIMIT,
+  archiveIdentityCacheSize,
+  archiveIdentityReadCount,
+  archiveStem,
+  archiveSuffix,
+  hasOtherSiblingArchive,
+  isShareBundleArchive,
+  siblingArchive,
+  siblingShareBundle,
+} from '../src/main/packArchive'
+import { invalidateStorageUsage, storageUsage } from '../src/main/storage'
 
 const root = mkdtempSync(path.join(tmpdir(), 'capturepack-identity-'))
 const cases: { name: string; build: () => string; pack: boolean }[] = []
@@ -204,6 +225,147 @@ checkLive(
   hasOtherSiblingArchive(path.join(siblingRoot, 'Owner.share'), alphaZip) === false,
   'ignores validated .share.zip Share Copy when probing Owner.share stem',
 )
+
+// #515: adm-zip reads a whole archive on every open, on the main process. A
+// rescan, a History listing and a storage snapshot must not ask an archive
+// that has not changed since the last time.
+console.log('REMEMBERED ARCHIVE IDENTITY (#515)')
+const cacheRoot = dir('identity-cache', {})
+const zipAt = (file: string, entries: Record<string, string>): string => {
+  const archive = new AdmZip()
+  for (const [entryName, body] of Object.entries(entries)) {
+    archive.addFile(entryName, Buffer.from(body, 'utf8'))
+  }
+  archive.writeZip(file)
+  return file
+}
+const packManifest = (id: string): string => JSON.stringify({ format: 'capturepack', id, created_at: '2026-11-13T10:00:00Z' })
+const shareInventory = JSON.stringify({ format: 'capturepack-share', format_version: '0.1.0' })
+const ownerDir = dir(path.join('identity-cache', 'Owner'), { 'manifest.json': packManifest('owner') })
+const ownerShare = zipAt(path.join(cacheRoot, 'Owner.share.zip'), {
+  'share.json': shareInventory,
+  'viewer.html': '<p>reviewed derived media</p>',
+})
+// A whole-second mtime, so the in-place rewrite below can restore it exactly.
+const shareTime = new Date(Math.floor(Date.now() / 1000) * 1000 - 120_000)
+utimesSync(ownerShare, shareTime, shareTime)
+const looseZip = zipAt(path.join(cacheRoot, 'Loose.zip'), { 'manifest.json': packManifest('loose') })
+const strayZip = zipAt(path.join(cacheRoot, 'Stray.zip'), { 'IMG_0001.jpg': 'x'.repeat(4096) })
+const foreignPack = zipAt(path.join(cacheRoot, 'Foreign.zip'), { 'manifest.json': JSON.stringify({ name: 'left-pad' }) })
+
+const sameMembers = (got: string[], want: string[]): boolean =>
+  got.length === want.length && [...got].sort().every((p, i) => p === [...want].sort()[i])
+const cacheStore = createPackStore({ outputDir: cacheRoot, watch: false })
+const firstScanReads = archiveIdentityReadCount()
+const firstEntries = cacheStore.entries().map((e) => e.path)
+checkLive(
+  sameMembers(firstEntries, [ownerDir, looseZip]),
+  `pack, share copy and foreign zips keep their identity — indexed ${firstEntries.map((p) => path.basename(p)).join(', ')}`,
+)
+checkLive(!isShareBundleArchive(looseZip) && !isShareBundleArchive(strayZip) && !isShareBundleArchive(foreignPack),
+  'a pack archive, a photo zip and a foreign manifest are not Share Copies')
+checkLive(isShareBundleArchive(ownerShare), 'the managed Share Copy is still a Share Copy')
+checkLive(
+  archiveIdentityReadCount() === firstScanReads,
+  `second scan of an unchanged folder reads no archive (${archiveIdentityReadCount() - firstScanReads} reads)`,
+)
+const beforeSibling = archiveIdentityReadCount()
+const shareA = siblingShareBundle(ownerDir)
+const shareB = siblingShareBundle(ownerDir)
+checkLive(shareA === ownerShare && shareB === ownerShare, 'siblingShareBundle finds the Share Copy')
+checkLive(siblingArchive(ownerDir) === null, 'a Share Copy is not the folder\'s full archive twin')
+checkLive(
+  archiveIdentityReadCount() === beforeSibling,
+  `repeated sibling Share Copy probes read no archive (${archiveIdentityReadCount() - beforeSibling} reads)`,
+)
+const usageSettings = {
+  outputDir: cacheRoot,
+  storageRetentionDays: 0,
+  storageMaxBytes: 0,
+  storageEnforceMaxBytes: false,
+} as unknown as Settings
+const beforeUsage = archiveIdentityReadCount()
+const usageA = storageUsage(usageSettings)
+invalidateStorageUsage()
+const usageB = storageUsage(usageSettings)
+checkLive(usageA.totalPacks === 2 && usageB.totalPacks === 2, `storage counts both packs (${usageB.totalPacks})`)
+checkLive(
+  usageB.totalBytes === usageA.totalBytes && usageB.totalBytes > statSync(ownerShare).size,
+  'storage still adds the Share Copy beside its folder',
+)
+checkLive(
+  archiveIdentityReadCount() === beforeUsage,
+  `recomputing storage reads no archive (${archiveIdentityReadCount() - beforeUsage} reads)`,
+)
+
+// A touched file is asked again — exactly once.
+const strayTime = new Date(Date.now() - 60_000)
+utimesSync(strayZip, strayTime, strayTime)
+const beforeTouch = archiveIdentityReadCount()
+cacheStore.entries()
+cacheStore.entries()
+checkLive(
+  archiveIdentityReadCount() === beforeTouch + 1,
+  `a changed mtime is re-read once (${archiveIdentityReadCount() - beforeTouch} reads)`,
+)
+
+// Same size, same mtime, different contents: the change time still moves.
+const shareStat = statSync(ownerShare)
+const patched = readFileSync(ownerShare)
+let at = patched.indexOf('share.json')
+while (at !== -1) {
+  patched.write('share.jsoo', at, 'utf8')
+  at = patched.indexOf('share.json', at + 1)
+}
+writeFileSync(ownerShare, patched)
+utimesSync(ownerShare, shareTime, shareTime)
+const patchedStat = statSync(ownerShare)
+checkLive(
+  patchedStat.size === shareStat.size && patchedStat.mtimeMs === shareStat.mtimeMs,
+  'probe: in-place rewrite kept size and mtime',
+)
+checkLive(
+  siblingShareBundle(ownerDir) === null,
+  'an in-place rewrite with the same size and mtime is asked again (no longer a Share Copy)',
+)
+zipAt(ownerShare, { 'share.json': shareInventory, 'viewer.html': '<p>again</p>' })
+checkLive(siblingShareBundle(ownerDir) === ownerShare, 'a restored Share Copy is recognised again')
+
+// A full pack archive renamed over the Share Copy's name is not a Share Copy.
+const replacement = zipAt(path.join(root, 'replacement.zip'), { 'manifest.json': packManifest('owner-full') })
+renameSync(replacement, ownerShare)
+checkLive(siblingShareBundle(ownerDir) === null, 'a full pack ZIP swapped in under .share.zip is no longer a Share Copy')
+checkLive(
+  hasOtherSiblingArchive(path.join(cacheRoot, 'Owner.share')) === true,
+  'and it now occupies the Owner.share stem as a real archive',
+)
+checkLive(
+  cacheStore.entries().some((e) => e.path === ownerShare && e.kind === 'zip'),
+  'and the index now lists it as a pack of its own',
+)
+
+// Vanished archives take their remembered answer with them.
+const beforeDelete = archiveIdentityCacheSize()
+rmSync(strayZip)
+cacheStore.entries()
+checkLive(
+  archiveIdentityCacheSize() === beforeDelete - 1,
+  `a deleted archive is forgotten on the next scan (${beforeDelete} -> ${archiveIdentityCacheSize()})`,
+)
+cacheStore.dispose()
+
+// The memory is bounded however many archives a folder holds.
+const boundRoot = dir('identity-cache-bound', {})
+for (let i = 0; i < ARCHIVE_IDENTITY_CACHE_LIMIT + 24; i += 1) {
+  zipAt(path.join(boundRoot, `Other_${String(i).padStart(4, '0')}.zip`), { 'note.txt': String(i) })
+}
+const boundStore = createPackStore({ outputDir: boundRoot, watch: false })
+checkLive(
+  archiveIdentityCacheSize() === ARCHIVE_IDENTITY_CACHE_LIMIT,
+  `remembered identities stay at the ${ARCHIVE_IDENTITY_CACHE_LIMIT} limit (${archiveIdentityCacheSize()})`,
+)
+checkLive(boundStore.entries().length === 0, 'none of the bounded-folder zips is a pack')
+boundStore.dispose()
 
 rmSync(root, { recursive: true, force: true })
 console.log(failed === 0 ? '\npack-identity-check ok' : `\npack-identity-check FAILED (${failed})`)
