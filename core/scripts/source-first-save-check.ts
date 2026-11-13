@@ -644,7 +644,58 @@ async function main(): Promise<void> {
       fsPromises.rename = originalRename
     }
 
-    // 4. Source invariant checks for #177
+    // 4. #521: only a CapturePack archive is ever replaced. A user's own file,
+    // folder or foreign archive under the {folder}.zip name is refused intact.
+    console.log('\nFULL ZIP NEVER OVERWRITES A NON-PACK FILE (#521)')
+    const packZipBytes = readFileSync(zipPath)
+    rmSync(zipPath)
+    const refuses = async (label: string, occupant: () => void, unchanged: () => boolean): Promise<void> => {
+      occupant()
+      let refused = false
+      try {
+        await createPackZip(handle.dirPath)
+      } catch (err) {
+        refused = /not a CapturePack archive/.test((err as Error).message)
+      }
+      check(`createPackZip refuses ${label} with an explanatory error`, refused)
+      check(`${label} is left in place with its contents`, unchanged())
+      check(
+        `refusing ${label} leaves no temporary sibling files`,
+        readdirSync(outputDir).every((f) => !f.includes('.tmp-')),
+      )
+      rmSync(zipPath, { recursive: true, force: true })
+    }
+    const photoZip = new AdmZip()
+    photoZip.addFile('IMG_0001.jpg', Buffer.from('holiday photo'))
+    const photoBytes = photoZip.toBuffer()
+    await refuses('a photo zip', () => writeFileSync(zipPath, photoBytes), () => readFileSync(zipPath).equals(photoBytes))
+    const foreignZip = new AdmZip()
+    foreignZip.addFile('manifest.json', Buffer.from(JSON.stringify({ name: 'left-pad', version: '1.0.0' })))
+    const foreignBytes = foreignZip.toBuffer()
+    await refuses('a foreign-manifest zip', () => writeFileSync(zipPath, foreignBytes), () => readFileSync(zipPath).equals(foreignBytes))
+    await refuses(
+      'a plain text file',
+      () => writeFileSync(zipPath, 'notes, not an archive'),
+      () => readFileSync(zipPath, 'utf8') === 'notes, not an archive',
+    )
+    await refuses(
+      'a folder',
+      () => {
+        mkdirSync(zipPath)
+        writeFileSync(path.join(zipPath, 'keep.txt'), 'kept')
+      },
+      () => readFileSync(path.join(zipPath, 'keep.txt'), 'utf8') === 'kept',
+    )
+    writeFileSync(zipPath, packZipBytes)
+    writeFileSync(path.join(handle.dirPath, 'replaced-521.txt'), 'newer contents')
+    await createPackZip(handle.dirPath)
+    const replacedZip = new AdmZip(zipPath)
+    check(
+      'createPackZip still replaces an existing CapturePack archive',
+      replacedZip.getEntry('manifest.json') !== null && replacedZip.getEntry('replaced-521.txt') !== null,
+    )
+
+    // 5. Source invariant checks for #177
     const historySource = readFileSync(
       path.join(process.cwd(), 'src', 'main', 'historyWindow.ts'),
       'utf8',

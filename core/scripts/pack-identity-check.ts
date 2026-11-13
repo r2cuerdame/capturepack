@@ -572,6 +572,93 @@ checkLive(
 )
 parentLiveStore.dispose()
 
+// #521: the twin is renamed, trashed and counted with its folder, so a name
+// alone must never make a user's file into one.
+console.log('ARCHIVE TWIN IS A PACK, NOT A NAME (#521)')
+const twinRoot = dir('twin-identity', {})
+const twinFolder = (name: string): string =>
+  dir(path.join('twin-identity', name), { 'manifest.json': packManifest(name.toLowerCase()) })
+const photoDir = twinFolder('Photos')
+const photoZip = zipAt(path.join(twinRoot, 'Photos.zip'), { 'IMG_0001.jpg': 'p'.repeat(2048) })
+const foreignDir = twinFolder('Foreign')
+const foreignZip = zipAt(path.join(twinRoot, 'Foreign.zip'), {
+  'manifest.json': JSON.stringify({ name: 'left-pad', version: '1.0.0' }),
+})
+const textDir = twinFolder('Notes')
+const textZip = path.join(twinRoot, 'Notes.capturepack')
+writeFileSync(textZip, 'plain text, not an archive at all')
+const folderDir = twinFolder('Shelf')
+const folderTwin = path.join(twinRoot, 'Shelf.zip')
+mkdirSync(folderTwin)
+writeFileSync(path.join(folderTwin, 'keep.txt'), 'a folder that only looks like an archive')
+const legacyDir = twinFolder('Legacy')
+const legacyPhotoZip = zipAt(path.join(twinRoot, 'Legacy.zip'), { 'IMG_0002.jpg': 'q'.repeat(1024) })
+const legacyTwin = zipAt(path.join(twinRoot, 'Legacy.CapturePack'), { 'manifest.json': packManifest('legacy') })
+const realDir = twinFolder('Real')
+const realTwin = zipAt(path.join(twinRoot, 'Real.ZIP'), { 'manifest.json': packManifest('real') })
+const shareStemDir = twinFolder('Owner.share')
+zipAt(path.join(twinRoot, 'Owner.share.zip'), { 'share.json': shareInventory })
+
+checkLive(siblingArchive(photoDir) === null, 'a photo zip with the folder\'s name is not its twin')
+checkLive(siblingArchive(foreignDir) === null, 'a zip whose manifest.json names another format is not a twin')
+checkLive(siblingArchive(textDir) === null, 'a plain file ending .capturepack is not a twin')
+checkLive(siblingArchive(folderDir) === null, 'a FOLDER named {pack}.zip is not a twin')
+checkLive(siblingArchive(shareStemDir) === null, 'a Share Copy under {pack}.zip is not the twin of a folder named {pack}')
+checkLive(
+  siblingArchive(legacyDir) === legacyTwin,
+  `a stray Legacy.zip does not hide the real Legacy.CapturePack — got ${String(siblingArchive(legacyDir))}`,
+)
+checkLive(
+  siblingArchive(`${legacyDir}${path.sep}`) === legacyTwin && siblingArchive(`${legacyDir}/`) === legacyTwin,
+  'a trailing separator on the folder path finds the same twin',
+)
+checkLive(
+  archiveSuffix(siblingArchive(legacyDir) ?? '') === '.CapturePack' &&
+    archiveSuffix(siblingArchive(realDir) ?? '') === '.ZIP',
+  'the twin path carries its on-disk suffix case, so a rename keeps .CapturePack / .ZIP',
+)
+checkLive(siblingArchive(realDir) === realTwin, 'a real upper-case .ZIP pack archive is still the twin')
+
+const twinBytesBefore = new Map(
+  [photoZip, foreignZip, textZip, legacyPhotoZip].map((f) => [f, readFileSync(f)] as const),
+)
+const twinSettings = { ...usageSettings, outputDir: twinRoot } as unknown as Settings
+invalidateStorageUsage()
+const twinUsage = storageUsage(twinSettings)
+invalidateStorageUsage()
+const beforeTwinRepeat = archiveIdentityReadCount()
+const twinUsageAgain = storageUsage(twinSettings)
+const sizeOf = (f: string): number => statSync(f).size
+const userFileBytes = sizeOf(photoZip) + sizeOf(foreignZip) + sizeOf(textZip) + sizeOf(legacyPhotoZip)
+checkLive(
+  twinUsage.totalPacks === 7,
+  `storage counts the seven pack folders and no user archive as a pack (${twinUsage.totalPacks})`,
+)
+// The only companions storage may add are the two real twins.
+const folderBytes = [photoDir, foreignDir, textDir, folderDir, legacyDir, realDir, shareStemDir]
+  .map((d) => sizeOf(path.join(d, 'manifest.json')))
+  .reduce((a, b) => a + b, 0)
+checkLive(
+  twinUsage.totalBytes === folderBytes + sizeOf(legacyTwin) + sizeOf(realTwin),
+  `storage adds only the real twins, never the ${userFileBytes} bytes of user files ` +
+    `(${twinUsage.totalBytes} vs ${folderBytes + sizeOf(legacyTwin) + sizeOf(realTwin)})`,
+)
+checkLive(
+  twinUsageAgain.totalBytes === twinUsage.totalBytes && archiveIdentityReadCount() === beforeTwinRepeat,
+  `recomputing storage beside unchanged user archives reads no archive (${archiveIdentityReadCount() - beforeTwinRepeat} reads)`,
+)
+const beforeTwinProbe = archiveIdentityReadCount()
+for (const d of [photoDir, foreignDir, textDir, folderDir, legacyDir, realDir]) siblingArchive(d)
+checkLive(
+  archiveIdentityReadCount() === beforeTwinProbe,
+  `repeated twin probes read no unchanged archive (${archiveIdentityReadCount() - beforeTwinProbe} reads)`,
+)
+checkLive(
+  [...twinBytesBefore].every(([f, bytes]) => readFileSync(f).equals(bytes)) &&
+    statSync(folderTwin).isDirectory(),
+  'every user file and folder beside a pack is still in place with its contents',
+)
+
 rmSync(root, { recursive: true, force: true })
 console.log(failed === 0 ? '\npack-identity-check ok' : `\npack-identity-check FAILED (${failed})`)
 process.exitCode = failed === 0 ? 0 : 1
