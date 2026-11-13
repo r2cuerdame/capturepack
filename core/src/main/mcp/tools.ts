@@ -83,7 +83,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     const matches: Array<Record<string, unknown>> = []
     for (const entry of packs) {
       try {
-        const pack = store.resolve(entry.id)
+        const pack =
+          typeof store.readEntry === 'function'
+            ? store.readEntry(entry)
+            : store.resolve(entry.id)
         const manifest = pack.manifest()
         const captureMedia = captureMediaForMcp(manifest)
         const annotations = annotationList(pack)

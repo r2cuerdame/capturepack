@@ -2,10 +2,11 @@
 //
 // This exercises the registered tools, not only the shared classifier. A region
 // pack has no API path by which MCP can ask for pixels outside snapshot.png.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { openPack } from '../src/main/mcp/store'
+import AdmZip from 'adm-zip'
+import { createLivePackStore, createPackStore, openPack } from '../src/main/mcp/store'
 import { registerTools } from '../src/main/mcp/tools'
 import {
   GIT_PLUGIN_VERSION,
@@ -1243,6 +1244,327 @@ async function main(): Promise<void> {
     malformedAnnResult?.isError === true && malformedAnnErr.includes('malformed'),
     'capturepack_annotations returns fatal tool error on corrupt annotations.json',
   )
+
+  console.log('REAL STORE HISTORY & COLLISIONS (#519)')
+  const historyRoot = path.join(gitPackRoot, 'real-history-store')
+  mkdirSync(historyRoot, { recursive: true })
+  const historyBaseMs = Math.floor(Date.now() / 1000) * 1000 - 200_000
+  const stamp = (target: string, offsetMs: number): void => {
+    const when = new Date(historyBaseMs + offsetMs)
+    utimesSync(target, when, when)
+  }
+  const makeDirPack = (
+    relPath: string,
+    files: Record<string, string>,
+    offsetMs: number,
+  ): string => {
+    const full = path.join(historyRoot, relPath)
+    mkdirSync(full, { recursive: true })
+    for (const [name, content] of Object.entries(files)) {
+      const target = path.join(full, name)
+      mkdirSync(path.dirname(target), { recursive: true })
+      writeFileSync(target, content)
+    }
+    stamp(full, offsetMs)
+    return full
+  }
+  const makeZipPack = (
+    relPath: string,
+    files: Record<string, string>,
+    offsetMs: number,
+  ): string => {
+    const full = path.join(historyRoot, relPath)
+    mkdirSync(path.dirname(full), { recursive: true })
+    const archive = new AdmZip()
+    for (const [name, content] of Object.entries(files)) {
+      archive.addFile(name, Buffer.from(content, 'utf8'))
+    }
+    archive.writeZip(full)
+    stamp(full, offsetMs)
+    return full
+  }
+
+  const rootBugPackDir = makeDirPack(
+    'BugReport',
+    {
+      'manifest.json': JSON.stringify({
+        format: 'capturepack',
+        format_version: '0.8.0',
+        id: 'bug-root',
+        capture_kind: 'image',
+        title: 'Root image bug',
+        note: 'root-note-alpha',
+        created_at: '2026-11-13T08:00:00Z',
+        environment: { os: 'windows', app: 'Notepad' },
+        media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      }),
+      'annotations.json': JSON.stringify({
+        reference_width: 800,
+        reference_height: 600,
+        annotations: [annotation('root-ann-1', 'Root box', '2026-11-13T08:00:01Z', true)],
+      }),
+      'snapshot.png': 'root-png',
+    },
+    10_000,
+  )
+  const subBugPackDir = makeDirPack(
+    path.join('2026-11-13', 'BugReport'),
+    {
+      'manifest.json': JSON.stringify({
+        format: 'capturepack',
+        format_version: '0.8.0',
+        id: 'bug-sub',
+        capture_kind: 'video',
+        title: 'Subfolder video bug',
+        note: 'sub-note-beta',
+        created_at: '2026-11-13T09:00:00Z',
+        environment: { os: 'windows', app: 'Code' },
+        media: { snapshot: 'snapshot.png', replay: 'replay.mp4', replay_duration_ms: 2_000 },
+      }),
+      'timeline.json': JSON.stringify({
+        t0: '2026-11-13T09:00:00Z',
+        events: [{ t_ms: 0, type: 'core.capture.triggered', source: 'core' }],
+      }),
+      'snapshot.png': 'sub-png',
+    },
+    50_000,
+  )
+  makeZipPack(
+    'Demo.zip',
+    {
+      'manifest.json': JSON.stringify({
+        format: 'capturepack',
+        format_version: '0.8.0',
+        id: 'demo-zip',
+        capture_kind: 'image',
+        title: 'Archive zip image',
+        note: 'zip-note-gamma',
+        created_at: '2026-11-13T10:00:00Z',
+        environment: { os: 'windows', app: 'Chrome' },
+        media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      }),
+      'snapshot.png': 'zip-png',
+    },
+    20_000,
+  )
+  makeZipPack(
+    'Demo.capturepack',
+    {
+      'manifest.json': JSON.stringify({
+        format: 'capturepack',
+        format_version: '0.8.0',
+        id: 'demo-cap',
+        capture_kind: 'video',
+        title: 'Archive legacy video',
+        note: 'cap-note-delta',
+        created_at: '2026-11-13T11:00:00Z',
+        environment: { os: 'windows', app: 'Terminal' },
+        media: { snapshot: 'snapshot.png', replay: 'replay.mp4', replay_duration_ms: 3_000 },
+      }),
+      'timeline.json': JSON.stringify({
+        t0: '2026-11-13T11:00:00Z',
+        events: [
+          { t_ms: 0, type: 'core.capture.triggered', source: 'core' },
+          { t_ms: 500, type: 'core.export.created', source: 'core' },
+        ],
+      }),
+      'snapshot.png': 'cap-png',
+    },
+    30_000,
+  )
+  makeZipPack(
+    'Solo.zip',
+    {
+      'manifest.json': JSON.stringify({
+        format: 'capturepack',
+        format_version: '0.8.0',
+        id: 'solo-zip',
+        capture_kind: 'image',
+        title: 'Solo archive image',
+        note: 'solo-note-epsilon',
+        created_at: '2026-11-13T12:00:00Z',
+        environment: { os: 'windows', app: 'Explorer' },
+        media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+      }),
+      'snapshot.png': 'solo-png',
+    },
+    40_000,
+  )
+
+  const realCallbacks = new Map<string, ToolCallback>()
+  const realServer = {
+    registerTool(name: string, _definition: ToolDefinition, callback: ToolCallback): void {
+      realCallbacks.set(name, callback)
+    },
+  }
+  const realStore = createPackStore({ outputDir: historyRoot, watch: false })
+  registerTools(realServer as never, realStore, { logRequests: false })
+
+  const nodeFs = require('node:fs') as typeof import('node:fs')
+  const originalReaddirSync = nodeFs.readdirSync
+  let outputDirReads = 0
+  const targetHistoryRoot = path.resolve(historyRoot).toLowerCase()
+  try {
+    nodeFs.readdirSync = ((...args: unknown[]) => {
+      const dirArg = args[0]
+      if (typeof dirArg === 'string' && path.resolve(dirArg).toLowerCase() === targetHistoryRoot) {
+        outputDirReads += 1
+      }
+      return Reflect.apply(originalReaddirSync, nodeFs, args)
+    }) as typeof originalReaddirSync
+
+    outputDirReads = 0
+    const allHistoryRes = await realCallbacks.get('capturepack_history')?.({ limit: 20 })
+    const allHistory = textJson(allHistoryRes as ToolResult)
+    const allRows = (allHistory.packs ?? []) as Array<Record<string, unknown>>
+    check(
+      outputDirReads === 1,
+      `unwatched capturepack_history scans outputDir once across 5 packs (got ${outputDirReads})`,
+    )
+    const byId = new Map(allRows.map((row) => [String(row.id), row]))
+    const rootRow = byId.get('BugReport')
+    const subRow = byId.get('2026-11-13/BugReport')
+    const zipRow = byId.get('Demo.zip')
+    const capRow = byId.get('Demo.capturepack')
+    const soloRow = byId.get('Solo')
+    check(
+      allRows.length === 5 &&
+        rootRow?.title === 'Root image bug' &&
+        rootRow?.note === 'root-note-alpha' &&
+        rootRow?.capture_kind === 'image' &&
+        (rootRow?.counts as Record<string, unknown>)?.annotations === 1 &&
+        subRow?.title === 'Subfolder video bug' &&
+        subRow?.note === 'sub-note-beta' &&
+        subRow?.capture_kind === 'video' &&
+        (subRow?.counts as Record<string, unknown>)?.timeline_events === 1 &&
+        zipRow?.title === 'Archive zip image' &&
+        zipRow?.note === 'zip-note-gamma' &&
+        zipRow?.capture_kind === 'image' &&
+        capRow?.title === 'Archive legacy video' &&
+        capRow?.note === 'cap-note-delta' &&
+        capRow?.capture_kind === 'video' &&
+        (capRow?.counts as Record<string, unknown>)?.timeline_events === 2 &&
+        soloRow?.title === 'Solo archive image' &&
+        soloRow?.note === 'solo-note-epsilon',
+      'capturepack_history preserves distinct title/note/kind/counts for colliding names and archives',
+    )
+
+    outputDirReads = 0
+    const imageHistory = textJson(
+      (await realCallbacks.get('capturepack_history')?.({ kind: 'image' })) as ToolResult,
+    )
+    const imageIds = ((imageHistory.packs ?? []) as Array<Record<string, unknown>>).map((row) => row.id)
+    check(
+      outputDirReads === 1 &&
+        imageHistory.matched_total === 3 &&
+        JSON.stringify(imageIds) === JSON.stringify(['Solo', 'Demo.zip', 'BugReport']),
+      `kind=image history filter separates root/zip images from newer colliding videos (scans=${outputDirReads})`,
+    )
+
+    outputDirReads = 0
+    const videoHistory = textJson(
+      (await realCallbacks.get('capturepack_list')?.({ kind: 'video' })) as ToolResult,
+    )
+    const videoIds = ((videoHistory.packs ?? []) as Array<Record<string, unknown>>).map((row) => row.id)
+    check(
+      outputDirReads === 1 &&
+        videoHistory.matched_total === 2 &&
+        JSON.stringify(videoIds) === JSON.stringify(['2026-11-13/BugReport', 'Demo.capturepack']),
+      `capturepack_list kind=video returns only video packs in a single scan (scans=${outputDirReads})`,
+    )
+
+    outputDirReads = 0
+    const rootQuery = textJson(
+      (await realCallbacks.get('capturepack_history')?.({ query: 'root-note-alpha' })) as ToolResult,
+    )
+    check(
+      outputDirReads === 1 &&
+        rootQuery.matched_total === 1 &&
+        ((rootQuery.packs as Array<Record<string, unknown>>)[0]?.id) === 'BugReport',
+      'query search matches root pack note despite newer subfolder basename collision',
+    )
+
+    outputDirReads = 0
+    const zipQuery = textJson(
+      (await realCallbacks.get('capturepack_history')?.({ query: 'zip-note-gamma' })) as ToolResult,
+    )
+    check(
+      outputDirReads === 1 &&
+        zipQuery.matched_total === 1 &&
+        ((zipQuery.packs as Array<Record<string, unknown>>)[0]?.id) === 'Demo.zip',
+      'query search matches colliding .zip archive by its own note',
+    )
+  } finally {
+    nodeFs.readdirSync = originalReaddirSync
+  }
+
+  const openedRoot = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: 'BugReport' })) as ToolResult,
+  )
+  check(
+    openedRoot.id === 'BugReport' &&
+      openedRoot.path === rootBugPackDir &&
+      openedRoot.title === 'Root image bug' &&
+      openedRoot.capture_kind === 'image',
+    'capturepack_open(BugReport) opens the root pack rather than the newer subfolder pack',
+  )
+
+  const openedSubByPath = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: subBugPackDir })) as ToolResult,
+  )
+  const pinnedSubSummary = textJson(
+    (await realCallbacks.get('capturepack_summary')?.({})) as ToolResult,
+  )
+  check(
+    openedSubByPath.id === '2026-11-13/BugReport' &&
+      openedSubByPath.path === subBugPackDir &&
+      pinnedSubSummary.id === '2026-11-13/BugReport',
+    'capturepack_open by absolute path preserves subfolder id across open and pinned summary',
+  )
+
+  const openedZip = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: 'Demo.zip' })) as ToolResult,
+  )
+  const openedCap = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: 'Demo.capturepack' })) as ToolResult,
+  )
+  const openedSolo = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: 'Solo' })) as ToolResult,
+  )
+  check(
+    openedZip.id === 'Demo.zip' &&
+      openedZip.title === 'Archive zip image' &&
+      openedCap.id === 'Demo.capturepack' &&
+      openedCap.title === 'Archive legacy video' &&
+      openedSolo.id === 'Solo' &&
+      openedSolo.title === 'Solo archive image',
+    'capturepack_open distinguishes colliding archives and keeps unique archive short id',
+  )
+  realStore.dispose()
+
+  let liveHistoryDir = historyRoot
+  const otherHistoryDir = path.join(gitPackRoot, 'real-history-other')
+  mkdirSync(otherHistoryDir, { recursive: true })
+  const liveHistoryStore = createLivePackStore(() => ({ outputDir: liveHistoryDir, watch: false }))
+  liveHistoryStore.current().open(subBugPackDir)
+  liveHistoryDir = otherHistoryDir
+  const movedLiveCallbacks = new Map<string, ToolCallback>()
+  const movedLiveServer = {
+    registerTool(name: string, _definition: ToolDefinition, callback: ToolCallback): void {
+      movedLiveCallbacks.set(name, callback)
+    },
+  }
+  registerTools(movedLiveServer as never, liveHistoryStore.current(), { logRequests: false })
+  const movedSummary = textJson(
+    (await movedLiveCallbacks.get('capturepack_summary')?.({})) as ToolResult,
+  )
+  check(
+    movedSummary.id === '2026-11-13/BugReport' &&
+      movedSummary.path === subBugPackDir &&
+      movedSummary.title === 'Subfolder video bug',
+    'capturepack_summary preserves subfolder id of pinned pack after Settings outputDir move',
+  )
+  liveHistoryStore.dispose()
 
   console.log(failed === 0 ? '\nmcp-image-pack-check ok' : `\nmcp-image-pack-check FAILED (${failed})`)
   process.exitCode = failed === 0 ? 0 : 1
