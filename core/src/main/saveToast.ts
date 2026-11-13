@@ -15,6 +15,7 @@ import type {
   ToastRenderState,
 } from '../shared/ipc'
 import { type ActionResult, mergeActionResults } from '../shared/actions'
+import { stripUtf8Bom } from '../shared/json'
 import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
 import { readActionResults, retryAction } from './actions/host'
@@ -259,7 +260,7 @@ function registerToastIpc(): void {
     let packId = ''
     try {
       const raw = readFileSync(manifestPath, 'utf8')
-      const parsed: unknown = JSON.parse(raw)
+      const parsed: unknown = JSON.parse(stripUtf8Bom(raw))
       if (typeof parsed === 'object' && parsed !== null) {
         const id = (parsed as Record<string, unknown>).id
         packId = typeof id === 'string' ? id : ''

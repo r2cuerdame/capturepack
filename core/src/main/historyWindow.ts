@@ -35,7 +35,8 @@ import type {
   StorageUsage,
 } from '../shared/ipc'
 import type { ActionResult } from '../shared/actions'
-import { readActionResults, retryAction } from './actions/host'
+import { onActionResultsChange, parseActionResults, readActionResults, retryAction } from './actions/host'
+import { stripUtf8Bom } from '../shared/json'
 import { loadSettings } from './settings'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Manifest, Settings } from '../shared/types'
@@ -142,6 +143,16 @@ export function registerHistoryIpc(live: Settings): void {
       }
       historyWindow.webContents.send(IPC.historyRenderStatus, payload)
     }
+  })
+
+  // After Save Action results land seconds after the save, or later from a
+  // retry in the save toast. The pack-store watcher cannot see that write (see
+  // onActionResultsChange), so the card's results and size are dropped here
+  // and the open window re-lists.
+  onActionResultsChange((packDir) => {
+    forgetDerivedPackData(packDir)
+    invalidateStorageUsage()
+    notifyHistoryChanged()
   })
 
   ipcMain.handle(IPC.historyList, (event): HistoryListResult => {
@@ -538,7 +549,7 @@ export function registerHistoryIpc(live: Settings): void {
     let packId = ''
     try {
       const raw = fs.readFileSync(manifestPath, 'utf8')
-      const parsed: unknown = JSON.parse(raw)
+      const parsed: unknown = JSON.parse(stripUtf8Bom(raw))
       if (typeof parsed === 'object' && parsed !== null) {
         const id = (parsed as Record<string, unknown>).id
         packId = typeof id === 'string' ? id : ''
@@ -772,11 +783,13 @@ export function resolveHistoryPlayFile(entryPath: string, manifest: Manifest | n
 // Cache stamp for derived data. The directory mtime alone is not enough:
 // updatePack rewrites manifest/annotations/report/snapshot IN PLACE, which on
 // Windows does not touch the directory entry — so the key files' mtimes are
-// folded in (absent files contribute nothing).
+// folded in (absent files contribute nothing). plugins/action-results.json is
+// one of them: it is replaced inside a plugins/ folder that already exists, so
+// the pack folder's own mtime never moves when a delivery result lands.
 function packStamp(entry: RawPackEntry): number {
   if (entry.kind === 'zip') return entry.mtimeMs
   let stamp = entry.mtimeMs
-  for (const rel of ['manifest.json', 'annotations.json', 'report.md', 'snapshot.png']) {
+  for (const rel of ['manifest.json', 'annotations.json', 'report.md', 'snapshot.png', 'plugins/action-results.json']) {
     try {
       const m = fs.statSync(path.join(entry.path, rel)).mtimeMs
       if (m > stamp) stamp = m
@@ -800,9 +813,7 @@ function readZipActionResults(pack: StorePackHandle): ActionResult[] {
   try {
     const text = pack.readText('plugins/action-results.json')
     if (text === null) return []
-    const parsed: unknown = JSON.parse(text)
-    if (!Array.isArray(parsed)) return []
-    return parsed as ActionResult[]
+    return parseActionResults(text)
   } catch {
     return []
   }
@@ -1020,6 +1031,22 @@ function pruneCaches(live: Set<string>): void {
   }
   for (const key of [...sharePlanCache.keys()]) {
     if (!live.has(key)) sharePlanCache.delete(key)
+  }
+}
+
+// Drops the card summary and folder size of one pack. The path comes from the
+// save or retry that wrote it, not from the store's listing, so it is compared
+// resolved and, on Windows, case-insensitively.
+function forgetDerivedPackData(packDir: string): void {
+  const key = (p: string): string => {
+    const resolved = path.resolve(p)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  const target = key(packDir)
+  for (const cache of [summaryCache, sizeCache]) {
+    for (const cached of [...cache.keys()]) {
+      if (key(cached) === target) cache.delete(cached)
+    }
   }
 }
 

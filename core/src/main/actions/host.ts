@@ -25,6 +25,7 @@ import {
   mergeActionResults,
 } from '../../shared/actions'
 import { runPipeline } from '../../shared/actionPipeline'
+import { stripUtf8Bom } from '../../shared/json'
 import { logError, logInfo } from '../log'
 import {
   WEBHOOK_ACTION_ID,
@@ -321,6 +322,42 @@ function actionResultsPath(packDir: string): string {
 }
 
 /**
+ * Parse the text of a plugins/action-results.json, wherever it was read from.
+ *
+ * The one reader for a folder pack and for a zipped one: a file a Windows
+ * editor saved with a UTF-8 BOM is still that file, and an entry of the wrong
+ * shape is dropped rather than handed to a renderer that would trip over it.
+ * Throws only on text that is not JSON; the callers own that message.
+ */
+export function parseActionResults(text: string): ActionResult[] {
+  const parsed: unknown = JSON.parse(stripUtf8Bom(text))
+  if (!Array.isArray(parsed)) return []
+  const results: ActionResult[] = []
+  for (const item of parsed) {
+    if (
+      typeof item === 'object' && item !== null
+      && typeof item.actionId === 'string'
+      && typeof item.configId === 'string'
+      && typeof item.outcome === 'string'
+      && typeof item.attempts === 'number'
+      && typeof item.durationMs === 'number'
+      && typeof item.retryable === 'boolean'
+    ) {
+      results.push({
+        actionId: item.actionId,
+        configId: item.configId,
+        outcome: item.outcome as ActionOutcome,
+        attempts: item.attempts,
+        durationMs: item.durationMs,
+        ...(typeof item.message === 'string' ? { message: item.message } : {}),
+        retryable: item.retryable,
+      })
+    }
+  }
+  return results
+}
+
+/**
  * Read the durable action execution results recorded for a pack.
  * Returns an empty array if no results have been recorded or if the file is unreadable.
  */
@@ -328,31 +365,7 @@ export function readActionResults(packDir: string): ActionResult[] {
   try {
     const target = actionResultsPath(packDir)
     if (!existsSync(target)) return []
-    const parsed: unknown = JSON.parse(readFileSync(target, 'utf8'))
-    if (!Array.isArray(parsed)) return []
-    const results: ActionResult[] = []
-    for (const item of parsed) {
-      if (
-        typeof item === 'object' && item !== null
-        && typeof item.actionId === 'string'
-        && typeof item.configId === 'string'
-        && typeof item.outcome === 'string'
-        && typeof item.attempts === 'number'
-        && typeof item.durationMs === 'number'
-        && typeof item.retryable === 'boolean'
-      ) {
-        results.push({
-          actionId: item.actionId,
-          configId: item.configId,
-          outcome: item.outcome as ActionOutcome,
-          attempts: item.attempts,
-          durationMs: item.durationMs,
-          ...(typeof item.message === 'string' ? { message: item.message } : {}),
-          retryable: item.retryable,
-        })
-      }
-    }
-    return results
+    return parseActionResults(readFileSync(target, 'utf8'))
   } catch (error) {
     logError('[actions] could not read action results:', error)
     return []
@@ -361,23 +374,60 @@ export function readActionResults(packDir: string): ActionResult[] {
 
 export { mergeActionResults } from '../../shared/actions'
 
+type ActionResultsListener = (packDir: string) => void
+const actionResultsListeners = new Set<ActionResultsListener>()
+
+/**
+ * Be told whenever a pack's recorded action results change on disk.
+ *
+ * A delivery finishes seconds after the save, and a retry can come from the
+ * save toast while History is open. Replacing plugins/action-results.json
+ * inside an existing plugins/ folder changes neither the pack folder's mtime
+ * nor anything the pack-store watcher compares, so a window showing those
+ * results has to be told directly. Returns the unsubscribe function.
+ */
+export function onActionResultsChange(listener: ActionResultsListener): () => void {
+  actionResultsListeners.add(listener)
+  return () => {
+    actionResultsListeners.delete(listener)
+  }
+}
+
 /**
  * Persist action run outcomes to plugins/action-results.json inside the pack folder.
  * Merges newly produced results by configId and writes atomically.
+ *
+ * A pack renamed or moved to the bin while its delivery was in flight is no
+ * longer at packDir. Writing there would recreate the old path as a folder
+ * holding nothing but plugins/action-results.json, so the result is dropped
+ * instead: no manifest, no write, and plugins/ is created without `recursive`
+ * so a pack that disappears after the check still cannot be rebuilt by it.
  */
 export function persistActionResults(packDir: string, newResults: readonly ActionResult[]): void {
   if (newResults.length === 0) return
+  if (!existsSync(path.join(packDir, 'manifest.json'))) {
+    logInfo(`[actions] ${packDir} is no longer a saved pack; its action results are not recorded there`)
+    return
+  }
   try {
     const existing = readActionResults(packDir)
     const merged = mergeActionResults(existing, newResults)
     const dir = path.join(packDir, 'plugins')
-    mkdirSync(dir, { recursive: true })
+    if (!existsSync(dir)) mkdirSync(dir)
     const target = actionResultsPath(packDir)
     const temporary = `${target}.tmp`
     writeFileSync(temporary, JSON.stringify(merged, null, 2), 'utf8')
     renameSync(temporary, target)
   } catch (error) {
     logError('[actions] could not persist action results:', error)
+    return
+  }
+  for (const listener of actionResultsListeners) {
+    try {
+      listener(packDir)
+    } catch (error) {
+      logError('[actions] an action results listener failed:', error)
+    }
   }
 }
 
