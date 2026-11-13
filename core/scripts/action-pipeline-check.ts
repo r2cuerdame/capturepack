@@ -1492,6 +1492,105 @@ console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
   }
 }
 
+// A RECEIVER THAT NEVER FINISHES ITS REPLY STILL LEAVES NO CONNECTION (#511).
+//
+// fetch resolves on the response headers. A body nobody reads or cancels keeps
+// the socket until garbage collection, and the timeout used to be cleared at
+// the headers too. Every receiver above ends its reply at once, so none of them
+// could see it. The socket's close is observed here, on the server, not inferred
+// from the client.
+console.log('\nWEBHOOK DELIVERY CLOSES A CONNECTION WHOSE REPLY NEVER ENDS (#511)')
+{
+  const closedAt = new Map<string, Promise<number>>()
+  const openSockets = new Set<import('node:net').Socket>()
+  const stallingServer = createServer((req, res) => {
+    const socket = req.socket
+    openSockets.add(socket)
+    const route = req.url ?? ''
+    closedAt.set(route, new Promise<number>((resolve) => socket.once('close', () => {
+      openSockets.delete(socket)
+      resolve(Date.now())
+    })))
+    req.resume()
+    req.on('end', () => {
+      const status = route === '/stall-500' ? 500 : 200
+      res.writeHead(status, { 'content-type': 'application/json' })
+      // The first piece of a reply that is never finished: no res.end().
+      res.write('{"status":"')
+    })
+  })
+  await new Promise<void>((resolve) => stallingServer.listen(0, '127.0.0.1', () => resolve()))
+  const stallingPort = (stallingServer.address() as { port: number }).port
+
+  const stallPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-stall-'))
+  writeFileSync(path.join(stallPackDir, 'manifest.json'), JSON.stringify({
+    id: PACK,
+    created_at: '2026-11-14T00:00:00.000Z',
+    capture_kind: 'video',
+    format_version: '0.8.0',
+    generator: { name: 'CapturePack', version: '0.6.1' },
+    media: { displays: [{}] },
+  }), 'utf8')
+
+  const closeWithin = async (route: string, deliveredAt: number, limitMs: number): Promise<number | null> => {
+    const closed = closedAt.get(route)
+    if (closed === undefined) return null
+    const at = await Promise.race([
+      closed,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), limitMs + 250).unref()),
+    ])
+    return at === null ? null : at - deliveredAt
+  }
+
+  try {
+    let okError: Error | null = null
+    try {
+      await deliverWebhook(stallPackDir, {
+        url: `http://127.0.0.1:${String(stallingPort)}/stall-200`,
+        secret: null,
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      okError = err instanceof Error ? err : new Error(String(err))
+    }
+    const okDeliveredAt = Date.now()
+    check('a 200 whose body never ends is still a successful delivery', okError === null, okError?.message ?? '')
+    const okCloseMs = await closeWithin('/stall-200', okDeliveredAt, 1_000)
+    check(
+      'and the receiver sees that connection closed within 1 s of the delivery',
+      okCloseMs !== null && okCloseMs <= 1_000,
+      okCloseMs === null ? 'still open' : `${String(okCloseMs)} ms`,
+    )
+
+    let failError: Error | null = null
+    try {
+      await deliverWebhook(stallPackDir, {
+        url: `http://127.0.0.1:${String(stallingPort)}/stall-500`,
+        secret: null,
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      failError = err instanceof Error ? err : new Error(String(err))
+    }
+    const failDeliveredAt = Date.now()
+    check(
+      'a 500 whose body never ends fails with the usual status message',
+      failError !== null && failError.message === 'the webhook answered 500 Internal Server Error',
+      failError?.message ?? 'no error thrown',
+    )
+    const failCloseMs = await closeWithin('/stall-500', failDeliveredAt, 1_000)
+    check(
+      'and the receiver sees that connection closed within 1 s of the failure',
+      failCloseMs !== null && failCloseMs <= 1_000,
+      failCloseMs === null ? 'still open' : `${String(failCloseMs)} ms`,
+    )
+  } finally {
+    for (const socket of openSockets) socket.destroy()
+    await new Promise<void>((resolve) => stallingServer.close(() => resolve()))
+    rmSync(stallPackDir, { recursive: true, force: true })
+  }
+}
+
 console.log('\nAFTER SAVE ACTION EXECUTION RESULTS & RETRY (#165)')
 {
   const readNorm = (relative: string): string =>

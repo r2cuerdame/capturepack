@@ -148,29 +148,41 @@ export async function deliverWebhook(packDir: string, delivery: WebhookDelivery)
   // real rather than merely unobserved.
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), delivery.timeoutMs)
-  let response: Response
   try {
-    response = await fetch(delivery.url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ event: 'capturepack.pack.saved', pack: summary }),
-      signal: controller.signal,
-      redirect: 'error',
-    })
-  } catch (error) {
-    if (isRedirectError(error)) {
-      throw new Error('the webhook responded with an unsupported redirect')
+    let response: Response
+    try {
+      response = await fetch(delivery.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ event: 'capturepack.pack.saved', pack: summary }),
+        signal: controller.signal,
+        redirect: 'error',
+      })
+    } catch (error) {
+      if (isRedirectError(error)) {
+        throw new Error('the webhook responded with an unsupported redirect')
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`could not reach the webhook: ${redactUrlCredentials(message)}`)
     }
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`could not reach the webhook: ${redactUrlCredentials(message)}`)
+
+    // THE STATUS IS THE WHOLE ANSWER; THE BODY IS NEVER READ (#511).
+    //
+    // fetch resolves at the headers. A body left unread and uncancelled holds
+    // its connection until garbage collection — past the timeout, which used to
+    // be cleared right here — and a receiver that never finishes its reply would
+    // leave one more open socket behind every save in an app kept running for
+    // days. Cancelling closes the connection on both outcomes, and a cancel that
+    // itself fails cannot turn a delivered notification into a failed one.
+    await response.body?.cancel().catch(() => undefined)
+
+    if (!response.ok) {
+      if (response.status >= 300 && response.status < 400) {
+        throw new Error('the webhook responded with an unsupported redirect')
+      }
+      throw new Error(`the webhook answered ${String(response.status)} ${response.statusText}`)
+    }
   } finally {
     clearTimeout(timer)
-  }
-
-  if (!response.ok) {
-    if (response.status >= 300 && response.status < 400) {
-      throw new Error('the webhook responded with an unsupported redirect')
-    }
-    throw new Error(`the webhook answered ${String(response.status)} ${response.statusText}`)
   }
 }
