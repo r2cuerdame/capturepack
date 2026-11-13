@@ -57,8 +57,8 @@ export async function collectConsoleOutput(
     // the entire prefix cannot fit within the look-behind budget.
     if (sourceStart > CONSOLE_PLUGIN_MAX_BYTES) return null
     const context = source.slice(0, sourceStart)
-    const sanitizedContext = redactSecrets(context)
-    const contextualOutput = redactSecrets(context + boundedSource)
+    const sanitizedContext = redactSecrets(stripTerminalControls(context))
+    const contextualOutput = redactSecrets(stripTerminalControls(context + boundedSource))
     // A quoted value crossing the boundary can rewrite the context itself.
     // Omit the optional plugin if that boundary cannot be retained safely.
     if (!contextualOutput.startsWith(sanitizedContext)) return null
@@ -89,12 +89,91 @@ export async function collectConsoleOutput(
   }
 }
 
+function stripTerminalControls(value: string): string {
+  return value
+    .replace(/\r\n/gu, '\n')
+    // OSC / DCS / SOS / PM / APC can carry invisible hyperlink targets or payloads; stop at line breaks too so an unclosed escape cannot swallow later rows.
+    .replace(/(?:\x1b\]|\x9d)[^\r\n]*?(?:\x07|\x1b\\|\x9c|(?=[\r\n])|$)/gu, '')
+    .replace(/(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\r\n]*?(?:\x1b\\|\x9c|(?=[\r\n])|$)/gu, '')
+    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*(?:[@-~]|$)/gu, '')
+    .replace(/\x1b(?:[ -/]*[0-~]|$)/gu, '')
+}
+
+function secretName(name: string): boolean {
+  // PWD and OLDPWD are conventional working-directory variables, not passwords.
+  return name !== 'PWD'
+    && name !== 'OLDPWD'
+    && /api[_-]?key|secret|token|password|passwd|pwd|passphrase|access[_-]?key|private[_-]?key/iu.test(name)
+}
+
 function redactSecrets(value: string): string {
   return value
-    .replace(/\b(BEARER\s+)[A-Za-z0-9._~+/-]+=*/giu, '$1[REDACTED]')
-    .replace(/(["'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret)["']\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\s]+)/giu, '$1"[REDACTED]"')
-    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret)\b(\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/giu, '$1$2[REDACTED]')
-    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/gu, '[REDACTED]')
+    .replace(
+      /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/gu,
+      '[REDACTED]',
+    )
+    // An END without a visible BEGIN means the snapshot starts inside the key.
+    .replace(/^[\s\S]*-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/gu, '[REDACTED]')
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#"']+@/giu, '$1[REDACTED]@')
+    .replace(
+      /([?&#]([\w.-]+)=)[^&#\s"']*/giu,
+      (match, prefix: string, name: string) =>
+        secretName(name) || /^(?:key|sig|signature)$/iu.test(name) ? `${prefix}[REDACTED]` : match,
+    )
+    .replace(
+      /(?<![\w-])((?:authorization|proxy-authorization|cookie|set-cookie)[ \t]*[:=][ \t]*)([^\r\n]+)/giu,
+      (match, prefix: string, contents: string) => {
+        if (/^[ \t]*$/u.test(contents)) return match
+        if (/authorization/iu.test(prefix) && /^Bearer(?:[ \t]*$|[ \t]+\S)/iu.test(contents)) {
+          return /^Bearer[ \t]*$/iu.test(contents) ? match : `${prefix}Bearer [REDACTED]`
+        }
+        return `${prefix}[REDACTED]`
+      },
+    )
+    .replace(
+      /\b(BEARER\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z0-9._~+/-]+=*)/giu,
+      '$1[REDACTED]',
+    )
+    .replace(
+      /(["']([\w.-]+)["']\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\[\]{}]*\]|[^,}\[\]{\s]+)/gu,
+      (match, prefix: string, name: string) => {
+        if (secretName(name)) return `${prefix}"[REDACTED]"`
+        if (
+          /^(?:authorization|proxy-authorization|cookie|set-cookie)$/iu.test(name)
+          && /^["']/u.test(match.slice(prefix.length))
+        ) {
+          return `${prefix}"[REDACTED]"`
+        }
+        return match
+      },
+    )
+    .replace(
+      /\b([\w.-]+)(\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\[\]{}\r\n]*\]|(?!(?:\{\s*["'\w.-]+\s*[:=]|\[\s*\{))(?:[^\s,;}&"']+(?:["'][^\s,;}&\]\)"'>]+)*|["'][^\s,;}&]*))/gu,
+      (match, name: string, separator: string) =>
+        secretName(name) ? `${name}${separator}[REDACTED]` : match,
+    )
+    .replace(
+      /(?<![\w-])(--([\w-]+)[ \t]+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gu,
+      (match, prefix: string, name: string) => {
+        if (!secretName(name)) return match
+        const val = match.slice(prefix.length)
+        if (
+          /^(?:no|without|skip|disable|use|enable|require|has|is)[_-]/iu.test(name)
+          && /^--[A-Za-z]/u.test(val)
+        ) {
+          return match
+        }
+        return `${prefix}[REDACTED]`
+      },
+    )
+    .replace(
+      /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|(?:AKIA|ASIA)[0-9A-Z]{16}|npm_[A-Za-z0-9]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,})\b/gu,
+      '[REDACTED]',
+    )
+    .replace(
+      /\b(?:xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?![A-Za-z0-9_-])/gu,
+      '[REDACTED]',
+    )
 }
 
 export function consolePluginDeclaration() {

@@ -261,6 +261,187 @@ try {
     }
   }
 
+  const ansiAndOsc = await collectConsoleOutput(async () => [
+    '\x1b[33mOPENAI_API_KEY\x1b[0m=\x1b[32mwrappedSecret123\x1b[0m',
+    '\x1b[2K\x1b[1;31mghp_\x1b[0m1234567890abcdefghij',
+    '\x1b]8;;https://alice:oscSecret@example.com/cb?token=oscTok\x07open docs\x1b]8;;\x07',
+    '\x1b]8;;https://bob:stSecret@example.com/\x1b\\link-st\x1b]8;;\x1b\\',
+    '\x1b]0;Window Secret=hiddenTitle\x07status=ok',
+    '\x1b]8;;https://carol:unclosedSecret@example.com',
+    'after-unclosed',
+  ].join('\n'))
+  const ansiRoot = path.join(root, 'ansi-osc')
+  await mkdir(ansiRoot)
+  const ansiPublished = await tryWriteConsolePlugin(ansiRoot, ansiAndOsc)
+  const ansiStored = ansiPublished
+    ? await readFile(path.join(ansiRoot, 'plugins', 'console', 'output.log'), 'utf8')
+    : ''
+  check('terminal CSI and OSC escapes are stripped before redaction without leaking hidden targets',
+    ansiPublished && ansiAndOsc !== null
+      && !/[\x1b\x9b\x9d\x07]/u.test(ansiStored)
+      && !ansiStored.includes('wrappedSecret123')
+      && !ansiStored.includes('1234567890abcdefghij')
+      && !ansiStored.includes('oscSecret') && !ansiStored.includes('oscTok')
+      && !ansiStored.includes('stSecret') && !ansiStored.includes('hiddenTitle')
+      && !ansiStored.includes('unclosedSecret')
+      && ansiStored.includes('OPENAI_API_KEY=[REDACTED]')
+      && ansiStored.includes('open docs') && ansiStored.includes('link-st')
+      && ansiStored.includes('status=ok') && ansiStored.includes('after-unclosed'))
+
+  const ansiBoundaryTail = [
+    '\x1b[32mboundaryAnsiSecret\x1b[0m',
+    'password=' + 'x'.repeat(inputLimit - 43),
+    'last',
+  ].join('\n') + '\n'
+  assert.equal(ansiBoundaryTail.length, inputLimit)
+  const ansiBoundary = await collectConsoleOutput(
+    async () => '\x1b[31mpassword=\x1b[0m\n' + ansiBoundaryTail,
+  )
+  check('ANSI color codes around a boundary-aligned assignment still redact safely',
+    ansiBoundary !== null && !ansiBoundary.output.includes('boundaryAnsiSecret')
+      && !/[\x1b]/u.test(ansiBoundary.output)
+      && ansiBoundary.output.startsWith('[REDACTED]\npassword=[REDACTED]\nlast\n'))
+
+  const compoundAndCli = await collectConsoleOutput(async () => [
+    'OPENAI_API_KEY=openaiSec1',
+    'DB_PASSWORD=dbPass1',
+    'CLIENT_SECRET=clientSec1',
+    'AWS_SECRET_ACCESS_KEY=awsKey1',
+    'GITHUB_TOKEN=ghTok1',
+    'NPM_TOKEN=npmTok1',
+    'PRIVATE_KEY=privVal1',
+    'SSH_PASSPHRASE=passPhrase1',
+    'db_pwd=shortPwd1',
+    'PWD=/workspace/capturepack',
+    'OLDPWD=/workspace/prev',
+    '{"client_secret":"jsonClientSec","db_password":"jsonDbPass","auth_token":"jsonAuthTok","secrets":{"api_key":"nestedKeySec"},"tokens":["arrTok1","arrTok2"],"ok":"keepMe"}',
+    "{'db_password': 'sqDbPass', 'pwd': 'sqPwd'}",
+    '"TOML_SECRET"="tomlVal1"',
+    'tool --password cliPass1 --api-key "cli quoted key" --token \'cliSqTok\' --client-secret cliClientSec --use-token --verbose -p 8080',
+  ].join('\n'))
+  const compoundForbidden = [
+    'openaiSec1', 'dbPass1', 'clientSec1', 'awsKey1', 'ghTok1', 'npmTok1',
+    'privVal1', 'passPhrase1', 'shortPwd1', 'jsonClientSec', 'jsonDbPass',
+    'jsonAuthTok', 'nestedKeySec', 'arrTok1', 'arrTok2', 'sqDbPass', 'sqPwd',
+    'tomlVal1', 'cliPass1', 'cli quoted key', 'cliSqTok', 'cliClientSec',
+  ]
+  check('compound identifiers, quoted items, nested objects/arrays, and long CLI options are redacted while PWD and flags stay intact',
+    compoundAndCli !== null
+      && compoundForbidden.every((secret) => !compoundAndCli.output.includes(secret))
+      && compoundAndCli.output.includes('PWD=/workspace/capturepack')
+      && compoundAndCli.output.includes('OLDPWD=/workspace/prev')
+      && compoundAndCli.output.includes('"ok":"keepMe"')
+      && compoundAndCli.output.includes('--use-token --verbose -p 8080')
+      && compoundAndCli.output.includes('"tokens":"[REDACTED]"')
+      && compoundAndCli.output.includes('--password [REDACTED]')
+      && compoundAndCli.output.includes('--api-key [REDACTED]')
+      && compoundAndCli.output.includes('--token [REDACTED]')
+      && compoundAndCli.output.includes('--client-secret [REDACTED]'))
+
+  const urlsHeadersAndTokens = await collectConsoleOutput(async () => [
+    'https://alice:urlPass1@example.com/path',
+    'postgres://admin:p@ssword@db.internal:5432/app',
+    'https://example.com/hook?email=user@example.com&token=qTok1&api_key=qApi1&apikey=qApi2&key=qKey1&sig=qSig1&signature=qSig2&password=qPass1&access_token=qAcc1&client_secret=qCs1&page=2',
+    '"https://example.com/cb?token=quotedUrlTok"',
+    '["https://example.com/cb?token=arrayUrlTok"]',
+    'https://example.com/oauth#access_token=fragTok1&state=keepState',
+    'Authorization: Bearer bareTok1',
+    'Authorization: Bearer colon:tok2',
+    'Authorization: Bearer "quotedBearerTok"',
+    'Authorization: Basic dXNlcjpwYXNz',
+    'Proxy-Authorization: Token proxyTok1',
+    'Cookie: session=sess1; csrftoken=csrf1',
+    'Set-Cookie: sid=setSess1; Path=/; HttpOnly',
+    '{"authorization":"Basic jsonBasic1","cookie":"sid=jsonCookie1","ok":true}',
+    'no-cookie: false',
+    'ghp_0123456789abcdefghij',
+    'github_pat_11ABCDEFGH012345678901_abcdefghijklmnopqrstuvwxyz',
+    'AKIAIOSFODNN7EXAMPLE',
+    'ASIAIOSFODNN7EXAMPLE',
+    'xoxb-1234567890-abcdef-',
+    'sk-proj-abcdefghijklmnopqrstuvwxyz-',
+    'sk_live_0123456789abcdef',
+    'npm_0123456789abcdefghijklmnop',
+    'AIzaSyDaGmWKa4JsXZ-HjGw7ISLn_3namBGQ12-',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig_with_dash-',
+  ].join('\n'))
+  const tokenForbidden = [
+    'alice:urlPass1', 'admin:p@ssword', 'qTok1', 'qApi1', 'qApi2', 'qKey1',
+    'qSig1', 'qSig2', 'qPass1', 'qAcc1', 'qCs1', 'quotedUrlTok', 'arrayUrlTok',
+    'fragTok1', 'bareTok1', 'colon:tok2', 'quotedBearerTok', 'dXNlcjpwYXNz',
+    'proxyTok1', 'sess1', 'csrf1', 'setSess1', 'jsonBasic1', 'jsonCookie1',
+    'ghp_0123456789', 'github_pat_11', 'AKIAIOSFODNN7EXAMPLE', 'ASIAIOSFODNN7EXAMPLE',
+    'xoxb-123456', 'sk-proj-abcd', 'sk_live_012345', 'npm_012345', 'AIzaSyDaGm', 'eyJhbGciOiJIUzI1NiJ9',
+  ]
+  check('URL credentials, secret query/fragment parameters, auth/cookie headers, tokens, and JWTs are redacted cleanly',
+    urlsHeadersAndTokens !== null
+      && tokenForbidden.every((secret) => !urlsHeadersAndTokens.output.includes(secret))
+      && urlsHeadersAndTokens.output.includes('https://[REDACTED]@example.com/path')
+      && urlsHeadersAndTokens.output.includes('postgres://[REDACTED]@db.internal:5432/app')
+      && urlsHeadersAndTokens.output.includes('email=user@example.com')
+      && urlsHeadersAndTokens.output.includes('&page=2\n')
+      && urlsHeadersAndTokens.output.includes('"https://example.com/cb?token=[REDACTED]"')
+      && urlsHeadersAndTokens.output.includes('["https://example.com/cb?token=[REDACTED]"]')
+      && urlsHeadersAndTokens.output.includes('&state=keepState\n')
+      && urlsHeadersAndTokens.output.includes('Authorization: Bearer [REDACTED]\n')
+      && urlsHeadersAndTokens.output.includes('Authorization: [REDACTED]\n')
+      && urlsHeadersAndTokens.output.includes('Proxy-Authorization: [REDACTED]\n')
+      && urlsHeadersAndTokens.output.includes('Cookie: [REDACTED]\n')
+      && urlsHeadersAndTokens.output.includes('Set-Cookie: [REDACTED]\n')
+      && urlsHeadersAndTokens.output.includes('{"authorization":"[REDACTED]","cookie":"[REDACTED]","ok":true}')
+      && urlsHeadersAndTokens.output.includes('no-cookie: false\n'))
+
+  const fullPem = await collectConsoleOutput(async () => [
+    'before-key',
+    '-----BEGIN RSA PRIVATE KEY-----',
+    'MIIEowIBAAKCAQEAline1',
+    'MIIEowIBAAKCAQEAline2',
+    '-----END RSA PRIVATE KEY-----',
+    '-----BEGIN OPENSSH PRIVATE KEY-----',
+    'opensshSecretChunk',
+    '-----END OPENSSH PRIVATE KEY-----',
+    '-----BEGIN PGP PRIVATE KEY BLOCK-----',
+    'pgpSecretChunk',
+    '-----END PGP PRIVATE KEY BLOCK-----',
+    'after-key',
+  ].join('\n'))
+  const bottomCutPem = await collectConsoleOutput(async () => [
+    'before-bottom',
+    '-----BEGIN EC PRIVATE KEY-----',
+    'ecBottomFrag1',
+    'ecBottomFrag2',
+  ].join('\n'))
+  const topCutPem = await collectConsoleOutput(async () => [
+    'topFrag1',
+    'topFrag2',
+    '-----END PRIVATE KEY-----',
+    'after-top',
+  ].join('\n'))
+  const spanPemTail = 'keyInWindow\n-----END RSA PRIVATE KEY-----\nafter-boundary-key\n'
+  const spanPemContext = '-----BEGIN RSA PRIVATE KEY-----\nkeyTopInContext\n'
+    + 'k'.repeat(inputLimit - spanPemTail.length) + '\n'
+  const spanPemBoundary = await collectConsoleOutput(async () => spanPemContext + spanPemTail)
+  const orphanPemTail = 'orphanTopWindow\n-----END PRIVATE KEY-----\nafter-orphan\n'
+  const orphanPemContext = 'orphanTopCtx\n' + 'k'.repeat(inputLimit - orphanPemTail.length) + '\n'
+  const orphanPemBoundary = await collectConsoleOutput(async () => orphanPemContext + orphanPemTail)
+  check('complete and window-truncated private key blocks never expose key fragments',
+    fullPem !== null
+      && !fullPem.output.includes('MIIEowIBAAKCAQEA')
+      && !fullPem.output.includes('opensshSecretChunk')
+      && !fullPem.output.includes('pgpSecretChunk')
+      && fullPem.output.includes('before-key\n[REDACTED]\n[REDACTED]\n[REDACTED]\nafter-key\n')
+      && bottomCutPem !== null
+      && !bottomCutPem.output.includes('ecBottomFrag')
+      && bottomCutPem.output === 'before-bottom\n[REDACTED]\n'
+      && topCutPem !== null
+      && !topCutPem.output.includes('topFrag')
+      && topCutPem.output === '[REDACTED]\nafter-top\n'
+      && spanPemBoundary !== null
+      && !spanPemBoundary.output.includes('keyTopInContext')
+      && !spanPemBoundary.output.includes('keyInWindow')
+      && spanPemBoundary.output.includes('after-boundary-key')
+      && orphanPemBoundary === null)
+
   const absent = await collectConsoleOutput(async () => null)
   const denied = await collectConsoleOutput(async () => { throw new Error('access denied') })
   const absentRoot = path.join(root, 'absent')
