@@ -373,6 +373,8 @@ release or a claim that the observation has passed.
   and cannot hold capture open beyond it. A supported console produces a
   SPEC-compatible `plugins/console/` payload and metadata; absent, inaccessible,
   slow, or failed collection is omitted and the pack still saves normally.
+  The layout, budget, masking rules and write order are the design baseline
+  in [docs/CONSOLE_PLUGIN.md](docs/CONSOLE_PLUGIN.md).
 - Deterministic checks cover four outcomes: successful collection writes the
   declared payload and metadata; absent or denied access adds no plugin and
   does not fail saving; collection exceeding 100 ms is abandoned without
