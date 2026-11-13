@@ -528,16 +528,19 @@ async function main(): Promise<void> {
       `manifest=${copiedPluginNames.length}, directories=${copiedPluginDirectories.length}`,
     )
     check(
-      'video Save As New skills document reports the copied plugin count',
-      readFileSync(path.join(copied.dirPath, 'skills', 'project.md'), 'utf8').includes(
-        String(copiedPluginNames.length),
+      'video Save As New overview reports the exact copied plugin count',
+      readFileSync(path.join(copied.dirPath, 'skills', 'overview.md'), 'utf8').includes(
+        `${copiedPluginNames.length} plugins.`,
       ),
     )
 
     console.log('\nIMAGE SAVE AS NEW PLUGIN METADATA')
     const imageSource = path.join(outputDir, 'image-plugin-source')
     mkdirSync(path.join(imageSource, 'plugins', 'sample'), { recursive: true })
-    writeFileSync(path.join(imageSource, 'plugins', 'sample', 'meta.json'), '{"ok":true}')
+    writeFileSync(
+      path.join(imageSource, 'plugins', 'sample', 'meta.json'),
+      JSON.stringify({ name: 'sample', version: '1.0.0' }),
+    )
     writeFileSync(path.join(imageSource, 'plugins', 'sample', 'data.json'), '{"value":1}')
     writeFileSync(path.join(imageSource, 'plugins', 'sample', 'frame.png'), Buffer.from([137, 80, 78, 71]))
     mkdirSync(path.join(imageSource, 'plugins', 'unlisted'), { recursive: true })

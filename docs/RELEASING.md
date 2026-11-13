@@ -37,10 +37,11 @@ electron-builder's implicit CI upload before those checks.
    Despite its historical script name, `qa:rc` is the full release gate. It
    discovers every `check:*` script, runs type checking, the production build
    and an isolated Electron smoke test.
-4. Run `npm audit --omit=dev` and confirm it remains zero. For 0.3.1, compare
-   the full development-tree result with
-   [DEPENDENCY-AUDIT-0.3.1.md](DEPENDENCY-AUDIT-0.3.1.md); do not hide a new or
-   production-scoped advisory.
+4. Run `npm audit --omit=dev` and confirm it remains zero. For the 0.6.1
+   candidate, compare both the production and full development-tree results
+   with [DEPENDENCY-AUDIT-0.6.1.md](DEPENDENCY-AUDIT-0.6.1.md). The
+   [DEPENDENCY-AUDIT-0.3.1.md](DEPENDENCY-AUDIT-0.3.1.md) record is historical.
+   Do not hide a new or production-scoped advisory.
 5. Commit and push the exact source revision intended for release. Confirm that
    `core/package.json`, the lockfile and the changelog all name the same
    version.

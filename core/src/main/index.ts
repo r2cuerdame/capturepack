@@ -6,6 +6,7 @@ import type { UpdaterStatusPayload } from '../shared/ipc'
 import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
 import {
   disposeCapture,
+  getRecorderDisplayIds,
   getRecorderState,
   onRecorderStateChanged,
   setupDisplayMediaHandler,
@@ -14,6 +15,7 @@ import {
   startCapture,
 } from './capture'
 import type { RecorderState } from './capture'
+import { shouldSimulateNoFrames } from './displayMediaPolicy'
 import {
   contextNowMs,
   startContextRuntime,
@@ -44,7 +46,6 @@ import { uiLanguage, uiT } from './locale'
 import { initForensics, logError, logInfo, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
 import { isRenderInFlight, onRenderStateChange } from './annotatedRender'
-import { scheduleCaptureNow } from './captureNow'
 import {
   armSaveNow,
   awaitedRenderDirPath,
@@ -52,6 +53,7 @@ import {
   saveNowRequest,
 } from './saveNow'
 import { captureOrSaveInProgress } from './captureActivity'
+import { scheduleCaptureWhenRecording } from './captureNow'
 import { anyPackOperationActive } from './packOperations'
 import { captureFlowActive, startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
@@ -618,20 +620,31 @@ function main(): void {
       if (captureNow !== undefined) {
         const seconds = Number(captureNow.split('=')[1] ?? '0')
         const delayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0
-        if (delayMs === 0) {
-          capture()
-        } else {
-          const readinessTimeoutMs = 12_000
-          logInfo(
-            `[capture] --capture-now: waiting for recorder frame evidence (up to ` +
-              `${String(readinessTimeoutMs)} ms), then capturing in ${String(seconds)}s`,
+        if (delayMs === 0) capture()
+        else if (
+          process.argv.includes('--simulate-no-frames') ||
+          getRecorderDisplayIds().some((displayId) =>
+            shouldSimulateNoFrames(process.argv, String(displayId)),
           )
-          scheduleCaptureNow(
+        ) {
+          // The starved-recorder test must still exercise the explicit
+          // screenshot-only outcome; it cannot wait for a recording state.
+          // One deliberately starved recorder prevents aggregate readiness too.
+          // Only a scoped flag matching an actual recorder target bypasses it.
+          setTimeout(() => {
+            void capture()
+          }, delayMs)
+        } else {
+          logInfo(
+            `[capture] --capture-now: capturing ${String(seconds)}s after the recorder is ready`,
+          )
+          scheduleCaptureWhenRecording(
             delayMs,
-            readinessTimeoutMs,
             getRecorderState,
             onRecorderStateChanged,
-            capture,
+            () => {
+              void capture()
+            },
           )
         }
       }

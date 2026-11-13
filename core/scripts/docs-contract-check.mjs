@@ -408,6 +408,391 @@ console.log('\nThe usage journal template still says what Issue #1 says')
   )
 }
 
+console.log('\nThe one-month observation log still carries what its verdict needs (Issue #440)')
+{
+  // The 2026-12 milestone cannot close on "it seemed fine for a month". The
+  // ledger is the only place the start date, the four weekly reviews and the
+  // verdict are written down, so a ledger that quietly drops a field, a review
+  // window or one of the three verdicts makes the month unjudgeable after the
+  // fact — and nobody notices until day 30. Prose is not read for truth here;
+  // only that each required slot still exists and every current document still
+  // points at the ledger.
+  const ledgerPath = join(ROOT, 'docs', 'OBSERVATION-LOG.md')
+  check('docs/OBSERVATION-LOG.md exists', existsSync(ledgerPath), ledgerPath)
+  const ledger = existsSync(ledgerPath) ? readFileSync(ledgerPath, 'utf8').replace(/\r\n/gu, '\n') : ''
+  const section = (heading) => {
+    const start = ledger.indexOf(`\n## ${heading}\n`)
+    if (start === -1) return ''
+    const next = ledger.indexOf('\n## ', start + 1)
+    return ledger.slice(start, next === -1 ? undefined : next)
+  }
+
+  const fields = [
+    'Observation start date (day 0)',
+    'Starting app version',
+    'Week 1 review date (due day 7)',
+    'Week 2 review date (due day 14)',
+    'Week 3 review date (due day 21)',
+    'Week 4 review date (due day 28)',
+    'Final verdict date (day 30 or later)',
+    'End date',
+    'Final app version',
+    'Result',
+    'Reason for result',
+  ]
+  const tracked = section('Tracked fields')
+  const template = section('Period template')
+  const untracked = fields.filter((field) => !tracked.includes(`| ${field} |`))
+  const untemplated = fields.filter((field) => !template.includes(`| ${field} |`))
+  check(
+    'the ledger defines every tracked field and its period template carries each one',
+    untracked.length === 0 && untemplated.length === 0,
+    `Tracked fields lacks ${JSON.stringify(untracked)}; Period template lacks ${JSON.stringify(untemplated)}`,
+  )
+
+  const windows = ['Week 1 (days 0–7)', 'Week 2 (days 8–14)', 'Week 3 (days 15–21)', 'Week 4 (days 22–28)', 'Final (day 29 to verdict)']
+  const unwindowed = windows.filter((window) => !template.includes(`| ${window} |`) || !section('Day counting').includes(window))
+  check(
+    'the four weekly windows and the final window are counted and templated',
+    unwindowed.length === 0,
+    `missing from Day counting or Period template: ${JSON.stringify(unwindowed)}`,
+  )
+
+  const checklist = section('Weekly checklist')
+  const items = [
+    'Review date',
+    'Confirmed ordinary-use dates',
+    'Automatic update history',
+    'Manual reinstall',
+    'Failure or interruption',
+    'About version',
+    'Evidence reviewed',
+    'Unknown dates',
+  ]
+  const unchecked = items.filter((item) => !new RegExp(`^- \\[ \\] \\*\\*${item}\\*\\*`, 'mu').test(checklist))
+  const uncolumned = items.filter((item) => !template.includes(` ${item} |`))
+  check(
+    'the weekly checklist and review table carry all eight review items',
+    unchecked.length === 0 && uncolumned.length === 0,
+    `checklist lacks ${JSON.stringify(unchecked)}; review table lacks ${JSON.stringify(uncolumned)}`,
+  )
+
+  // One numbered rule per verdict, each running to the next; order matters.
+  // Whitespace is collapsed so reflowing the markdown cannot fail the check.
+  const ruleChunks = section('Verdict rules').split(/\n(?=\d\. \*\*)/u).slice(1)
+  const ruleNames = ruleChunks.map((chunk) => chunk.match(/^\d\. \*\*(.+?)\*\*/u)?.[1])
+  const rules = new Map(ruleChunks.map((chunk) => [
+    chunk.match(/^\d\. \*\*(.+?)\*\*/u)?.[1],
+    chunk.replace(/\s+/gu, ' '),
+  ]))
+  const rule = (name) => rules.get(name) ?? ''
+  const observationGuide = readFileSync(join(ROOT, 'docs', 'OBSERVATION.md'), 'utf8').replace(/\s+/gu, ' ')
+  const guidePassStart = observationGuide.indexOf('## What counts as a pass')
+  const guidePassEnd = observationGuide.indexOf('## Local evidence to review', guidePassStart)
+  const guidePass = observationGuide.slice(guidePassStart, guidePassEnd)
+  check(
+    'the four verdict rules keep their priority and the guide agrees on each outcome',
+    JSON.stringify(ruleNames) === JSON.stringify(['Failed', 'In progress', 'Passed', 'Inconclusive']) &&
+      /manual reinstall occurred/u.test(rule('Failed')) &&
+      /no manual reinstall is recorded/u.test(rule('In progress')) &&
+      /not yet reached day 30/u.test(rule('In progress')) &&
+      /day 30 or later/u.test(rule('Passed')) &&
+      /every window.*user-confirmed ordinary-use date/u.test(rule('Passed')) &&
+      /manual reinstall as `none`/u.test(rule('Passed')) &&
+      /starting version.*each automatic update.*final version.*explicit `unknown`/u.test(rule('Passed')) &&
+      /no manual reinstall is recorded/u.test(rule('Inconclusive')) &&
+      /review was not held/u.test(rule('Inconclusive')) &&
+      /no confirmed ordinary-use date/u.test(rule('Inconclusive')) &&
+      /manual reinstall as `unknown`/u.test(rule('Inconclusive')) &&
+      /required field is blank/u.test(rule('Inconclusive')) &&
+      /remains \*\*in progress\*\* until.*complete month/u.test(observationGuide) &&
+      /If a manual reinstall occurs, mark the period \*\*failed\*\*/u.test(observationGuide) &&
+      /At least 30 calendar days/u.test(guidePass) &&
+      /used in ordinary work/u.test(guidePass) &&
+      /No manual reinstall occurred/u.test(guidePass) &&
+      /starting version.*any observed automatic update.*final version.*explicitly marked unknown/u.test(guidePass) &&
+      /mark the result \*\*inconclusive\*\*, not passed/u.test(observationGuide),
+    `rule order is ${JSON.stringify(ruleNames)} or a verdict condition differs from docs/OBSERVATION.md`,
+  )
+  check(
+    'the verdict rules define failed by a manual reinstall, passed by 30 confirmed days, inconclusive by missing evidence',
+    /manual reinstall/u.test(rule('Failed')) &&
+      /day 30 or later/u.test(rule('Passed')) &&
+      /ordinary-use date/u.test(rule('Passed')) &&
+      /`none`/u.test(rule('Passed')) &&
+      /no confirmed ordinary-use date/u.test(rule('Inconclusive')) &&
+      /not held/u.test(rule('Inconclusive')) &&
+      rule('In progress') !== '',
+    'docs/OBSERVATION-LOG.md lost a verdict, or a verdict lost the condition that decides it',
+  )
+  // A status is a claim. Anything past "not started" needs a period to back it.
+  const status = ledger.match(/^\*\*Current status: (not started|in progress|passed|failed|inconclusive)\.\*\*/mu)?.[1]
+  const periods = [...section('Periods').matchAll(/^### Period \d+\b/gmu)].length
+  check(
+    'the ledger states a defined current status, backed by a recorded period unless not started',
+    status !== undefined && (status === 'not started' ? periods === 0 : periods > 0),
+    status === undefined
+      ? 'no "**Current status: …**" line naming a defined result'
+      : `status is ${status} with ${String(periods)} recorded period(s)`,
+  )
+
+  const linking = ['docs/OBSERVATION.md', 'docs/README.md', 'ROADMAP.md', 'docs/HANDOFF.md'].filter(
+    (name) => !/\]\((?:docs\/)?OBSERVATION-LOG\.md\)/u.test(readFileSync(join(ROOT, name), 'utf8')),
+  )
+  check(
+    'the observation guide, docs index, roadmap and handoff all point at the ledger',
+    linking.length === 0,
+    `no link to OBSERVATION-LOG.md in ${linking.join(', ')}`,
+  )
+}
+
+console.log('\nThe next-release scope states conditions this repository can settle (Issue #445)')
+{
+  // #445 fixed where the 0.6.1 candidate ends and the 0.6.2 plan begins. A
+  // scope document is only worth reading while every condition in it still
+  // points at something that runs: a check that exists and still asserts what
+  // its row says, the count the gate really discovers, the five-second
+  // condition in every stage, and workflow triggers that match the files. Each
+  // of those goes stale silently — the handoff's 0.6.1 baseline had already
+  // dropped the Shadow DOM item when this was written.
+  const read = (...segments) => readFileSync(join(ROOT, ...segments), 'utf8').replace(/\r\n/gu, '\n')
+  const scopePath = join(ROOT, 'docs', 'RELEASE_SCOPE_0_6_1_0_6_2.md')
+  check('docs/RELEASE_SCOPE_0_6_1_0_6_2.md exists', existsSync(scopePath), scopePath)
+  const scope = existsSync(scopePath) ? read('docs', 'RELEASE_SCOPE_0_6_1_0_6_2.md') : ''
+  const sectionOf = (text, marker, heading) => {
+    const start = text.indexOf(`\n${marker} ${heading}\n`)
+    if (start === -1) return ''
+    const next = text.indexOf(`\n${marker} `, start + 1)
+    return text.slice(start, next === -1 ? undefined : next)
+  }
+  const flat = (text) => text.replace(/\s+/gu, ' ')
+  const standing = sectionOf(scope, '##', 'Standing condition — the five-second workflow')
+  const candidate = sectionOf(scope, '##', '0.6.1 candidate — scope and completion conditions')
+  const plan = sectionOf(scope, '##', '0.6.2 plan — acceptance criteria (planning only)')
+  const publication = sectionOf(scope, '##', 'Publication contract')
+  check(
+    'the scope keeps its standing condition, both stages and the publication contract',
+    standing !== '' && candidate !== '' && plan !== '' && publication !== '',
+    'a section heading of docs/RELEASE_SCOPE_0_6_1_0_6_2.md was renamed or removed',
+  )
+
+  const named = [...new Set([...scope.matchAll(/`(check:[a-z0-9:-]+)`/gu)].map((match) => match[1]))]
+  const unknown = named.filter((name) => !scriptNames.includes(name))
+  check(
+    `every check the scope names exists (${String(named.length)} named)`,
+    named.length > 0 && unknown.length === 0,
+    `not in core/package.json: ${unknown.join(', ')}`,
+  )
+
+  const discovered = scriptNames.filter((name) => name.startsWith('check:') && name !== 'check:qa').length
+  check(
+    `the scope states the real discovered count (${String(discovered)}) and both step counts`,
+    flat(scope).includes(`The gate discovers ${String(discovered)} checks today`) &&
+      flat(scope).includes(`(${String(discovered + 1)} steps)`) &&
+      flat(scope).includes(`(${String(discovered + 3)} steps)`) &&
+      flat(candidate).includes(`all ${String(discovered)} discovered checks passing`),
+    `docs/RELEASE_SCOPE_0_6_1_0_6_2.md does not state ${String(discovered)} checks, ` +
+      `${String(discovered + 1)} and ${String(discovered + 3)} steps, or the 0.6.1 no-regression row`,
+  )
+
+  // Each 0.6.1 item names its check, and that check still asserts the thing the
+  // row describes. A renamed assertion fails here until the row is reread.
+  const rows = candidate.split('\n').filter((line) => /^\| \d+ \|/u.test(line))
+  const row = (n) => rows.find((line) => line.startsWith(`| ${String(n)} |`)) ?? ''
+  const items = [
+    {
+      n: 1,
+      scope: /Open Shadow DOM/u,
+      checks: ['check:document-snapshot', 'check:chrome-bridge'],
+      sources: ['document-snapshot-check.mjs', 'chrome-bridge-check.mjs'],
+      asserted: [
+        'an element inside an open shadow root is recorded',
+        'a shadow tree inside a shadow tree is recorded too',
+        'a shadow password field is a password field',
+        'and names it through the shadow boundary',
+        'a closed root is picked as its host, and nothing inside it is read',
+      ],
+    },
+    {
+      n: 2,
+      scope: /route detection/u,
+      checks: ['check:chrome-route-change'],
+      sources: ['chrome-route-change-check.mjs'],
+      asserted: [
+        'inactive-tab hints are discarded',
+        'cross-origin late hints are discarded',
+        'closed tabs are discarded',
+        'unreadable current URL is discarded',
+      ],
+    },
+    {
+      n: 3,
+      scope: /Git context/u,
+      checks: ['check:git-plugin'],
+      sources: ['git-plugin-check.mjs'],
+      asserted: [
+        'short deadlines fail open',
+        'metadata is published only after the state file landed',
+        'removes its staged temporary file and unpublished directory',
+        'a failed rewrite keeps the plugin an earlier write already published',
+        'well inside the five-second workflow',
+      ],
+    },
+    {
+      n: 4,
+      scope: /Opaque Share Copy/u,
+      checks: ['check:share-bundle'],
+      sources: ['share-bundle-check.ts'],
+      asserted: ['opaqueRedaction: true', 'pixels[at] !== 0x1a', 'opaque-label-gutter'],
+    },
+  ]
+  for (const { n, scope: title, checks, sources, asserted } of items) {
+    const text = row(n)
+    const source = sources.map((name) => readFileSync(join(CORE, 'scripts', name), 'utf8')).join('\n')
+    const unasserted = asserted.filter((needle) => !source.includes(needle))
+    const unnamed = checks.filter((name) => !text.includes(`\`${name}\``))
+    check(
+      `0.6.1 item ${String(n)} names ${checks.join(' and ')}, which still assert it`,
+      title.test(text) && unnamed.length === 0 && unasserted.length === 0,
+      !title.test(text)
+        ? `row ${String(n)} is no longer ${String(title)}`
+        : unnamed.length > 0
+          ? `row ${String(n)} does not name ${unnamed.join(', ')}`
+          : `${sources.join(', ')} no longer assert: ${unasserted.join('; ')}`,
+    )
+  }
+  check(
+    'the opaque fill the scope names is the one the Share Copy writer records',
+    row(4).includes('`#1a1a1a`') &&
+      readFileSync(join(CORE, 'src', 'main', 'shareBundle.ts'), 'utf8').includes("'opaque-redaction-v1:#1a1a1a'"),
+    'the scope and core/src/main/shareBundle.ts disagree about the opaque fill',
+  )
+
+  const handoff = read('docs', 'HANDOFF.md')
+  const baseline = sectionOf(handoff, '##', '0.6.1 candidate baseline — not released')
+  const undescribed = items.flatMap(({ checks }) => checks).filter((name) => !baseline.includes(`\`${name}\``))
+  check(
+    'the handoff 0.6.1 baseline describes every candidate item by its check',
+    baseline !== '' && undescribed.length === 0,
+    baseline === '' ? 'docs/HANDOFF.md lost its 0.6.1 candidate baseline' : `not in it: ${undescribed.join(', ')}`,
+  )
+
+  // The scope quotes the changelog's 0.6.1 heading; promotion changes the
+  // heading, and the scope must be reread when it does.
+  const changelogHeading = read('CHANGELOG.md').match(/^## (0\.6\.1 — .+)$/mu)?.[1]
+  check(
+    'the scope quotes the changelog 0.6.1 heading as it stands',
+    changelogHeading !== undefined && flat(candidate).includes(`"${changelogHeading}"`),
+    `CHANGELOG.md says "${String(changelogHeading)}"`,
+  )
+
+  // THE FIVE-SECOND CONDITION IS NOT A FEATURE ROW. It stays in every stage and
+  // is judged on its own, and the 5000 ms limit it names is the one the live
+  // CI job and the Release workflow actually enforce.
+  const ci = read('.github', 'workflows', 'ci.yml')
+  const release = read('.github', 'workflows', 'release.yml')
+  const liveLimit = /node scripts\/assert-live-capture-latency\.mjs "[^"]+" 5000\b/u
+  check(
+    'the standing condition names its automated check and the 5000 ms live limit, judged on its own',
+    standing.includes('`check:capture-latency`') && standing.includes('within 5000 ms') && /judged on its own/u.test(flat(scope)),
+    'the standing condition lost check:capture-latency, the 5000 ms limit or its independence',
+  )
+  check(
+    'the CI capture-e2e job and the Release workflow both enforce that 5000 ms limit',
+    /^ {2}capture-e2e:$/mu.test(ci) && liveLimit.test(ci) &&
+      release.includes('- name: Gate live capture to painted editor') && liveLimit.test(release),
+    'ci.yml or release.yml no longer asserts live capture to painted editor within 5000 ms',
+  )
+  const stages = [
+    ['the 0.6.1 candidate', [candidate]],
+    ['each 0.6.2 track', plan.split('\n### ').slice(1)],
+  ]
+  for (const [name, parts] of stages) {
+    check(
+      `${name} keeps the five-second workflow as its own condition`,
+      parts.length > 0 && parts.every((part) => /^\| \d+ \| Five-second workflow\b.*standing condition/mu.test(part)),
+      `a stage of docs/RELEASE_SCOPE_0_6_1_0_6_2.md lost its "Five-second workflow" row`,
+    )
+  }
+
+  // The 0.6.2 console plan is written three times. Its four outcomes and its
+  // deadline must read the same in each, and the plugin it names must be one
+  // SPEC §11 allows.
+  const consoleTrack = sectionOf(scope, '###', 'Console context plugin')
+  const milestone = (text) => sectionOf(text, '##', 'Next milestone — 2026-12 (0.6.2 candidate; planning only)')
+  const roadmap = read('ROADMAP.md')
+  const outcomes = [/100 ms deadline/iu, /absent or denied access/iu, /exceeds? 100 ms|exceeding 100 ms/iu, /atomic-write failure/iu, /plugins\/console\//u]
+  const plans = [
+    ['ROADMAP.md', milestone(roadmap)],
+    ['docs/HANDOFF.md', milestone(handoff)],
+    ['docs/RELEASE_SCOPE_0_6_1_0_6_2.md', consoleTrack],
+  ]
+  const disagreeing = plans
+    .map(([name, text]) => [name, outcomes.filter((pattern) => !pattern.test(flat(text)))])
+    .filter(([, missing]) => missing.length > 0)
+  check(
+    'the roadmap, handoff and scope state the same console deadline and four outcomes',
+    disagreeing.length === 0,
+    disagreeing.map(([name, missing]) => `${name} lacks ${missing.map(String).join(', ')}`).join('; '),
+  )
+  const pluginName = read('SPEC.md').match(/`<plugin-name>` MUST match\s+`([^`]+)`/u)?.[1]
+  check(
+    'the planned plugin name is one SPEC §11.1 allows, with the meta.json SPEC requires',
+    pluginName !== undefined && new RegExp(pluginName, 'u').test('console') &&
+      flat(consoleTrack).includes('`meta.json` whose `name` is `console` and whose `version` is set'),
+    `SPEC plugin-name pattern ${String(pluginName)}`,
+  )
+  const consoleChecks = scriptNames.filter((name) => name.startsWith('check:') && name.includes('console'))
+  check(
+    'the console prototype check is registered and the roadmap marks its implementation',
+    /console prototype and its deterministic check are implemented in source/iu.test(flat(plan))
+      && consoleChecks.includes('check:console-plugin')
+      && /^- \[x\] Console plugin:.*check:console-plugin`?$/mu.test(roadmap),
+    consoleChecks.length > 0
+      ? `${consoleChecks.join(', ')} exists — synchronize the implementation statement or roadmap checkbox`
+      : 'the implemented console plugin check is not registered',
+  )
+
+  // A push publishes the website; only a person publishes the application.
+  const triggers = (yml) => {
+    const block = yml.match(/^on:\n((?:(?: {2}.*)?\n)*)/mu)?.[1] ?? ''
+    return [...block.matchAll(/^ {2}([a-z_]+):/gmu)].map((match) => match[1])
+  }
+  const pages = read('.github', 'workflows', 'pages.yml')
+  check(
+    'pages.yml deploys site/ on a push to main, or by hand',
+    JSON.stringify(triggers(pages)) === JSON.stringify(['push', 'workflow_dispatch']) &&
+      /branches: \[main\]/u.test(pages) && pages.includes('"site/**"') && /path: site$/mu.test(pages) &&
+      pages.includes('actions/deploy-pages@'),
+    `pages.yml triggers are ${JSON.stringify(triggers(pages))}`,
+  )
+  check(
+    'release.yml runs only when dispatched, and only for the version core/package.json builds',
+    JSON.stringify(triggers(release)) === JSON.stringify(['workflow_dispatch']) &&
+      release.includes('$version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version') &&
+      release.includes('"v$version" -ne $env:RELEASE_TAG') &&
+      release.includes('refusing to replace its assets') &&
+      release.includes('run: npm run qa:rc -- --fail-fast'),
+    `release.yml triggers are ${JSON.stringify(triggers(release))}`,
+  )
+  check(
+    'the scope states that contract: pages.yml for the website, release.yml by hand',
+    /\[pages\.yml\]\([^)]*\) \| A push to `main` that touches `site\/\*\*`/u.test(publication) &&
+      /\[release\.yml\]\([^)]*\) \| `workflow_dispatch` only/u.test(publication) &&
+      /A merge to `main` never publishes an installer/u.test(flat(publication)),
+    'the publication contract in docs/RELEASE_SCOPE_0_6_1_0_6_2.md no longer matches the workflows',
+  )
+
+  const linking = ['docs/README.md', 'docs/HANDOFF.md', 'ROADMAP.md'].filter(
+    (name) => !/\]\((?:docs\/)?RELEASE_SCOPE_0_6_1_0_6_2\.md\)/u.test(read(...name.split('/'))),
+  )
+  check(
+    'the docs index, handoff and roadmap all point at the scope',
+    linking.length === 0,
+    `no link to RELEASE_SCOPE_0_6_1_0_6_2.md in ${linking.join(', ')}`,
+  )
+}
+
 console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
@@ -826,6 +1211,31 @@ console.log('\nSPEC §4, §8, §14 define annotations.json as OPTIONAL')
       /await readAnnotationsSafe\(\s*dirPath/u.test(exporterSource),
     'exporter.ts addManifestPlugin or refreshPackDocs does not use readAnnotationsSafe',
   )
+  // Issue #500: the reference frame is the FOCUSED display's snapshot.png
+  // (SPEC §8.2). displays[0] is another screen whenever the cursor was not on
+  // the first one, and an image pack declares no displays at all.
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  const packdocsSource = readFileSync(join(CORE, 'src', 'main', 'packdocs.ts'), 'utf8')
+  check(
+    'reference-size fallbacks never read displays[0] (Issue #500)',
+    ![exporterSource, reportSource, packdocsSource].some((source) =>
+      /displays\?\.\[0\]\?\.snapshot_(width|height)/u.test(source),
+    ),
+    'a document or readAnnotationsSafe still falls back to displays[0] instead of the focused display',
+  )
+  check(
+    'addManifestPlugin and refreshPackDocs hand readAnnotationsSafe the manifest (Issue #500)',
+    /await readAnnotationsSafe\(\s*handle\.dirPath,\s*nextManifest\s*\)/u.test(exporterSource) &&
+      /await readAnnotationsSafe\(\s*dirPath,\s*manifest\s*\)/u.test(exporterSource) &&
+      /pngPixelSize\(join\(dirPath, packSnapshotName\(/u.test(exporterSource),
+    'readAnnotationsSafe callers no longer pass the manifest, or it no longer measures snapshot.png',
+  )
+  check(
+    'every document prints the shared referenceFrameSize (Issue #500)',
+    (packdocsSource.match(/referenceFrameSize\(manifest, annotationsFile\)/gu) ?? []).length === 3 &&
+      reportSource.includes('= referenceFrameSize(manifest, annotationsFile)'),
+    'README.md, report.md or a skill computes its own reference size',
+  )
 }
 
 console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotationsFile.annotations is omitted or empty (Issue #207)')
@@ -942,6 +1352,12 @@ console.log('\nreport.md and README.md list declared plugin payloads (Issue #429
   const readmeWithPlugin = buildReadme(manifestWithGit, annotations, 'en', false, true)
   const reportWithoutPlugins = buildReport(manifestWithoutPlugins, annotations, 'en', false, true)
   const readmeWithoutPlugins = buildReadme(manifestWithoutPlugins, annotations, 'en', false, true)
+  const manifestWithConsole = {
+    ...manifestWithGit,
+    plugins: [{ name: 'console', version: '0.1.0', path: 'plugins/console/' }],
+  }
+  const reportWithConsole = buildReport(manifestWithConsole, annotations, 'en', false, true)
+  const readmeWithConsole = buildReadme(manifestWithConsole, annotations, 'en', false, true)
 
   check(
     'report.md lists the declared Git plugin path and purpose',
@@ -954,6 +1370,14 @@ console.log('\nreport.md and README.md list declared plugin payloads (Issue #429
   check(
     'report.md and README.md omit plugin rows when no plugins are declared',
     !reportWithoutPlugins.includes('plugins/git/') && !readmeWithoutPlugins.includes('| plugins/git/ |'),
+  )
+  check(
+    'report.md and README.md explain the console log and execution state payloads',
+    reportWithConsole.includes(
+      '- plugins/console/ — console output log and execution state at capture time',
+    ) && readmeWithConsole.includes(
+      '| plugins/console/ | console output log and execution state at capture time |',
+    ),
   )
 }
 
@@ -1437,6 +1861,108 @@ console.log('\nMP4 replay packs with render pending emit replay_annotated.mp4 (I
     webmCappedReport.includes('and replay_annotated.webm shows them all.') &&
       !webmCappedReport.includes('replay_annotated.mp4'),
     `WebM capped keyframes emitted unexpected media names:\n${webmCappedReport}`,
+  )
+}
+
+console.log('\nThe handoff and roadmap preserve candidate and console contracts (Issue #446)')
+{
+  const handoff = readFileSync(join(ROOT, 'docs', 'HANDOFF.md'), 'utf8')
+  const roadmap = readFileSync(join(ROOT, 'ROADMAP.md'), 'utf8')
+  const loopProject = readFileSync(join(ROOT, '.loop', 'project.md'), 'utf8')
+  const normalize = (text) => text.replace(/\s+/gu, ' ').trim()
+  const section = (text, heading) => {
+    text = text.replace(/\r\n/gu, '\n')
+    const start = text.indexOf(`\n## ${heading}\n`)
+    if (start === -1) return ''
+    const next = text.indexOf('\n## ', start + 1)
+    return text.slice(start, next === -1 ? undefined : next)
+  }
+  const bullet = (text, title) => {
+    text = text.replace(/\r\n/gu, '\n')
+    const start = text.indexOf(`- **${title}**`)
+    if (start === -1) return ''
+    const rest = text.slice(start)
+    const next = rest.indexOf('\n- **', 1)
+    return normalize(rest.slice(0, next === -1 ? undefined : next))
+  }
+
+  const candidate = section(handoff, '0.6.1 candidate baseline — not released')
+  const git = bullet(candidate, 'Git capture context')
+  const opaque = bullet(candidate, 'Opaque Share Copy redaction')
+  const gitScript = packageJson.scripts['check:git-plugin']
+  const shareScript = packageJson.scripts['check:share-bundle']
+  check(
+    'the 0.6.1 Git handoff names its regression check and measured, content-free capture contract',
+    gitScript !== undefined && git.includes('check:git-plugin') &&
+      git.includes('plugins/git/meta.json') && git.includes('plugins/git/state.json') &&
+      git.includes('--no-optional-locks') && git.includes('100 ms') &&
+      git.includes('never file contents'),
+    'docs/HANDOFF.md or core/package.json lost the Git capture check, outputs, deadline or privacy boundary',
+  )
+  check(
+    'the 0.6.1 opaque redaction handoff names its regression check and pixel boundary',
+    shareScript !== undefined && opaque.includes('check:share-bundle') &&
+      opaque.includes('opaqueRedaction: true') && opaque.includes('#1a1a1a') &&
+      opaque.includes('pixels outside it are kept') &&
+      opaque.includes('original media and structured capture context are excluded'),
+    'docs/HANDOFF.md or core/package.json lost the opaque redaction check or its preservation/exclusion rules',
+  )
+
+  const consoleHeading = 'Next milestone — 2026-12 (0.6.2 candidate; planning only)'
+  const consoleDocs = [
+    ['docs/HANDOFF.md', normalize(section(handoff, consoleHeading))],
+    ['ROADMAP.md', normalize(section(roadmap, consoleHeading))],
+  ]
+  const outcomes = [
+    {
+      name: 'successful collection',
+      matches: (text) => text.includes('successful collection') &&
+        text.includes('declared payload and metadata'),
+    },
+    {
+      name: 'absent or denied access',
+      matches: (text) => /absent or denied(?: access)?/u.test(text) &&
+        /(?:no plugin declaration|adds no plugin)/u.test(text) &&
+        /does not fail (?:the )?sav(?:e|ing)/u.test(text),
+    },
+    {
+      name: 'collection exceeding 100 ms',
+      matches: (text) => /exceeds? 100 ms|exceeding 100 ms/u.test(text) &&
+        text.includes('abandoned') && /does not fail (?:the )?sav(?:e|ing)/u.test(text),
+    },
+    {
+      name: 'atomic-write failure',
+      matches: (text) => text.includes('atomic-write failure') &&
+        /no partial (?:plugin )?declaration or temporary file/u.test(text) &&
+        /does not fail (?:the )?sav(?:e|ing)/u.test(text),
+    },
+  ]
+  for (const outcome of outcomes) {
+    const missing = consoleDocs.filter(([, text]) => !outcome.matches(text)).map(([name]) => name)
+    check(
+      `both milestone documents preserve the ${outcome.name} acceptance contract`,
+      missing.length === 0,
+      `missing or inconsistent in ${missing.join(', ') || '(none)'}`,
+    )
+  }
+  const consoleRequirements = consoleDocs.map(([name, text]) => ({
+    name,
+    valid: /five.second capture workflow/u.test(text) && text.includes('100 ms'),
+  }))
+  check(
+    'both milestone documents keep the five-second workflow and 100 ms deadline',
+    consoleRequirements.every(({ valid }) => valid),
+    `missing from ${consoleRequirements.filter(({ valid }) => !valid).map(({ name }) => name).join(', ')}`,
+  )
+
+  const deployment = normalize(loopProject)
+  const handoffDeployment = normalize(handoff)
+  check(
+    'handoff and project deployment records keep pages.yml web deploy and manual release.yml',
+    deployment.includes('pages.yml') && /release\.yml.{0,40}사람이 직접 실행/u.test(deployment) &&
+      handoffDeployment.includes('pages.yml') && handoffDeployment.includes('release.yml') &&
+      /release\.yml.{0,60}manually dispatched/u.test(handoffDeployment),
+    'docs/HANDOFF.md or .loop/project.md no longer states the official deployment contract',
   )
 }
 

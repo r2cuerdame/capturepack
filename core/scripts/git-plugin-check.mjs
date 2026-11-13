@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -28,7 +28,7 @@ try {
     '--bundle', '--platform=node', '--format=cjs', `--outfile=${storeBundle}`,
   ], { stdio: 'inherit' })
   const require = createRequire(import.meta.url)
-  const { collectGitState, writeGitPlugin, gitPluginDeclaration } = require(bundle)
+  const { collectGitState, writeGitPlugin, tryWriteGitPlugin, gitPluginDeclaration } = require(bundle)
   const { openPack } = require(storeBundle)
   const gitSource = readFileSync(path.join(here, '..', 'src', 'main', 'plugins', 'git.ts'), 'utf8')
   const repo = path.join(work, 'repo')
@@ -244,9 +244,9 @@ try {
   }
   check('a state-file publish failure is propagated', writeFailed)
   check('a failed state-file publish leaves no metadata that advertises a partial plugin',
-    !readdirSync(failedPluginDir).includes('meta.json'))
-  check('a failed state-file publish removes its staged temporary file',
-    !readdirSync(failedPluginDir).some((name) => name.endsWith('.tmp')))
+    !existsSync(path.join(failedPluginDir, 'meta.json')))
+  check('a failed state-file publish removes its staged temporary file and unpublished directory',
+    !existsSync(failedPluginDir))
 
   const failedMetaPack = path.join(work, 'failed-meta-pack')
   const failedMetaDir = path.join(failedMetaPack, 'plugins', 'git')
@@ -257,11 +257,120 @@ try {
   } catch {
     metaWriteFailed = true
   }
-  const publishedState = JSON.parse(readFileSync(path.join(failedMetaDir, 'state.json'), 'utf8'))
-  check('a metadata publish failure is propagated after the complete state is written',
-    metaWriteFailed && publishedState.commit === state.commit)
-  check('a failed metadata publish removes its staged temporary file',
-    !readdirSync(failedMetaDir).some((name) => name.endsWith('.tmp')))
+  check('a metadata publish failure is propagated', metaWriteFailed)
+  check('a failed metadata publish leaves no state file behind',
+    !existsSync(path.join(failedMetaDir, 'state.json')))
+  check('a failed metadata publish removes its staged temporary file and unpublished directory',
+    !existsSync(failedMetaDir))
+
+  // #442. A capture pack starts with no plugins/ at all, and a failed write must
+  // leave it exactly so: no state.json, no temporary file and no half-made
+  // plugins/git/ for a reader that lists plugins/ by directory (the MCP store,
+  // a full ZIP) to find. Each step is failed in a fresh pack: creating
+  // plugins/git/ after plugins/ was made, and each publish at its rename.
+  const fsPromises = require('node:fs/promises')
+  const realRename = fsPromises.rename
+  const realMkdir = fsPromises.mkdir
+  let renamed = []
+  const failRenameOf = (fileName) => {
+    renamed = []
+    fsPromises.rename = async (from, to) => {
+      renamed.push(path.basename(String(to)))
+      if (path.basename(String(to)) === fileName) {
+        throw Object.assign(new Error(`injected ${fileName} publish failure`), { code: 'EIO' })
+      }
+      return realRename(from, to)
+    }
+  }
+  const failMkdirOf = (dirName) => {
+    fsPromises.mkdir = async (target, options) => {
+      if (path.basename(String(target)) === dirName) {
+        throw Object.assign(new Error(`injected ${dirName}/ creation failure`), { code: 'EIO' })
+      }
+      return realMkdir(target, options)
+    }
+  }
+  const restoreRename = () => { fsPromises.rename = realRename }
+  const restoreFs = () => { fsPromises.rename = realRename; fsPromises.mkdir = realMkdir }
+  const listTree = (root) => readdirSync(root, { recursive: true }).map(String).sort()
+  const injectedSteps = [
+    ['plugins/git/ creation', () => failMkdirOf('git')],
+    ['state.json publish', () => failRenameOf('state.json')],
+    ['meta.json publish', () => failRenameOf('meta.json')],
+  ]
+  for (const [step, inject] of injectedSteps) {
+    const freshPack = path.join(work, `fresh-${step.replace(/\W+/gu, '-')}-failure`)
+    mkdirSync(freshPack)
+    writeFileSync(path.join(freshPack, 'snapshot.png'), 'media\n')
+    const before = listTree(freshPack)
+    inject()
+    let freshFailed = false
+    try {
+      await writeGitPlugin(freshPack, state)
+    } catch {
+      freshFailed = true
+    } finally {
+      restoreFs()
+    }
+    check(`a ${step} failure in a fresh pack is propagated`, freshFailed)
+    if (step === 'meta.json publish') {
+      check('metadata is published only after the state file landed',
+        JSON.stringify(renamed) === JSON.stringify(['state.json', 'meta.json']))
+    }
+    check(`a failed ${step} leaves the fresh pack exactly as it was`,
+      JSON.stringify(listTree(freshPack)) === JSON.stringify(before))
+    check(`a failed ${step} shows no plugin to the pack reader`,
+      openPack(freshPack, 'dir', `fresh-${step}`).plugins().length === 0)
+  }
+
+  // A plugin an earlier write already published stays complete: each of its
+  // files is replaced atomically, so a failed rewrite must not delete it.
+  const republishPack = path.join(work, 'republish-pack')
+  const republishDir = path.join(republishPack, 'plugins', 'git')
+  await writeGitPlugin(republishPack, state)
+  const publishedFiles = listTree(republishDir)
+  const publishedStateText = readFileSync(path.join(republishDir, 'state.json'), 'utf8')
+  failRenameOf('state.json')
+  let republishFailed = false
+  try {
+    await writeGitPlugin(republishPack, { ...state, branch: 'rewritten' })
+  } catch {
+    republishFailed = true
+  } finally {
+    restoreRename()
+  }
+  check('a failed rewrite keeps the plugin an earlier write already published', republishFailed
+    && readFileSync(path.join(republishDir, 'state.json'), 'utf8') === publishedStateText
+    && JSON.stringify(listTree(republishDir)) === JSON.stringify(publishedFiles))
+
+  // The capture save calls the never-fail wrapper: a failed plugin write is
+  // reported as unpublished, never thrown, and cannot hold the save open.
+  const wrappedPack = path.join(work, 'wrapped-pack')
+  mkdirSync(wrappedPack)
+  failRenameOf('meta.json')
+  const wrapStarted = performance.now()
+  let wrapped
+  let wrapThrew = false
+  try {
+    wrapped = await tryWriteGitPlugin(wrappedPack, state)
+  } catch {
+    wrapThrew = true
+  } finally {
+    restoreRename()
+  }
+  const wrapMs = performance.now() - wrapStarted
+  check('the save-side wrapper reports a failed write as unpublished instead of throwing',
+    !wrapThrew && wrapped === false && readdirSync(wrappedPack).length === 0)
+  check(`a failed write returns well inside the five-second workflow (${wrapMs.toFixed(1)} ms)`, wrapMs < 5_000)
+  const wrappedOkPack = path.join(work, 'wrapped-ok-pack')
+  check('the save-side wrapper reports a completed write as published',
+    await tryWriteGitPlugin(wrappedOkPack, state) === true
+    && existsSync(path.join(wrappedOkPack, 'plugins', 'git', 'meta.json')))
+  const exporterSource = readFileSync(path.join(here, '..', 'src', 'main', 'exporter.ts'), 'utf8')
+  check('the capture save declares Git context only after the never-fail wrapper published it',
+    /if \(gitState && await tryWriteGitPlugin\(dirPath, gitState\)\) \{\s*gitDeclaration = gitPluginDeclaration\(\)/u
+      .test(exporterSource)
+    && !exporterSource.includes('writeGitPlugin('))
 } finally {
   rmSync(work, { recursive: true, force: true })
 }

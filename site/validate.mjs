@@ -44,7 +44,6 @@ const packageVersion = String(packageJson.version ?? '')
 // cannot be told apart from it once it leaves this folder.
 const PUBLIC_VERSION = '0.6.0'
 const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
-const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
 /** Negative, zero or positive, comparing major.minor.patch left to right. */
 function compareVersions(left, right) {
   const a = left.split('.').map(Number)
@@ -54,8 +53,11 @@ function compareVersions(left, right) {
   }
   return 0
 }
-const packageIsCandidateAhead =
-  candidateBase !== undefined && compareVersions(candidateBase, PUBLIC_VERSION) > 0
+function isCandidateAhead(version, publicVersion) {
+  const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(version)?.[1]
+  return candidateBase !== undefined && compareVersions(candidateBase, publicVersion) > 0
+}
+const packageIsCandidateAhead = isCandidateAhead(packageVersion, PUBLIC_VERSION)
 const supported = ['en', 'ko', 'ja', 'zh', 'es', 'fr', 'de', 'pt', 'ru']
 const motionStems = ['capturepack-time-machine', 'capturepack-still-context']
 const motionFiles = supported.flatMap((lang) =>
@@ -371,6 +373,13 @@ check(
     && packageLock.version === packageVersion
     && packageLock.packages?.['']?.version === packageVersion,
   `${packageVersion} (public ${PUBLIC_VERSION}), lock ${packageLock.version}`,
+)
+check(
+  'release candidate comparison accepts only a strictly newer patch line',
+  isCandidateAhead('0.6.1-rc.1', PUBLIC_VERSION)
+    && !isCandidateAhead('0.6.0-rc.1', PUBLIC_VERSION)
+    && !isCandidateAhead('0.5.9-rc.9', PUBLIC_VERSION)
+    && !isCandidateAhead('0.6.1-beta.1', PUBLIC_VERSION),
 )
 check(
   `README names ${PUBLIC_VERSION} as the public release`,

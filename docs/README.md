@@ -61,10 +61,12 @@ work does not settle remains open: a real three-screen capture
 | [Release QA](QA.md) | Deterministic gates, forensic pack checks, and manual Windows matrix |
 | [Releasing](RELEASING.md) | Manual verified-draft publication workflow |
 | [Code signing](CODE_SIGNING.md) | Current unsigned-build policy and signing plan |
-| [0.3.1 dependency audit](DEPENDENCY-AUDIT-0.3.1.md) | Production/dev dependency findings for that release line |
+| [0.6.1 candidate dependency audit](DEPENDENCY-AUDIT-0.6.1.md) | Current candidate production boundary and remaining build-tool findings |
+| [Historical 0.3.1 dependency audit](DEPENDENCY-AUDIT-0.3.1.md) | Production/dev dependency findings for that release line |
 | [DXGI timing reference](DXGI_TIMING_REFERENCE.md) | Windows capture timing evidence and terminology |
 | [DXGI replay ring foundation](DXGI_REPLAY_RING.md) | Native ring self-test, capability handshake, and field-probe boundary |
 | [0.5.1 stability gate](RELEASE_0_5_1_STABILITY_GATE.md) | Stability gate audit, #240/#243 disposition, native replay exit path status, and QA findings |
+| [0.6.1 / 0.6.2 scope](RELEASE_SCOPE_0_6_1_0_6_2.md) | 0.6.1 candidate and 0.6.2 plan boundary, completion conditions, the five-second condition and the publication contract |
 
 ## Integrations and schemas
 
@@ -73,6 +75,7 @@ work does not settle remains open: a real three-screen capture
 | [MCP](MCP.md) | Loopback, read-only tools for already-saved packs |
 | [Temporal provider API](temporal-provider-api.md) | Provider contract and timing rules |
 | [One-month operation observation](OBSERVATION.md) | Start, review, and record the no-manual-reinstall stability observation |
+| [One-month observation log](OBSERVATION-LOG.md) | Dated ledger, weekly review checklist, and passed/failed/inconclusive verdict rules for that observation |
 | [Manifest schema](schemas/manifest.schema.json) | Machine-readable manifest validation |
 | [Annotations schema](schemas/annotations.schema.json) | Machine-readable annotation validation |
 | [Timeline schema](schemas/timeline.schema.json) | Machine-readable event timeline validation |

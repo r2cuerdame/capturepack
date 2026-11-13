@@ -1,8 +1,12 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import AdmZip from 'adm-zip'
 import { IPC } from '../src/shared/ipc'
+import type { HistoryListResult, HistoryRenameResult } from '../src/shared/ipc'
 import { loadSettings } from '../src/main/settings'
+import { uiT } from '../src/main/locale'
 import {
+  disposeHistory,
   openHistoryWindow,
   registerHistoryIpc,
   resolveHistoryPlayFile,
@@ -441,6 +445,234 @@ async function run(): Promise<void> {
       )
       check('shell.openPath was NOT called when media is completely missing', electronStub.__openedPaths.length === 0)
     }
+
+    console.log('\n--- 4b. Archive extension casing & rename collision guards (#505) ---')
+    const listHandler = electronStub.__handlers.get(IPC.historyList)
+    const renameHandler = electronStub.__handlers.get(IPC.historyRename)
+    check('IPC.historyList handler registered in ipcMain', typeof listHandler === 'function')
+    check('IPC.historyRename handler registered in ipcMain', typeof renameHandler === 'function')
+
+    if (typeof listHandler === 'function' && typeof renameHandler === 'function') {
+      const mockEvent = { sender: electronStub.__historyWebContents }
+      const renameDir = path.join(tmpBase, 'rename-cases')
+      fs.mkdirSync(renameDir, { recursive: true })
+
+      const writeArchivePack = (filePath: string, id: string): string => {
+        const archive = new AdmZip()
+        const archiveManifest: Manifest = {
+          ...manifestScreenshotOnly,
+          id,
+        }
+        archive.addFile('manifest.json', Buffer.from(JSON.stringify(archiveManifest), 'utf8'))
+        archive.addFile('snapshot.png', Buffer.from('fake-snapshot', 'utf8'))
+        archive.writeZip(filePath)
+        return filePath
+      }
+      const writeFolderPack = (dirPath: string, id: string): string => {
+        fs.mkdirSync(dirPath, { recursive: true })
+        fs.writeFileSync(
+          path.join(dirPath, 'manifest.json'),
+          JSON.stringify({ ...manifestScreenshotOnly, id }),
+        )
+        fs.writeFileSync(path.join(dirPath, 'snapshot.png'), 'fake-snapshot')
+        return dirPath
+      }
+
+      const demoZip = writeArchivePack(path.join(renameDir, 'Demo.ZIP'), 'demo-upper-zip')
+      const unchangedZip = writeArchivePack(path.join(renameDir, 'Unchanged.ZIP'), 'unchanged-upper-zip')
+      const mixedPack = writeArchivePack(path.join(renameDir, 'Mixed.CapturePack'), 'mixed-capturepack')
+      const alphaZip = writeArchivePack(path.join(renameDir, 'Alpha.zip'), 'alpha-zip')
+      const legacySrcPack = writeArchivePack(path.join(renameDir, 'LegacySrc.CapturePack'), 'legacy-src')
+      writeFolderPack(path.join(renameDir, 'Beta'), 'beta-folder')
+      writeArchivePack(path.join(renameDir, 'OtherFmt.CapturePack'), 'other-fmt')
+      writeArchivePack(path.join(renameDir, 'UpperOther.ZIP'), 'upper-other')
+      const forNotesZip = writeArchivePack(path.join(renameDir, 'ForNotes.zip'), 'for-notes')
+      const plainUserDir = path.join(renameDir, 'UserNotes')
+      fs.mkdirSync(plainUserDir, { recursive: true })
+      fs.writeFileSync(path.join(plainUserDir, 'notes.txt'), 'not a capturepack')
+      const caseUpperZip = writeArchivePack(path.join(renameDir, 'casepack.ZIP'), 'case-upper-zip')
+      const casePlainZip = writeArchivePack(path.join(renameDir, 'plaincase.zip'), 'case-plain-zip')
+
+      settings.outputDir = renameDir
+      disposeHistory()
+
+      const initialList = (await listHandler(mockEvent)) as HistoryListResult
+      const demoCard = initialList.packs.find((p) => p.path === demoZip)
+      const mixedCard = initialList.packs.find((p) => p.path === mixedPack)
+      check(
+        'uppercase .ZIP archive displays pure stem name in History list',
+        demoCard?.name === 'Demo' && demoCard.kind === 'zip',
+        JSON.stringify({ name: demoCard?.name, kind: demoCard?.kind }),
+      )
+      check(
+        'mixed-case .CapturePack archive displays pure stem name in History list',
+        mixedCard?.name === 'Mixed' && mixedCard.kind === 'zip',
+        JSON.stringify({ name: mixedCard?.name, kind: mixedCard?.kind }),
+      )
+      const brokenZipSummary = summarize({
+        id: 'Broken',
+        path: path.join(renameDir, 'Broken.ZIP'),
+        kind: 'zip',
+        mtimeMs: 0,
+      })
+      check(
+        'summarize strips uppercase .ZIP suffix even on unreadable archive entries',
+        brokenZipSummary.name === 'Broken',
+        brokenZipSummary.name,
+      )
+
+      const unchangedBefore = fs.statSync(unchangedZip)
+      const noopResult = (await renameHandler(
+        mockEvent,
+        unchangedZip,
+        '  Unchanged  ',
+      )) as HistoryRenameResult
+      const unchangedAfter = fs.statSync(unchangedZip)
+      check(
+        'confirming unchanged stem on uppercase .ZIP archive is a no-op without moving disk file',
+        noopResult.ok === true
+          && noopResult.path === unchangedZip
+          && fs.readdirSync(renameDir).includes('Unchanged.ZIP')
+          && unchangedAfter.mtimeMs === unchangedBefore.mtimeMs,
+        JSON.stringify(noopResult),
+      )
+
+      const renamedUpper = (await renameHandler(
+        mockEvent,
+        demoZip,
+        'RenamedUpper',
+      )) as HistoryRenameResult
+      const entriesAfterUpper = fs.readdirSync(renameDir)
+      check(
+        'renaming .ZIP archive preserves uppercase .ZIP suffix without duplicating extension',
+        renamedUpper.ok === true
+          && renamedUpper.path === path.join(renameDir, 'RenamedUpper.ZIP')
+          && entriesAfterUpper.includes('RenamedUpper.ZIP')
+          && !entriesAfterUpper.includes('Demo.ZIP')
+          && !entriesAfterUpper.includes('RenamedUpper.zip')
+          && !entriesAfterUpper.includes('RenamedUpper.ZIP.zip'),
+        JSON.stringify({ renamedUpper, entriesAfterUpper }),
+      )
+
+      disposeHistory()
+      const renamedMixed = (await renameHandler(
+        mockEvent,
+        mixedPack,
+        'RenamedMixed',
+      )) as HistoryRenameResult
+      const entriesAfterMixed = fs.readdirSync(renameDir)
+      check(
+        'renaming .CapturePack archive preserves mixed-case .CapturePack suffix without converting to .zip',
+        renamedMixed.ok === true
+          && renamedMixed.path === path.join(renameDir, 'RenamedMixed.CapturePack')
+          && entriesAfterMixed.includes('RenamedMixed.CapturePack')
+          && !entriesAfterMixed.includes('Mixed.CapturePack')
+          && !entriesAfterMixed.includes('RenamedMixed.zip')
+          && !entriesAfterMixed.includes('RenamedMixed.CapturePack.zip'),
+        JSON.stringify({ renamedMixed, entriesAfterMixed }),
+      )
+
+      disposeHistory()
+      const expectedExistsError = uiT(settings)('history.errNameExists')
+      const folderCollisionExact = (await renameHandler(
+        mockEvent,
+        alphaZip,
+        'Beta',
+      )) as HistoryRenameResult
+      const folderCollisionCase = (await renameHandler(
+        mockEvent,
+        alphaZip,
+        'beta',
+      )) as HistoryRenameResult
+      check(
+        'standalone archive rename colliding with existing CapturePack folder is rejected with errNameExists',
+        folderCollisionExact.ok === false
+          && folderCollisionExact.error === expectedExistsError
+          && folderCollisionCase.ok === false
+          && folderCollisionCase.error === expectedExistsError
+          && fs.existsSync(alphaZip)
+          && !fs.existsSync(path.join(renameDir, 'Beta.zip')),
+        JSON.stringify({ folderCollisionExact, folderCollisionCase }),
+      )
+
+      disposeHistory()
+      const listAfterFolderReject = (await listHandler(mockEvent)) as HistoryListResult
+      check(
+        'rejected folder-collision rename keeps both standalone archive and folder pack visible in History',
+        listAfterFolderReject.packs.some((p) => p.name === 'Alpha' && p.kind === 'zip')
+          && listAfterFolderReject.packs.some((p) => p.name === 'Beta' && p.kind === 'dir'),
+      )
+
+      const plainDirCoexist = (await renameHandler(
+        mockEvent,
+        forNotesZip,
+        'UserNotes',
+      )) as HistoryRenameResult
+      disposeHistory()
+      const listAfterPlainDir = (await listHandler(mockEvent)) as HistoryListResult
+      check(
+        'standalone archive can share a stem with a plain non-CapturePack user directory and stays listed',
+        plainDirCoexist.ok === true
+          && plainDirCoexist.path === path.join(renameDir, 'UserNotes.zip')
+          && listAfterPlainDir.packs.some((p) => p.name === 'UserNotes' && p.kind === 'zip'),
+        JSON.stringify(plainDirCoexist),
+      )
+
+      const crossExtCollision = (await renameHandler(
+        mockEvent,
+        alphaZip,
+        'OtherFmt',
+      )) as HistoryRenameResult
+      const crossExtCollisionLower = (await renameHandler(
+        mockEvent,
+        alphaZip,
+        'otherfmt',
+      )) as HistoryRenameResult
+      const reverseCrossExtCollision = (await renameHandler(
+        mockEvent,
+        legacySrcPack,
+        'UpperOther',
+      )) as HistoryRenameResult
+      check(
+        'standalone archive rename colliding with another archive format of the same stem is rejected',
+        crossExtCollision.ok === false
+          && crossExtCollision.error === expectedExistsError
+          && crossExtCollisionLower.ok === false
+          && crossExtCollisionLower.error === expectedExistsError
+          && reverseCrossExtCollision.ok === false
+          && reverseCrossExtCollision.error === expectedExistsError
+          && fs.existsSync(alphaZip)
+          && fs.existsSync(legacySrcPack)
+          && !fs.existsSync(path.join(renameDir, 'OtherFmt.zip'))
+          && !fs.existsSync(path.join(renameDir, 'UpperOther.CapturePack')),
+        JSON.stringify({ crossExtCollision, reverseCrossExtCollision }),
+      )
+
+      const caseOnlyUpper = (await renameHandler(
+        mockEvent,
+        caseUpperZip,
+        'CasePack',
+      )) as HistoryRenameResult
+      disposeHistory()
+      const caseOnlyPlain = (await renameHandler(
+        mockEvent,
+        casePlainZip,
+        'PlainCase',
+      )) as HistoryRenameResult
+      const entriesAfterCaseOnly = fs.readdirSync(renameDir)
+      check(
+        'case-only rename of an archive pack own stem succeeds and preserves its extension casing',
+        caseOnlyUpper.ok === true
+          && caseOnlyUpper.path === path.join(renameDir, 'CasePack.ZIP')
+          && caseOnlyPlain.ok === true
+          && caseOnlyPlain.path === path.join(renameDir, 'PlainCase.zip')
+          && entriesAfterCaseOnly.includes('CasePack.ZIP')
+          && !entriesAfterCaseOnly.includes('casepack.ZIP')
+          && entriesAfterCaseOnly.includes('PlainCase.zip')
+          && !entriesAfterCaseOnly.includes('plaincase.zip'),
+        JSON.stringify({ caseOnlyUpper, caseOnlyPlain, entriesAfterCaseOnly }),
+      )
+    }
   }
 
   console.log('\n--- 5. Static contract & source checks ---')
@@ -473,8 +705,15 @@ async function run(): Promise<void> {
       "playBtn.title =\n    !p.hasReplay\n      ? t('history.playNoReplay')",
     ),
   )
+  check(
+    'historyWindow.ts preserves archive suffix case and checks folder/sibling archive stem collisions',
+    historySource.includes('archiveSuffix(entry.path) ?? PACK_EXT')
+      && historySource.includes('directoryHoldsCapturePack(stemTarget)')
+      && historySource.includes('hasOtherSiblingArchive(stemTarget, entry.path)'),
+  )
   } finally {
     try {
+      disposeHistory()
       fs.rmSync(tmpBase, { recursive: true, force: true })
     } catch {
       // best-effort cleanup
