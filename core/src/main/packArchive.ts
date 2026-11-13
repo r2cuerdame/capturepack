@@ -39,10 +39,21 @@ export function packArchiveExt(name: string): string | null {
   return PACK_ARCHIVE_EXTS.find((ext) => lower.endsWith(ext)) ?? null
 }
 
+/**
+ * Exact-case archive suffix on `p` when at least a one-character stem precedes
+ * it, or null when `p` is not a named pack archive.
+ */
+export function archiveSuffix(p: string): string | null {
+  const base = path.basename(p)
+  const ext = packArchiveExt(base)
+  return ext !== null && base.length > ext.length ? base.slice(-ext.length) : null
+}
+
 /** An archive's display name: its own basename, minus whichever suffix it has. */
 export function archiveStem(p: string): string {
-  const ext = packArchiveExt(p)
-  return ext === null ? path.basename(p) : path.basename(p, ext)
+  const base = path.basename(p)
+  const suffix = archiveSuffix(base)
+  return suffix === null ? base : base.slice(0, -suffix.length)
 }
 
 /**
@@ -70,6 +81,47 @@ export function siblingArchive(dirPath: string): string | null {
     return candidate
   }
   return null
+}
+
+/**
+ * True when another archive (`.zip` or `.capturepack`, regardless of suffix
+ * case) already occupies `stemPath`, ignoring `ignorePath` itself and validated
+ * `.share.zip` Share Copies.
+ */
+export function hasOtherSiblingArchive(stemPath: string, ignorePath?: string): boolean {
+  const ignored = ignorePath === undefined ? null : path.resolve(ignorePath).toLowerCase()
+  const isConflict = (candidate: string): boolean => {
+    if (ignored !== null && path.resolve(candidate).toLowerCase() === ignored) return false
+    try {
+      if (!fs.statSync(candidate).isFile()) return false
+    } catch {
+      return false
+    }
+    if (
+      candidate.toLowerCase().endsWith(SHARE_BUNDLE_SUFFIX) &&
+      isShareBundleArchive(candidate)
+    ) {
+      return false
+    }
+    return true
+  }
+
+  for (const ext of PACK_ARCHIVE_EXTS) {
+    if (isConflict(`${stemPath}${ext}`)) return true
+  }
+
+  const parent = path.dirname(stemPath)
+  const wantStem = path.basename(stemPath).toLowerCase()
+  try {
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      if (archiveSuffix(entry.name) === null) continue
+      if (archiveStem(entry.name).toLowerCase() !== wantStem) continue
+      if (isConflict(path.join(parent, entry.name))) return true
+    }
+  } catch {
+    // Unreadable or absent parent directory: rely on the direct probes above.
+  }
+  return false
 }
 
 /** Fixed sibling path of the derived share copy for one pack folder. */

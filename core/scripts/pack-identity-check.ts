@@ -13,6 +13,7 @@ import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../src/shared/packIdentity'
 import { createLivePackStore } from '../src/main/mcp/store'
+import { archiveStem, archiveSuffix, hasOtherSiblingArchive } from '../src/main/packArchive'
 
 const root = mkdtempSync(path.join(tmpdir(), 'capturepack-identity-'))
 const cases: { name: string; build: () => string; pack: boolean }[] = []
@@ -136,6 +137,73 @@ checkLive(
 const second = movedStore.latest()
 checkLive(second.path.startsWith(outB), `next request follows a changed folder — ${second.path}`)
 liveStore.dispose()
+
+console.log('ARCHIVE SUFFIX, STEM & SIBLING COLLISIONS')
+const suffixCases: Array<{ file: string; suffix: string | null; stem: string }> = [
+  { file: 'Demo.zip', suffix: '.zip', stem: 'Demo' },
+  { file: 'Demo.ZIP', suffix: '.ZIP', stem: 'Demo' },
+  { file: 'Demo.ZiP', suffix: '.ZiP', stem: 'Demo' },
+  { file: 'Demo.capturepack', suffix: '.capturepack', stem: 'Demo' },
+  { file: 'Demo.CapturePack', suffix: '.CapturePack', stem: 'Demo' },
+  { file: 'Demo.CAPTUREPACK', suffix: '.CAPTUREPACK', stem: 'Demo' },
+  { file: 'Dotted.Name.CapturePack', suffix: '.CapturePack', stem: 'Dotted.Name' },
+  { file: '.ZIP', suffix: null, stem: '.ZIP' },
+  { file: '.CapturePack', suffix: null, stem: '.CapturePack' },
+  { file: 'PlainFolder', suffix: null, stem: 'PlainFolder' },
+]
+for (const sc of suffixCases) {
+  const full = path.join(root, 'suffix-probe', sc.file)
+  const gotSuffix = archiveSuffix(full)
+  const gotStem = archiveStem(full)
+  checkLive(
+    gotSuffix === sc.suffix && gotStem === sc.stem,
+    `${sc.file} -> suffix=${String(gotSuffix)} (want ${String(sc.suffix)}), stem=${gotStem} (want ${sc.stem})`,
+  )
+}
+
+const siblingRoot = dir('sibling-collisions', {})
+const writeArchive = (fileName: string, entries: Record<string, string>): string => {
+  const target = path.join(siblingRoot, fileName)
+  const archive = new AdmZip()
+  for (const [entryName, body] of Object.entries(entries)) {
+    archive.addFile(entryName, Buffer.from(body, 'utf8'))
+  }
+  archive.writeZip(target)
+  return target
+}
+const alphaZip = writeArchive('Alpha.zip', {
+  'manifest.json': JSON.stringify({ format: 'capturepack', id: 'alpha' }),
+})
+writeArchive('Beta.CapturePack', {
+  'manifest.json': JSON.stringify({ format: 'capturepack', id: 'beta' }),
+})
+writeArchive('Gamma.ZIP', {
+  'manifest.json': JSON.stringify({ format: 'capturepack', id: 'gamma' }),
+})
+writeArchive('Owner.share.zip', {
+  'share.json': JSON.stringify({ format: 'capturepack-share', format_version: '0.1.0' }),
+})
+
+checkLive(
+  hasOtherSiblingArchive(path.join(siblingRoot, 'Beta'), alphaZip) === true,
+  'detects mixed-case .CapturePack sibling archive collision',
+)
+checkLive(
+  hasOtherSiblingArchive(path.join(siblingRoot, 'Gamma'), alphaZip) === true,
+  'detects uppercase .ZIP sibling archive collision',
+)
+checkLive(
+  hasOtherSiblingArchive(path.join(siblingRoot, 'Alpha'), alphaZip) === false,
+  'ignores the archive itself on same-stem check',
+)
+checkLive(
+  hasOtherSiblingArchive(path.join(siblingRoot, 'ALPHA'), alphaZip) === false,
+  'ignores the archive itself on case-only stem check',
+)
+checkLive(
+  hasOtherSiblingArchive(path.join(siblingRoot, 'Owner.share'), alphaZip) === false,
+  'ignores validated .share.zip Share Copy when probing Owner.share stem',
+)
 
 rmSync(root, { recursive: true, force: true })
 console.log(failed === 0 ? '\npack-identity-check ok' : `\npack-identity-check FAILED (${failed})`)

@@ -55,11 +55,13 @@ import type { PackHandle as StorePackHandle, PackStore, RawPackEntry } from './m
 import { moveNoReplace } from './moveNoReplace'
 import {
   archiveStem,
-  packArchiveExt,
+  archiveSuffix,
+  hasOtherSiblingArchive,
   shareBundlePath,
   siblingArchive,
   siblingShareBundle,
 } from './packArchive'
+import { directoryHoldsCapturePack } from '../shared/packIdentity'
 import { beginPackOperation } from './packOperations'
 import {
   createShareBundle,
@@ -1209,15 +1211,21 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
 
   const target =
     entry.kind === 'zip'
-      ? path.join(parent, `${newName}${packArchiveExt(entry.path) ?? PACK_EXT}`)
+      ? path.join(parent, `${newName}${archiveSuffix(entry.path) ?? PACK_EXT}`)
       : path.join(parent, newName)
   // Case-only renames are legal on Windows; anything else must not overwrite.
   const caseOnly = target.toLowerCase() === entry.path.toLowerCase()
+  const stemTarget = path.join(parent, newName)
   if (
-    !caseOnly &&
-    (fs.existsSync(target) ||
-      (entry.kind === 'dir' &&
-        (siblingArchive(target) !== null || fs.existsSync(shareBundlePath(target)))))
+    (!caseOnly && fs.existsSync(target)) ||
+    (entry.kind === 'zip'
+      ? directoryHoldsCapturePack(stemTarget) ||
+        hasCaseInsensitivePackDirectory(stemTarget) ||
+        hasOtherSiblingArchive(stemTarget, entry.path)
+      : !caseOnly &&
+        (siblingArchive(target) !== null ||
+          hasOtherSiblingArchive(target, entry.path) ||
+          fs.existsSync(shareBundlePath(target))))
   ) {
     return { ok: false, error: liveT()('history.errNameExists') }
   }
@@ -1231,7 +1239,7 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
     // convert an older `.capturepack` archive into a `.zip`.
     companionMoves.push({
       from: oldZip,
-      to: `${target}${packArchiveExt(oldZip) ?? PACK_EXT}`,
+      to: `${target}${archiveSuffix(oldZip) ?? PACK_EXT}`,
     })
   }
   if (oldShare !== null) {
@@ -1299,6 +1307,25 @@ async function moveHistoryNoReplace(source: string, destination: string): Promis
     return
   }
   await moveNoReplace(source, destination)
+}
+
+function hasCaseInsensitivePackDirectory(stemPath: string): boolean {
+  const parent = path.dirname(stemPath)
+  const want = path.basename(stemPath).toLowerCase()
+  try {
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      if (
+        entry.isDirectory() &&
+        entry.name.toLowerCase() === want &&
+        directoryHoldsCapturePack(path.join(parent, entry.name))
+      ) {
+        return true
+      }
+    }
+  } catch {
+    // Missing or unreadable parent directory will fail on the subsequent move if needed.
+  }
+  return false
 }
 
 function isMoveDestinationConflict(error: unknown): boolean {
