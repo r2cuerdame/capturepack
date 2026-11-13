@@ -74,6 +74,11 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   declaration. A plugin directory without that metadata, an undeclared one, or a
   copy that fails or loses its `meta.json` is removed from the new pack instead
   of being left undeclared for MCP and Full ZIP to pick up.
+- The CI pack assertions now reject two `media.displays` entries that name the
+  same screen, even with the validator switched off; `check:pack-assertions`
+  also pins the fragmented MP4 replay, the 4096-byte payload floor, per-display
+  still sizes and the CLI exit codes the workflow reads
+  ([#468](https://github.com/r2cuerdame/capturepack/issues/468)).
 - UI Automation, Chrome DOM and Windows context plugin metadata is published
   only after its payload is written. Failed writes clean up unpublished plugin
   data while preserving a previously complete plugin.
@@ -82,6 +87,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   would pick it up. The unpublished directory, and a `plugins/` folder the write
   created, are removed; the capture still saves
   ([#442](https://github.com/r2cuerdame/capturepack/issues/442)).
+- Regenerated `report.md`, `README.md` and `skills/` no longer state the wrong
+  `snapshot.png` size when `annotations.json` is absent, damaged or carries a
+  zero, negative or non-numeric reference size. They now use the focused
+  display, not the first one, and an image pack reads the size from its saved
+  `snapshot.png` instead of printing 0×0. A positive stated size is kept
+  ([#500](https://github.com/r2cuerdame/capturepack/issues/500)).
 
 ### Documentation
 

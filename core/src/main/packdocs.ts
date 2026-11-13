@@ -27,6 +27,7 @@ import {
   lifetimeLabel,
   packFocusedDisplay,
   pluginFiles,
+  referenceFrameSize,
 } from './report'
 
 const px = (n: number): number => Math.round(n)
@@ -87,17 +88,11 @@ export function buildReadme(
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
   includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -175,7 +170,11 @@ export function buildReadme(
   if (includeAnnotationsFile) {
     lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
   }
-  if (!imageCapture) lines.push('| timeline.json | When the capture and each annotation happened |')
+  // SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack;
+  // name it only when the exporter found it on disk.
+  if (!imageCapture && includeTimelineFile) {
+    lines.push('| timeline.json | When the capture and each annotation happened |')
+  }
   lines.push('| report.md | The full generated narrative of this pack |')
   lines.push('| skills/ | Context documents structured for AI readers |')
   if (includeViewer) {
@@ -268,14 +267,7 @@ function buildOverviewSkill(
   renderPending: boolean,
 ): string {
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -503,14 +495,7 @@ function buildAnnotationSkill(
   t: TranslateFn,
 ): string {
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const imageCapture = manifest.capture_kind === 'image'
   const numbers = computeDisplayNumbers(annotations)
   const multi = isMultiDisplay(manifest)
