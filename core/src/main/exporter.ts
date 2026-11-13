@@ -57,7 +57,8 @@ import {
   replayMimeType,
 } from '../shared/replayMedia'
 export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
-import { buildReport } from './report'
+import { buildReport, manifestReferenceSize, positivePixels } from './report'
+import { pngPixelSize } from './png'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
 import { collectGitState, gitPluginDeclaration, tryWriteGitPlugin } from './plugins/git'
@@ -378,7 +379,9 @@ async function writeViewerNonFatal(
   dirPath: string,
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
-  timeline: TimelineFile,
+  // undefined when the pack holds no timeline.json (SPEC §4: OPTIONAL for a
+  // video pack) — the viewer's file list then does not name one.
+  timeline: TimelineFile | undefined,
   docLanguage: Language,
 ): Promise<boolean> {
   const viewerPath = join(dirPath, 'viewer.html')
@@ -838,6 +841,17 @@ export async function readTimelineSafe(
 }
 
 /**
+ * The pack's top-level still, as a plain file name inside the pack. A name that
+ * would leave the folder is not followed; snapshot.png is what SPEC §5.3 names.
+ */
+function packSnapshotName(manifest: Manifest): string {
+  const name = manifest.media?.snapshot
+  return typeof name === 'string' && /^[^/\\:]+\.png$/iu.test(name)
+    ? name
+    : 'snapshot.png'
+}
+
+/**
  * Safely reads annotations.json from a pack directory.
  *
  * SPEC §4, §8, and §14 declare annotations.json as OPTIONAL.
@@ -845,6 +859,13 @@ export async function readTimelineSafe(
  * or invalid annotations array, falls back to a safe empty AnnotationsFile
  * ({ reference_width: fallbackWidth, reference_height: fallbackHeight, annotations: [] })
  * rather than throwing or aborting doc refresh.
+ *
+ * reference_width/reference_height are the FOCUSED display's snapshot.png
+ * pixels (SPEC §8.2). A stated value is kept only when it is a positive number;
+ * otherwise, given the manifest, the fallback is the focused display's entry
+ * and, for a pack that declares no displays (an image pack), the size the
+ * saved snapshot.png's own header declares — never displays[0], never 0×0
+ * beside a readable raster.
  */
 export async function readAnnotationsSafe(
   dirPath: string,
@@ -854,14 +875,14 @@ export async function readAnnotationsSafe(
   let fallbackWidth = 0
   let fallbackHeight = 0
   if (typeof fallbackWidthOrManifest === 'number') {
-    fallbackWidth = Number.isFinite(fallbackWidthOrManifest) ? fallbackWidthOrManifest : 0
-    fallbackHeight =
-      typeof fallbackHeightParam === 'number' && Number.isFinite(fallbackHeightParam)
-        ? fallbackHeightParam
-        : 0
+    fallbackWidth = positivePixels(fallbackWidthOrManifest) ?? 0
+    fallbackHeight = positivePixels(fallbackHeightParam) ?? 0
   } else if (fallbackWidthOrManifest && typeof fallbackWidthOrManifest === 'object') {
-    fallbackWidth = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_width ?? 0
-    fallbackHeight = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_height ?? 0
+    const size =
+      manifestReferenceSize(fallbackWidthOrManifest) ??
+      pngPixelSize(join(dirPath, packSnapshotName(fallbackWidthOrManifest)))
+    fallbackWidth = size?.width ?? 0
+    fallbackHeight = size?.height ?? 0
   }
   const fallback: AnnotationsFile = {
     reference_width: fallbackWidth,
@@ -881,14 +902,8 @@ export async function readAnnotationsSafe(
         reference_height?: unknown
         annotations?: unknown
       }
-      const reference_width =
-        typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
-          ? candidate.reference_width
-          : fallbackWidth
-      const reference_height =
-        typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
-          ? candidate.reference_height
-          : fallbackHeight
+      const reference_width = positivePixels(candidate.reference_width) ?? fallbackWidth
+      const reference_height = positivePixels(candidate.reference_height) ?? fallbackHeight
       const rawAnnotations = candidate.annotations
       const annotations: AnnotationsFile['annotations'] =
         Array.isArray(rawAnnotations) &&
@@ -934,16 +949,15 @@ export async function addManifestPlugin(
     const nextManifest: Manifest = declared
       ? manifest
       : { ...manifest, plugins: [...plugins, declaration] }
-    const annotationsFile = await readAnnotationsSafe(
-      handle.dirPath,
-      nextManifest.media.displays?.[0]?.snapshot_width ?? 0,
-      nextManifest.media.displays?.[0]?.snapshot_height ?? 0,
-    )
+    const annotationsFile = await readAnnotationsSafe(handle.dirPath, nextManifest)
     const timeline = await readTimelineSafe(
       handle.dirPath,
       nextManifest.created_at,
       nextManifest.capture_kind,
     )
+    // readTimelineSafe returns an empty stand-in when the file is absent (it
+    // feeds skills/timeline.md); the file lists must follow the disk instead.
+    const hasTimelineFile = timelineFileExists(handle.dirPath, nextManifest)
 
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
@@ -953,7 +967,7 @@ export async function addManifestPlugin(
       handle.dirPath,
       nextManifest,
       annotationsFile,
-      timeline,
+      hasTimelineFile ? timeline : undefined,
       docLanguage,
     )
     await writeDocs(
@@ -965,6 +979,7 @@ export async function addManifestPlugin(
       false,
       viewerWritten,
       existsSync(join(handle.dirPath, 'annotations.json')),
+      hasTimelineFile,
     )
     if (!declared || nextManifest.format_version !== previousFormatVersion) {
       await writeSourceFile(manifestPath, toJson(nextManifest))
@@ -2292,15 +2307,32 @@ async function writeDocs(
   renderPending: boolean,
   includeViewer: boolean,
   includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): Promise<void> {
   const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
   await writeSourceFile(
     join(dirPath, 'report.md'),
-    buildReport(manifest, annotationsFile, docLanguage, renderPending, includeViewer, includeAnnotationsFile),
+    buildReport(
+      manifest,
+      annotationsFile,
+      docLanguage,
+      renderPending,
+      includeViewer,
+      includeAnnotationsFile,
+      includeTimelineFile,
+    ),
   )
   await writeSourceFile(
     join(dirPath, 'README.md'),
-    buildReadme(manifest, annotationsFile, docLanguage, renderPending, includeViewer, includeAnnotationsFile),
+    buildReadme(
+      manifest,
+      annotationsFile,
+      docLanguage,
+      renderPending,
+      includeViewer,
+      includeAnnotationsFile,
+      includeTimelineFile,
+    ),
   )
   const skillFiles =
     manifest.capture_kind === 'image'
@@ -2333,16 +2365,13 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
     const manifest = JSON.parse(
       stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
     ) as Manifest
-    const annotationsFile = await readAnnotationsSafe(
-      dirPath,
-      manifest.media.displays?.[0]?.snapshot_width ?? 0,
-      manifest.media.displays?.[0]?.snapshot_height ?? 0,
-    )
+    const annotationsFile = await readAnnotationsSafe(dirPath, manifest)
     const timeline = await readTimelineSafe(
       dirPath,
       manifest.created_at,
       manifest.capture_kind,
     )
+    const hasTimelineFile = timelineFileExists(dirPath, manifest)
     // The render has already run: nothing further will write stills, so an
     // undeclared keyframe set is an ABSENT one, not a pending one.
     const previousFormatVersion = manifest.format_version
@@ -2350,7 +2379,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       dirPath,
       manifest,
       annotationsFile,
-      timeline,
+      hasTimelineFile ? timeline : undefined,
       docLanguage,
     )
     if (manifest.format_version !== previousFormatVersion) {
@@ -2365,8 +2394,18 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       false,
       viewerWritten,
       existsSync(join(dirPath, 'annotations.json')),
+      hasTimelineFile,
     )
   })
+}
+
+/**
+ * SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack, and
+ * a regenerated document names only files that are really in the folder. A
+ * present-but-empty or damaged file still exists, so it stays listed.
+ */
+function timelineFileExists(dirPath: string, manifest: Manifest): boolean {
+  return manifest.capture_kind !== 'image' && existsSync(join(dirPath, 'timeline.json'))
 }
 
 /**

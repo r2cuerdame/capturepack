@@ -11,6 +11,7 @@
 // tools/validate-capturepack.mjs. The replay containers are synthesized: what is
 // being checked is whether the prober can tell media from a bare header, and a
 // recorded file cannot answer that question because it only comes in one shape.
+import { spawnSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -20,6 +21,7 @@ import { announcementCount, assertPack, probeContainer } from './assert-capturep
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const EXAMPLE = path.resolve(here, '..', '..', 'examples', 'minimal')
+const ASSERT_CLI = path.join(here, 'assert-capturepack.mjs')
 // examples/minimal ships a 640x400 snapshot against an illustrative
 // 1920x1080 screen: it is a SPEC example, not a capture. The fixtures below
 // declare the screen the snapshot actually is, which is what a real pack does.
@@ -384,6 +386,99 @@ try {
     !verdict(strayIndex, { expectReplay: true, runValidator: false }).ok,
   )
 
+  // Both entries resolve to a real screen of the right size, so every per-entry
+  // check passes; only the count says that screen 2 was never captured.
+  const repeatedIndex = fixture(
+    'repeated-index',
+    (manifest) => {
+      withReplay(manifest)
+      manifest.environment.screens = [
+        { width: SNAPSHOT.width, height: SNAPSHOT.height, scale: 1 },
+        { width: SNAPSHOT.width, height: SNAPSHOT.height, scale: 1 },
+      ]
+      const display = {
+        index: 1,
+        bounds: { x: 0, y: 0, width: SNAPSHOT.width, height: SNAPSHOT.height },
+        scale: 1,
+      }
+      manifest.media.displays = [
+        { ...display, focused: true, snapshot: 'snapshot.png', replay: 'replay.webm', replay_duration_ms: 3000 },
+        { ...display, focused: false, snapshot: 'snapshot-d2.png', replay: null },
+      ]
+    },
+    {
+      'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }),
+      'snapshot-d2.png': readFileSync(path.join(EXAMPLE, 'snapshot.png')),
+    },
+  )
+  const repeatedVerdict = verdict(repeatedIndex, { expectReplay: true, runValidator: false })
+  check(
+    'two media.displays entries naming one screen are rejected even with the validator off',
+    !repeatedVerdict.ok && repeatedVerdict.failures.some((text) => text.includes('repeated')),
+    repeatedVerdict.failures.join(' | '),
+  )
+
+  // --- the fragmented MP4 the recorder actually writes (#113) -----------------
+  //
+  // The prober is exercised on mp4 bytes above, but CI's packs carry replay.mp4,
+  // so the pack-level verdict is held to the same pass/mutant pair as webm.
+
+  function withMp4Replay(manifest) {
+    withReplay(manifest)
+    manifest.media.replay = 'replay.mp4'
+  }
+
+  const goodMp4Pack = fixture('good-mp4', withMp4Replay, {
+    'replay.mp4': fmp4({ count: 4, mdatBytes: 2000, stepTicks: 90_000 }),
+  })
+  const goodMp4Verdict = verdict(goodMp4Pack, { expectReplay: true })
+  check('a pack with a real fragmented mp4 replay passes every assertion', goodMp4Verdict.ok, goodMp4Verdict.failures.join(' | '))
+
+  const initOnlyMp4 = fixture('init-only-mp4', withMp4Replay, {
+    'replay.mp4': fmp4({ count: 0, mdatBytes: 0, stepTicks: 0 }),
+  })
+  const initOnlyVerdict = verdict(initOnlyMp4, { expectReplay: true })
+  check(
+    'an mp4 replay that is an initialization segment and nothing else is rejected',
+    !initOnlyVerdict.ok && initOnlyVerdict.failures.some((text) => text.includes('media payload')),
+    initOnlyVerdict.failures.join(' | '),
+  )
+
+  const emptyMdatMp4 = fixture('empty-mdat-mp4', withMp4Replay, {
+    'replay.mp4': fmp4({ count: 4, mdatBytes: 0, stepTicks: 90_000 }),
+  })
+  const emptyMdatVerdict = verdict(emptyMdatMp4, { expectReplay: true })
+  check(
+    'an mp4 whose fragments are timestamped but carry no samples is rejected — a timeline is not media',
+    !emptyMdatVerdict.ok && emptyMdatVerdict.failures.some((text) => text.includes('media payload')),
+    emptyMdatVerdict.failures.join(' | '),
+  )
+
+  // --- the payload floor itself ----------------------------------------------
+  //
+  // 4096 is the documented default of --min-payload-bytes. A floor that drifted
+  // to 0 would still pass every mutant above that has NO payload, so the edge is
+  // pinned from both sides.
+
+  const atFloor = fixture('payload-at-floor', withReplay, {
+    'replay.webm': webm({ count: 2, blockBytes: 2048, stepMs: 3000 }),
+  })
+  const atFloorVerdict = verdict(atFloor, { expectReplay: true, runValidator: false })
+  check('a replay carrying exactly 4096 bytes of payload meets the default floor', atFloorVerdict.ok, atFloorVerdict.failures.join(' | '))
+  const underFloor = fixture('payload-under-floor', withReplay, {
+    'replay.webm': webm({ count: 3, blockBytes: 1365, stepMs: 1500 }),
+  })
+  const underFloorVerdict = verdict(underFloor, { expectReplay: true, runValidator: false })
+  check(
+    'a replay carrying 4095 bytes is one byte short of the default floor and is rejected',
+    !underFloorVerdict.ok && underFloorVerdict.failures.some((text) => text.includes('4095 bytes')),
+    underFloorVerdict.failures.join(' | '),
+  )
+  check(
+    'and the floor is the caller\'s to set — the same file passes a lower --min-payload-bytes',
+    verdict(underFloor, { expectReplay: true, runValidator: false, minPayloadBytes: 4000 }).ok,
+  )
+
   // --- the capture path a pack was produced by (#135, #62) --------------------
   //
   // THE RULE THIS PINS WAS WRONG FOR ONE RELEASE, AND CI IS WHAT SAID SO.
@@ -597,6 +692,60 @@ try {
     missingVerdict.failures.join(' | '),
   )
 
+  // A multi-display pack declares its stills per display, against that
+  // display's own snapshot size rather than the focused one's.
+  function perDisplayKeyframePack(name, declared, onDisk) {
+    const dirPath = fixture(
+      name,
+      (manifest) => {
+        withReplay(manifest)
+        manifest.media.displays = [
+          {
+            index: 1,
+            focused: true,
+            bounds: { x: 0, y: 0, width: SNAPSHOT.width, height: SNAPSHOT.height },
+            scale: 1,
+            snapshot: 'snapshot.png',
+            snapshot_width: SNAPSHOT.width,
+            snapshot_height: SNAPSHOT.height,
+            replay: 'replay.webm',
+            replay_duration_ms: 3000,
+            keyframes: [{ file: framesFile, t_ms: 3000, ...declared }],
+          },
+        ]
+      },
+      { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
+    )
+    mkdirSync(path.join(dirPath, 'frames'), { recursive: true })
+    writeFileSync(path.join(dirPath, framesFile), png(onDisk.width, onDisk.height))
+    return dirPath
+  }
+
+  const displayGutter = { width: SNAPSHOT.width, height: SNAPSHOT.height + 64 }
+  const displayStill = perDisplayKeyframePack('display-keyframe-gutter', displayGutter, displayGutter)
+  const displayStillVerdict = verdict(displayStill, { expectReplay: true, expectKeyframes: true, runValidator: false })
+  check(
+    'a per-display still with its label gutter passes and satisfies --expect-keyframes',
+    displayStillVerdict.ok,
+    displayStillVerdict.failures.join(' | '),
+  )
+  const displayLying = perDisplayKeyframePack('display-keyframe-lying', SNAPSHOT, displayGutter)
+  const displayLyingVerdict = verdict(displayLying, { expectReplay: true, runValidator: false })
+  check(
+    'a per-display still whose file is not the size it declares is rejected',
+    !displayLyingVerdict.ok &&
+      displayLyingVerdict.failures.some((text) => text.includes('media.displays[index 1].keyframes') && text.includes('on disk and declares')),
+    displayLyingVerdict.failures.join(' | '),
+  )
+  const narrowStill = { width: SNAPSHOT.width - 8, height: SNAPSHOT.height }
+  const displayNarrow = perDisplayKeyframePack('display-keyframe-narrow', narrowStill, narrowStill)
+  const displayNarrowVerdict = verdict(displayNarrow, { expectReplay: true, runValidator: false })
+  check(
+    'a per-display still narrower than its display\'s snapshot is rejected — only the height may grow',
+    !displayNarrowVerdict.ok && displayNarrowVerdict.failures.some((text) => text.includes('at (0,0) unscaled')),
+    displayNarrowVerdict.failures.join(' | '),
+  )
+
   // --- the honest-failure path (--simulate-no-frames) ------------------------
 
   const screenshotOnly = fixture('screenshot-only', () => {})
@@ -663,6 +812,24 @@ try {
     'a run that produced a replay and still announced a failure is rejected',
     !verdict(good, { expectReplay: true, logPath: healthyNoisyLog }).ok,
   )
+
+  // --- the exit code CI actually reads ----------------------------------------
+  //
+  // The workflow sees nothing but the process status, so a CLI that printed
+  // FAIL and exited 0 would be a green tick over every mutant above.
+
+  const cli = (...args) => spawnSync(process.execPath, [ASSERT_CLI, ...args], { encoding: 'utf8' }).status
+  check('the CLI exits 0 on a pack that holds', cli(good, '--expect-replay') === 0)
+  check('the CLI exits 1 on a pack whose replay is only a header', cli(headerOnly, '--expect-replay') === 1)
+  check(
+    'the CLI exits 1 on a nagging no-frames run, so --log reaches CI too',
+    cli(screenshotOnly, '--expect-no-replay', '--log', naggingLog) === 1,
+  )
+  check(
+    'the CLI honours --min-payload-bytes from the command line',
+    cli(underFloor, '--expect-replay') === 1 && cli(underFloor, '--expect-replay', '--min-payload-bytes', '4000') === 0,
+  )
+  check('the CLI exits 2 on an option it does not know, rather than ignoring it', cli(good, '--expect-repaly') === 2)
 
   // --- and the job that is supposed to run all of this ------------------------
   //

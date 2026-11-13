@@ -103,6 +103,58 @@ export function packFocusedDisplay(manifest: Manifest): number {
   return focusedDisplayIndex(manifest.media.displays)
 }
 
+/** A usable pixel count: a finite number above zero, or null. */
+export function positivePixels(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+/**
+ * The size of snapshot.png as the MANIFEST states it: the FOCUSED display's
+ * entry (SPEC §5.6, §8.2), never displays[0] — on a desk whose first screen is
+ * not the one the cursor was on, displays[0] is another screen's frame.
+ *
+ * Same rule as displayPixels(): the stated snapshot_width/snapshot_height when
+ * positive, bounds × scale for a pack written before the field existed. Null
+ * when the manifest declares no displays (every image pack, every pre-0.7.0
+ * pack) or the entry yields no positive size — the caller then measures the
+ * raster instead of printing 0×0.
+ */
+export function manifestReferenceSize(manifest: Manifest): { width: number; height: number } | null {
+  const displays = manifest?.media?.displays
+  if (!Array.isArray(displays) || displays.length === 0) return null
+  const focusedIndex = focusedDisplayIndex(displays)
+  const entry =
+    displays.find((d) => d !== null && typeof d === 'object' && d.index === focusedIndex) ??
+    displays.find((d) => d !== null && typeof d === 'object')
+  if (entry === undefined) return null
+  const scale = positivePixels(entry.scale)
+  const derived = (dip: unknown): number | null => {
+    const value = positivePixels(dip)
+    return value !== null && scale !== null ? positivePixels(Math.round(value * scale)) : null
+  }
+  const width = positivePixels(entry.snapshot_width) ?? derived(entry.bounds?.width)
+  const height = positivePixels(entry.snapshot_height) ?? derived(entry.bounds?.height)
+  return width !== null && height !== null ? { width, height } : null
+}
+
+/**
+ * The reference frame every generated document prints (SPEC §8.2):
+ * annotations.json's own reference_width/reference_height when they are
+ * positive numbers, otherwise the focused display's size from the manifest,
+ * otherwise 0. readAnnotationsSafe() has already measured snapshot.png for a
+ * pack with no displays, so README.md, report.md and skills/ all agree.
+ */
+export function referenceFrameSize(
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile | undefined,
+): { width: number; height: number } {
+  const stated = manifestReferenceSize(manifest)
+  return {
+    width: positivePixels(annotationsFile?.reference_width) ?? stated?.width ?? 0,
+    height: positivePixels(annotationsFile?.reference_height) ?? stated?.height ?? 0,
+  }
+}
+
 /**
  * The display indices this pack declares. Passed to every annotationsOnDisplay
  * call below so a box naming a display the manifest does not have resolves to
@@ -470,17 +522,11 @@ export function buildReport(
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
   includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
-  const refWidth =
-    typeof annotationsFile?.reference_width === 'number'
-      ? annotationsFile.reference_width
-      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
-  const refHeight =
-    typeof annotationsFile?.reference_height === 'number'
-      ? annotationsFile.reference_height
-      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
+  const { width: refWidth, height: refHeight } = referenceFrameSize(manifest, annotationsFile)
   const lines: string[] = []
   const imageCapture = manifest.capture_kind === 'image'
 
@@ -614,7 +660,11 @@ export function buildReport(
   if (includeAnnotationsFile) {
     lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
   }
-  if (!imageCapture) lines.push('- timeline.json — timestamped events from capture start to save')
+  // SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack, so
+  // the list names it only when the exporter found it on disk.
+  if (!imageCapture && includeTimelineFile) {
+    lines.push('- timeline.json — timestamped events from capture start to save')
+  }
   if (hasReplay) {
     // The DECLARED name (SPEC §5.3 allows replay.mp4 too) — never assumed.
     lines.push(
