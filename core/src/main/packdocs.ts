@@ -88,6 +88,7 @@ export function buildReadme(
   // The exporter passes true only after viewer.html was written successfully.
   includeViewer = false,
   includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): string {
   const t = makeT(lang)
   const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
@@ -169,7 +170,11 @@ export function buildReadme(
   if (includeAnnotationsFile) {
     lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
   }
-  if (!imageCapture) lines.push('| timeline.json | When the capture and each annotation happened |')
+  // SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack;
+  // name it only when the exporter found it on disk.
+  if (!imageCapture && includeTimelineFile) {
+    lines.push('| timeline.json | When the capture and each annotation happened |')
+  }
   lines.push('| report.md | The full generated narrative of this pack |')
   lines.push('| skills/ | Context documents structured for AI readers |')
   if (includeViewer) {
