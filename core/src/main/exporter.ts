@@ -379,7 +379,9 @@ async function writeViewerNonFatal(
   dirPath: string,
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
-  timeline: TimelineFile,
+  // undefined when the pack holds no timeline.json (SPEC §4: OPTIONAL for a
+  // video pack) — the viewer's file list then does not name one.
+  timeline: TimelineFile | undefined,
   docLanguage: Language,
 ): Promise<boolean> {
   const viewerPath = join(dirPath, 'viewer.html')
@@ -953,6 +955,9 @@ export async function addManifestPlugin(
       nextManifest.created_at,
       nextManifest.capture_kind,
     )
+    // readTimelineSafe returns an empty stand-in when the file is absent (it
+    // feeds skills/timeline.md); the file lists must follow the disk instead.
+    const hasTimelineFile = timelineFileExists(handle.dirPath, nextManifest)
 
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
@@ -962,7 +967,7 @@ export async function addManifestPlugin(
       handle.dirPath,
       nextManifest,
       annotationsFile,
-      timeline,
+      hasTimelineFile ? timeline : undefined,
       docLanguage,
     )
     await writeDocs(
@@ -974,6 +979,7 @@ export async function addManifestPlugin(
       false,
       viewerWritten,
       existsSync(join(handle.dirPath, 'annotations.json')),
+      hasTimelineFile,
     )
     if (!declared || nextManifest.format_version !== previousFormatVersion) {
       await writeSourceFile(manifestPath, toJson(nextManifest))
@@ -2301,15 +2307,32 @@ async function writeDocs(
   renderPending: boolean,
   includeViewer: boolean,
   includeAnnotationsFile = true,
+  includeTimelineFile = true,
 ): Promise<void> {
   const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
   await writeSourceFile(
     join(dirPath, 'report.md'),
-    buildReport(manifest, annotationsFile, docLanguage, renderPending, includeViewer, includeAnnotationsFile),
+    buildReport(
+      manifest,
+      annotationsFile,
+      docLanguage,
+      renderPending,
+      includeViewer,
+      includeAnnotationsFile,
+      includeTimelineFile,
+    ),
   )
   await writeSourceFile(
     join(dirPath, 'README.md'),
-    buildReadme(manifest, annotationsFile, docLanguage, renderPending, includeViewer, includeAnnotationsFile),
+    buildReadme(
+      manifest,
+      annotationsFile,
+      docLanguage,
+      renderPending,
+      includeViewer,
+      includeAnnotationsFile,
+      includeTimelineFile,
+    ),
   )
   const skillFiles =
     manifest.capture_kind === 'image'
@@ -2348,6 +2371,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       manifest.created_at,
       manifest.capture_kind,
     )
+    const hasTimelineFile = timelineFileExists(dirPath, manifest)
     // The render has already run: nothing further will write stills, so an
     // undeclared keyframe set is an ABSENT one, not a pending one.
     const previousFormatVersion = manifest.format_version
@@ -2355,7 +2379,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       dirPath,
       manifest,
       annotationsFile,
-      timeline,
+      hasTimelineFile ? timeline : undefined,
       docLanguage,
     )
     if (manifest.format_version !== previousFormatVersion) {
@@ -2370,8 +2394,18 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       false,
       viewerWritten,
       existsSync(join(dirPath, 'annotations.json')),
+      hasTimelineFile,
     )
   })
+}
+
+/**
+ * SPEC §4/§12.4: timeline.json is OPTIONAL for a video (or pre-0.3) pack, and
+ * a regenerated document names only files that are really in the folder. A
+ * present-but-empty or damaged file still exists, so it stays listed.
+ */
+function timelineFileExists(dirPath: string, manifest: Manifest): boolean {
+  return manifest.capture_kind !== 'image' && existsSync(join(dirPath, 'timeline.json'))
 }
 
 /**
