@@ -100,6 +100,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   dropped when its file is gone. Writing or replacing a Share Copy still checks
   the file on disk every time
   ([#515](https://github.com/r2cuerdame/capturepack/issues/515)).
+- The app log no longer switches itself off when the oldest kept log file is
+  held open by another program, such as an antivirus scan. The log still rolls
+  over to `main.1.log` and keeps writing; only the held file is left as it is,
+  at the cost of one older generation. File names, the five kept generations
+  and the 1 MB size limit are unchanged
+  ([#531](https://github.com/r2cuerdame/capturepack/issues/531)).
 - Storage sizes in History and Settings no longer read "1024 KB" or "1024 MB"
   just below a unit boundary; they move to "1.0 MB" and "1.0 GB", and a value
   that rounds to 100 or more is printed without a decimal ("100 KB", not
