@@ -55,6 +55,7 @@ import {
 import { captureOrSaveInProgress } from './captureActivity'
 import { scheduleCaptureWhenRecording } from './captureNow'
 import { anyPackOperationActive } from './packOperations'
+import { setToastLiveSettings } from './saveToast'
 import { captureFlowActive, startBrowserPageFlow, startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
@@ -488,6 +489,9 @@ function main(): void {
     registerHistoryIpc(settings)
     // Same again: the About window resolves the UI language at call time.
     registerAboutIpc(settings)
+    // And the save toast: its updates and retries read the running settings
+    // rather than re-running the startup load (#540).
+    setToastLiveSettings(settings)
     // Welcome window (GOAL "Welcome (first launch after install)"): [Try it
     // now] fires `capture` — the very closure the global hotkey and the tray
     // run — so the guided first capture is the real capture flow, not a copy.

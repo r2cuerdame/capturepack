@@ -1942,6 +1942,7 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
       renderState:
         settings.imageClipboardAfterSave === 'image' ? 'image-rendering' : 'none',
       uiLanguage: uiLanguage(settings),
+      settings,
     })
     notePackSaved(savedHandle.dirPath)
     void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)
@@ -2902,6 +2903,7 @@ async function runFlow(settings: Settings): Promise<void> {
           replayUnavailable: replayUnavailableForToast(frozen.displays),
           renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
           uiLanguage: uiLanguage(settings),
+          settings,
         })
         // The folder an unattended run (#63) hands to CI. Reported at the END of
         // source publication — everything above this line is what "saved" means
@@ -3835,6 +3837,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           ? 'image-rendering'
           : 'none',
       uiLanguage: uiLanguage(settings),
+      settings,
     })
     void runActionsAtState(handle.dirPath, 'source-ready', settings)
     // Same per-display rule as a fresh save: the pack's own annotated views are
