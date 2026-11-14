@@ -82,9 +82,22 @@ function rotatedLogFilePath(n: number): string {
  * oldest-first so no rename can land on a name still in use, and each step is
  * guarded on its own — a generation locked by an editor or an antivirus scan
  * costs that one file, not the rotation.
+ *
+ * That includes dropping the oldest generation (issue #531). `force` only
+ * silences a file that is not there; one held open without delete sharing
+ * throws EBUSY/EPERM, and while this delete was unguarded that one locked file
+ * aborted every rotation, failed every write behind it, and switched file
+ * logging off for the rest of the run. Only the last rename may throw: if
+ * main.log itself cannot move, the write has genuinely failed.
  */
 function rotateLogFiles(file: string): void {
-  fs.rmSync(rotatedLogFilePath(KEPT_GENERATIONS), { force: true })
+  try {
+    fs.rmSync(rotatedLogFilePath(KEPT_GENERATIONS), { force: true })
+  } catch {
+    // Held open. It stays as it is; the rename onto it below fails on its own
+    // guard, the next one replaces main.4.log, and that one generation is the
+    // whole cost.
+  }
   for (let n = KEPT_GENERATIONS - 1; n >= 1; n -= 1) {
     try {
       fs.renameSync(rotatedLogFilePath(n), rotatedLogFilePath(n + 1))
