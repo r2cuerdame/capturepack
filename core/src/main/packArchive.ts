@@ -11,7 +11,11 @@ import AdmZip from 'adm-zip'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { stripUtf8Bom } from '../shared/json'
-import { manifestNamesCapturePack } from '../shared/packIdentity'
+import {
+  directoryHoldsCapturePack,
+  manifestNamesCapturePack,
+  MAX_MANIFEST_BYTES,
+} from '../shared/packIdentity'
 
 /**
  * Archive extensions this app will open, newest convention first.
@@ -232,18 +236,66 @@ export function shareBundlePath(dirPath: string): string {
   return path.join(path.dirname(normalized), `${path.basename(normalized)}${SHARE_BUNDLE_SUFFIX}`)
 }
 
-/** What an archive's contents say it is. Both false: somebody else's zip. */
+/** What an archive's contents say it is. All false: somebody else's zip. */
 interface ArchiveIdentity {
   /** A root manifest.json that names this format (SPEC 13.1). */
   holdsPack: boolean
+  /**
+   * No root manifest, but every entry shares one top-level folder whose
+   * manifest.json names this format — the wrapping SPEC §3.2 lets a reader
+   * accept defensively. Opened by explicit path only; never indexed.
+   */
+  wrappedPack: boolean
   /** The separate reviewed Share Copy (`share.json`, no manifest). */
   isShare: boolean
 }
 
-const NOT_OURS: ArchiveIdentity = { holdsPack: false, isShare: false }
+const NOT_OURS: ArchiveIdentity = { holdsPack: false, wrappedPack: false, isShare: false }
 
 function identityOf(zip: AdmZip): ArchiveIdentity {
-  return { holdsPack: zipHoldsAPack(zip), isShare: zipIsShareBundle(zip) }
+  return {
+    holdsPack: zipHoldsAPack(zip),
+    wrappedPack: zipHoldsAWrappedPack(zip),
+    isShare: zipIsShareBundle(zip),
+  }
+}
+
+/**
+ * Where a pack's files start inside an archive: `''` for a root manifest.json,
+ * `'Top/'` when every entry sits under the single top-level folder `Top` that
+ * holds `Top/manifest.json` (SPEC §3.2), or null when neither holds. A
+ * manifest.json buried deeper, or beside unrelated top-level entries — a
+ * project's `examples/pack/`, say — is not a pack's root.
+ */
+export function archivePackPrefix(entryNames: readonly string[]): string | null {
+  const names = entryNames.map((n) => n.replace(/\\/g, '/')).filter((n) => n !== '')
+  if (names.includes('manifest.json')) return ''
+  let top: string | null = null
+  for (const name of names) {
+    const slash = name.indexOf('/')
+    if (slash <= 0) return null
+    const first = name.slice(0, slash)
+    if (top === null) top = first
+    else if (first !== top) return null
+  }
+  if (top === null) return null
+  const prefix = `${top}/`
+  return names.includes(`${prefix}manifest.json`) ? prefix : null
+}
+
+function zipHoldsAWrappedPack(zip: AdmZip): boolean {
+  try {
+    const entries = zip.getEntries()
+    const prefix = archivePackPrefix(entries.map((e) => e.entryName))
+    if (prefix === null || prefix === '') return false
+    const manifest = entries.find(
+      (e) => !e.isDirectory && e.entryName.replace(/\\/g, '/') === `${prefix}manifest.json`,
+    )
+    if (manifest === undefined || manifest.header.size > MAX_MANIFEST_BYTES) return false
+    return manifestNamesCapturePack(manifest.getData().toString('utf8'))
+  } catch {
+    return false
+  }
 }
 
 function zipHoldsAPack(zip: AdmZip): boolean {
@@ -382,6 +434,30 @@ function rememberedIdentity(file: string): ArchiveIdentity {
  */
 export function archiveHoldsAPack(file: string): boolean {
   return rememberedIdentity(file).holdsPack
+}
+
+/**
+ * What a path someone NAMED is, before anything is opened from it (#525).
+ *
+ * The index only ever lists what scanning proved; an absolute path handed to
+ * MCP skips the scan, and used to be opened because it existed. A folder must
+ * be a real one (not a link) whose manifest names this format. A file must be
+ * a regular one, carry an archive suffix, and hold a pack at its root or under
+ * the single wrapping folder SPEC §3.2 tolerates. Anything else — a project
+ * folder, a Share Copy, a photo album, a document — is null.
+ */
+export function capturePackKindAt(p: string): 'dir' | 'zip' | null {
+  let info: fs.Stats
+  try {
+    info = fs.lstatSync(p)
+  } catch {
+    return null
+  }
+  if (info.isSymbolicLink()) return null
+  if (info.isDirectory()) return directoryHoldsCapturePack(p) ? 'dir' : null
+  if (!info.isFile() || archiveSuffix(p) === null) return null
+  const identity = rememberedIdentity(p)
+  return identity.holdsPack || identity.wrappedPack ? 'zip' : null
 }
 
 /**

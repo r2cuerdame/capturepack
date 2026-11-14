@@ -1578,6 +1578,131 @@ async function main(): Promise<void> {
       openedSolo.title === 'Solo archive image',
     'capturepack_open distinguishes colliding archives and keeps unique archive short id',
   )
+
+  console.log('ABSOLUTE PATHS THROUGH THE TOOLS (#525)')
+  const strangerRoot = path.join(gitPackRoot, 'not-captures')
+  mkdirSync(strangerRoot, { recursive: true })
+  const SECRET = 'stranger-content-525'
+  const strangerZip = (name: string, files: Record<string, string>): string => {
+    const full = path.join(strangerRoot, name)
+    const archive = new AdmZip()
+    for (const [entry, content] of Object.entries(files)) archive.addFile(entry, Buffer.from(content, 'utf8'))
+    archive.writeZip(full)
+    return full
+  }
+  const strangerDir = (name: string, files: Record<string, string>): string => {
+    const full = path.join(strangerRoot, name)
+    for (const [entry, content] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(full, entry)), { recursive: true })
+      writeFileSync(path.join(full, entry), content)
+    }
+    return full
+  }
+  const plainDoc = path.join(strangerRoot, 'notes.txt')
+  writeFileSync(plainDoc, SECRET)
+  const strangers: Array<[string, string]> = [
+    ['an ordinary folder', strangerDir('Plain', { 'readme.txt': SECRET })],
+    [
+      "another program's manifest.json and plugins/ folder",
+      strangerDir('OtherApp', {
+        'manifest.json': JSON.stringify({ name: 'other-app', note: SECRET }),
+        'plugins/sync/config.json': SECRET,
+      }),
+    ],
+    [
+      'a Share Copy',
+      strangerZip('BugReport.share.zip', {
+        'share.json': JSON.stringify({ format: 'capturepack-share', format_version: '0.1.0' }),
+        'viewer.html': SECRET,
+      }),
+    ],
+    ['a photo zip', strangerZip('Holiday.zip', { 'IMG_0001.jpg': SECRET })],
+    [
+      "another program's archive",
+      strangerZip('OtherApp.capturepack', {
+        'manifest.json': JSON.stringify({ name: 'other-app', note: SECRET }),
+        'plugins/sync/config.json': SECRET,
+      }),
+    ],
+    ['a plain document', plainDoc],
+  ]
+  const pinCall = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: rootBugPackDir })) as ToolResult,
+  )
+  check(pinCall.id === 'BugReport', 'capturepack_open pins the root pack by absolute path')
+  for (const [name, target] of strangers) {
+    const openResult = (await realCallbacks.get('capturepack_open')?.({ id: target })) as ToolResult
+    const summaryResult = (await realCallbacks.get('capturepack_summary')?.({ id: target })) as ToolResult
+    const reportResult = (await realCallbacks.get('capturepack_report')?.({ id: target })) as ToolResult
+    const texts = [openResult, summaryResult, reportResult].map(
+      (r) => r.content.map((c) => c.text ?? '').join('\n'),
+    )
+    check(
+      openResult.isError === true &&
+        summaryResult.isError === true &&
+        reportResult.isError === true &&
+        texts.every((t) => t.includes('not a CapturePack') && !t.includes(SECRET)),
+      `capturepack_open/summary/report refuse ${name} and return none of its contents`,
+    )
+    const stillPinned = textJson(
+      (await realCallbacks.get('capturepack_summary')?.({})) as ToolResult,
+    )
+    check(
+      stillPinned.id === 'BugReport' && stillPinned.path === rootBugPackDir,
+      `refusing ${name} leaves the pinned BugReport as the default pack`,
+    )
+  }
+
+  const wrappedOutside = strangerZip('WrappedCapture.zip', {
+    'WrappedCapture/manifest.json': JSON.stringify({
+      format: 'capturepack',
+      format_version: '0.8.0',
+      id: 'wrapped-outside',
+      capture_kind: 'image',
+      title: 'Wrapped outside image',
+      created_at: '2026-11-13T13:00:00Z',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+    }),
+    'WrappedCapture/snapshot.png': 'wrapped-png',
+  })
+  const outsideDirPack = strangerDir('OutsideCapture', {
+    'manifest.json': JSON.stringify({
+      format: 'capturepack',
+      format_version: '0.8.0',
+      id: 'outside-dir',
+      capture_kind: 'image',
+      title: 'Outside folder image',
+      created_at: '2026-11-13T13:30:00Z',
+      media: { snapshot: 'snapshot.png', image_scope: 'fullscreen' },
+    }),
+    'snapshot.png': 'outside-png',
+  })
+  const openedWrapped = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: wrappedOutside })) as ToolResult,
+  )
+  const openedOutsideDir = textJson(
+    (await realCallbacks.get('capturepack_open')?.({ id: outsideDirPack })) as ToolResult,
+  )
+  const pinnedOutsideDir = textJson(
+    (await realCallbacks.get('capturepack_summary')?.({})) as ToolResult,
+  )
+  check(
+    openedWrapped.title === 'Wrapped outside image' &&
+      openedOutsideDir.title === 'Outside folder image' &&
+      pinnedOutsideDir.path === outsideDirPack,
+    'capturepack_open still opens a wrapped capture archive and a capture folder outside the output folder',
+  )
+
+  rmSync(outsideDirPack, { recursive: true })
+  mkdirSync(outsideDirPack)
+  writeFileSync(path.join(outsideDirPack, 'readme.txt'), SECRET)
+  const releasedSummary = textJson(
+    (await realCallbacks.get('capturepack_summary')?.({})) as ToolResult,
+  )
+  check(
+    releasedSummary.id === '2026-11-13/BugReport' && releasedSummary.path === subBugPackDir,
+    `a pinned capture replaced by an ordinary folder falls back to the newest capture (got ${String(releasedSummary.id)})`,
+  )
   realStore.dispose()
 
   let liveHistoryDir = historyRoot

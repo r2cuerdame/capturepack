@@ -14,6 +14,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -26,6 +27,8 @@ import { createLivePackStore, createPackStore } from '../src/main/mcp/store'
 import {
   ARCHIVE_IDENTITY_CACHE_LIMIT,
   archiveIdentityCacheSize,
+  archivePackPrefix,
+  capturePackKindAt,
   archiveIdentityReadCount,
   archiveStem,
   archiveSuffix,
@@ -658,6 +661,294 @@ checkLive(
     statSync(folderTwin).isDirectory(),
   'every user file and folder beside a pack is still in place with its contents',
 )
+
+// #525: an absolute path handed to MCP skips the scan, so it has to prove it
+// is a pack before anything is read from it — and a refusal, or a pinned pack
+// replaced by something else, must never leave a stranger's path pinned.
+console.log('ABSOLUTE PATHS OPEN ONLY CAPTUREPACKS (#525)')
+const prefixCases: Array<{ names: string[]; want: string | null; why: string }> = [
+  { names: ['manifest.json', 'snapshot.png'], want: '', why: 'root manifest' },
+  { names: ['Top/', 'Top/manifest.json', 'Top/snapshot.png'], want: 'Top/', why: 'single wrapping folder' },
+  { names: ['Top\\manifest.json', 'Top\\snapshot.png'], want: 'Top/', why: 'backslash entry names' },
+  { names: ['README.md', 'examples/pack/manifest.json'], want: null, why: 'nested example beside a root file' },
+  { names: ['A/manifest.json', 'B/notes.txt'], want: null, why: 'two top-level folders' },
+  { names: ['outer/inner/manifest.json'], want: null, why: 'manifest two folders deep' },
+  { names: ['IMG_0001.jpg'], want: null, why: 'no manifest' },
+  { names: [], want: null, why: 'empty archive' },
+]
+for (const pc of prefixCases) {
+  const got = archivePackPrefix(pc.names)
+  checkLive(got === pc.want, `archivePackPrefix: ${pc.why} -> ${String(got)} (want ${String(pc.want)})`)
+}
+
+const absOut = dir('abs-output', {})
+const absAway = dir('abs-elsewhere', {})
+const absNow = Math.floor(Date.now() / 1000) * 1000
+const ageTo = (target: string, agoMs: number): void => {
+  const when = new Date(absNow - agoMs)
+  utimesSync(target, when, when)
+}
+const SECRET = 'user-content-525-must-not-be-read'
+const realPack = (rel: string, id: string): string =>
+  dir(rel, { 'manifest.json': packManifest(id), 'snapshot.png': `png-${id}` })
+const newestPack = realPack(path.join('abs-output', 'Newest'), 'newest')
+ageTo(newestPack, 10_000)
+const olderPack = realPack(path.join('abs-output', 'Older'), 'older')
+ageTo(olderPack, 60_000)
+const insideWrapped = zipAt(path.join(absOut, 'InsideWrapped.zip'), {
+  'InsideWrapped/manifest.json': packManifest('inside-wrapped'),
+  'InsideWrapped/snapshot.png': 'png-inside-wrapped',
+})
+ageTo(insideWrapped, 120_000)
+const writeText = (file: string, body: string): string => {
+  writeFileSync(file, body)
+  return file
+}
+
+const rejected: Array<{ name: string; p: string }> = [
+  { name: 'an ordinary folder', p: dir(path.join('abs-elsewhere', 'Plain'), { 'readme.txt': SECRET }) },
+  {
+    name: 'an ordinary folder inside the output folder',
+    p: dir(path.join('abs-output', 'Notes'), { 'readme.txt': SECRET }),
+  },
+  {
+    name: "a folder holding another program's manifest.json and plugins/",
+    p: (() => {
+      const other = dir(path.join('abs-elsewhere', 'OtherApp'), {
+        'manifest.json': JSON.stringify({ name: 'other-app', version: '2.0.0', note: SECRET }),
+      })
+      dir(path.join('abs-elsewhere', 'OtherApp', 'plugins', 'sync'), { 'config.json': SECRET })
+      return other
+    })(),
+  },
+  {
+    name: 'a Share Copy (.share.zip)',
+    p: zipAt(path.join(absAway, 'Owner.share.zip'), { 'share.json': shareInventory, 'viewer.html': SECRET }),
+  },
+  { name: 'a photo zip', p: zipAt(path.join(absAway, 'Holiday.zip'), { 'IMG_0001.jpg': SECRET }) },
+  { name: 'a photo zip inside the output folder', p: zipAt(path.join(absOut, 'Album.zip'), { 'IMG_0002.jpg': SECRET }) },
+  {
+    name: "another program's archive with manifest.json and plugins/",
+    p: zipAt(path.join(absAway, 'OtherApp.capturepack'), {
+      'manifest.json': JSON.stringify({ name: 'other-app', note: SECRET }),
+      'plugins/sync/config.json': SECRET,
+    }),
+  },
+  {
+    name: 'a zip whose capture manifest is only in a nested example folder',
+    p: zipAt(path.join(absAway, 'Project.zip'), {
+      'README.md': SECRET,
+      'examples/pack/manifest.json': packManifest('example'),
+    }),
+  },
+  {
+    name: 'a zip whose capture manifest is two folders deep',
+    p: zipAt(path.join(absAway, 'Deep.zip'), {
+      'outer/inner/manifest.json': packManifest('deep'),
+      'outer/inner/snapshot.png': SECRET,
+    }),
+  },
+  { name: 'a plain text document', p: writeText(path.join(absAway, 'notes.txt'), SECRET) },
+  { name: 'a text file named .capturepack', p: writeText(path.join(absAway, 'Fake.capturepack'), SECRET) },
+  {
+    name: 'a capture archive carrying a document suffix',
+    p: zipAt(path.join(absAway, 'Disguised.txt'), { 'manifest.json': packManifest('disguised'), 'snapshot.png': SECRET }),
+  },
+  {
+    name: 'a link to a real pack folder',
+    p: (() => {
+      const link = path.join(absAway, 'LinkedPack')
+      symlinkSync(olderPack, link, 'junction')
+      return link
+    })(),
+  },
+]
+const rejectedBytes = new Map(
+  rejected.filter((r) => statSync(r.p).isFile()).map((r) => [r.p, readFileSync(r.p)] as const),
+)
+
+const absStore = createPackStore({ outputDir: absOut, watch: false })
+const messageOf = (fn: () => unknown): string => {
+  try {
+    fn()
+    return ''
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+const pinnedOlder = absStore.open(olderPack)
+checkLive(
+  pinnedOlder.manifest()?.id === 'older' && absStore.pinnedPath() === olderPack,
+  'a real capture opened by absolute path is pinned',
+)
+for (const r of rejected) {
+  const openErr = messageOf(() => absStore.open(r.p))
+  const resolveErr = messageOf(() => absStore.resolve(r.p))
+  checkLive(capturePackKindAt(r.p) === null, `${r.name} is not a CapturePack`)
+  checkLive(
+    openErr.includes('not a CapturePack') && resolveErr.includes('not a CapturePack') && !openErr.includes(SECRET),
+    `open and resolve refuse ${r.name} without echoing its contents`,
+  )
+  checkLive(
+    absStore.pinnedPath() === olderPack && absStore.resolve().manifest()?.id === 'older',
+    `refusing ${r.name} keeps the previously pinned capture`,
+  )
+}
+checkLive(
+  messageOf(() => absStore.open(path.join(absAway, 'missing-pack'))).startsWith('No pack matches') &&
+    absStore.pinnedPath() === olderPack,
+  'a path that does not exist is refused and keeps the pin',
+)
+checkLive(
+  [...rejectedBytes].every(([f, bytes]) => readFileSync(f).equals(bytes)) &&
+    rejected.every((r) => statSync(r.p) !== undefined),
+  'every refused file and folder is still in place, unchanged',
+)
+
+const outsideDir = realPack(path.join('abs-elsewhere', 'OutsidePack'), 'outside-dir')
+const outsideZip = zipAt(path.join(absAway, 'OutsideRoot.zip'), {
+  'manifest.json': packManifest('outside-zip'),
+  'snapshot.png': 'png-outside-zip',
+})
+const outsideLegacy = zipAt(path.join(absAway, 'OutsideLegacy.CapturePack'), {
+  'manifest.json': packManifest('outside-legacy'),
+  'snapshot.png': 'png-outside-legacy',
+})
+const outsideWrapped = zipAt(path.join(absAway, 'OutsideWrapped.zip'), {
+  'OutsideWrapped/manifest.json': packManifest('outside-wrapped'),
+  'OutsideWrapped/snapshot.png': 'png-outside-wrapped',
+  'OutsideWrapped/plugins/demo/data.json': '{}',
+})
+const accepted: Array<{ name: string; p: string; id: string; kind: 'dir' | 'zip' }> = [
+  { name: 'pack folder in the output folder', p: newestPack, id: 'newest', kind: 'dir' },
+  { name: 'wrapped pack archive in the output folder', p: insideWrapped, id: 'inside-wrapped', kind: 'zip' },
+  { name: 'pack folder elsewhere', p: outsideDir, id: 'outside-dir', kind: 'dir' },
+  { name: 'pack .zip elsewhere', p: outsideZip, id: 'outside-zip', kind: 'zip' },
+  { name: 'legacy .CapturePack elsewhere', p: outsideLegacy, id: 'outside-legacy', kind: 'zip' },
+  { name: 'wrapped pack .zip elsewhere', p: outsideWrapped, id: 'outside-wrapped', kind: 'zip' },
+]
+for (const a of accepted) {
+  const opened = absStore.open(a.p)
+  checkLive(
+    capturePackKindAt(a.p) === a.kind &&
+      opened.kind === a.kind &&
+      opened.manifest()?.id === a.id &&
+      opened.readText('snapshot.png') === `png-${a.id}` &&
+      absStore.pinnedPath() === opened.path &&
+      absStore.resolve().manifest()?.id === a.id,
+    `${a.name} still opens by absolute path and pins`,
+  )
+}
+const wrappedHandle = absStore.open(outsideWrapped)
+checkLive(
+  sameMembers(wrappedHandle.listFiles(), ['manifest.json', 'snapshot.png', 'plugins/demo/data.json']) &&
+    wrappedHandle.plugins().some((p) => p.name === 'demo'),
+  'a wrapped archive reads from inside its single top-level folder',
+)
+const projectHandle = absStore.readEntry?.({ id: 'Project', path: path.join(absAway, 'Project.zip'), kind: 'zip' })
+checkLive(
+  projectHandle !== undefined && projectHandle.manifest() === null,
+  'the archive reader no longer roots a pack at a nested example manifest',
+)
+
+// A pin whose path stops being a pack is released to the newest capture.
+const swapPath = path.join(absAway, 'Swap')
+const swapCases: Array<{ name: string; make: () => string; replace: () => void }> = [
+  {
+    name: 'pack folder replaced by an ordinary folder',
+    make: () => realPack(path.join('abs-elsewhere', 'Swap'), 'swap'),
+    replace: () => {
+      rmSync(swapPath, { recursive: true })
+      dir(path.join('abs-elsewhere', 'Swap'), { 'readme.txt': SECRET })
+    },
+  },
+  {
+    name: "pack folder replaced by another program's manifest folder",
+    make: () => realPack(path.join('abs-elsewhere', 'Swap'), 'swap'),
+    replace: () => {
+      rmSync(swapPath, { recursive: true })
+      dir(path.join('abs-elsewhere', 'Swap'), { 'manifest.json': JSON.stringify({ name: 'other', note: SECRET }) })
+    },
+  },
+  {
+    name: 'pack folder replaced by a plain file of the same name',
+    make: () => realPack(path.join('abs-elsewhere', 'Swap'), 'swap'),
+    replace: () => {
+      rmSync(swapPath, { recursive: true })
+      writeFileSync(swapPath, SECRET)
+    },
+  },
+  {
+    name: 'pack archive replaced by a photo zip',
+    make: () => zipAt(path.join(absAway, 'Swap.zip'), { 'manifest.json': packManifest('swap'), 'snapshot.png': 'p' }),
+    replace: () => {
+      rmSync(path.join(absAway, 'Swap.zip'))
+      zipAt(path.join(absAway, 'Swap.zip'), { 'IMG_0001.jpg': SECRET })
+    },
+  },
+  {
+    name: 'pack archive replaced by a folder of the same name',
+    make: () => zipAt(path.join(absAway, 'Swap.zip'), { 'manifest.json': packManifest('swap'), 'snapshot.png': 'p' }),
+    replace: () => {
+      rmSync(path.join(absAway, 'Swap.zip'), { recursive: true })
+      dir(path.join('abs-elsewhere', 'Swap.zip'), { 'manifest.json': JSON.stringify({ name: 'other' }) })
+    },
+  },
+]
+for (const sc of swapCases) {
+  rmSync(swapPath, { recursive: true, force: true })
+  rmSync(path.join(absAway, 'Swap.zip'), { recursive: true, force: true })
+  const pinned = absStore.open(sc.make())
+  const pinnedOk = pinned.manifest()?.id === 'swap' && absStore.resolve().manifest()?.id === 'swap'
+  sc.replace()
+  const after = absStore.resolve()
+  checkLive(
+    pinnedOk && after.manifest()?.id === 'newest' && absStore.pinnedPath() === null,
+    `${sc.name}: the pin is released and the newest capture answers`,
+  )
+}
+
+// The same inside the output folder, while a watched index still lists it.
+const doomed = realPack(path.join('abs-output', 'Doomed'), 'doomed')
+ageTo(doomed, 30_000)
+const watchedAbs = createPackStore({ outputDir: absOut, watch: true })
+const doomedEntries = watchedAbs.entries()
+const doomedPinnedId = watchedAbs.open(doomed).manifest()?.id
+rmSync(doomed, { recursive: true })
+dir(path.join('abs-output', 'Doomed'), { 'readme.txt': SECRET })
+const afterDoomed = watchedAbs.resolve()
+checkLive(
+  doomedEntries.some((e) => e.path === doomed) &&
+    doomedPinnedId === 'doomed' &&
+    afterDoomed.manifest()?.id === 'newest' &&
+    watchedAbs.pinnedPath() === null,
+  'an indexed pin replaced by an ordinary folder is released even before the watcher rescans',
+)
+watchedAbs.dispose()
+absStore.dispose()
+
+// And across an output-folder change, the pin is restored only if still a pack.
+const absOther = dir('abs-other-output', {})
+realPack(path.join('abs-other-output', 'OtherNewest'), 'other-newest')
+let liveAbsDir = absOut
+const liveAbs = createLivePackStore(() => ({ outputDir: liveAbsDir, watch: false }))
+const livePin = realPack(path.join('abs-elsewhere', 'LivePin'), 'live-pin')
+liveAbs.current().open(livePin)
+rmSync(livePin, { recursive: true })
+dir(path.join('abs-elsewhere', 'LivePin'), { 'readme.txt': SECRET })
+liveAbsDir = absOther
+const afterLiveMove = liveAbs.current().resolve()
+checkLive(
+  afterLiveMove.manifest()?.id === 'other-newest' && liveAbs.current().pinnedPath() === null,
+  'a pin replaced by an ordinary folder is not restored after the output folder changes',
+)
+liveAbs.current().open(outsideWrapped)
+liveAbsDir = absOut
+checkLive(
+  liveAbs.current().resolve().manifest()?.id === 'outside-wrapped',
+  'a wrapped pack archive pin is restored after the output folder changes',
+)
+liveAbs.dispose()
 
 rmSync(root, { recursive: true, force: true })
 console.log(failed === 0 ? '\npack-identity-check ok' : `\npack-identity-check FAILED (${failed})`)

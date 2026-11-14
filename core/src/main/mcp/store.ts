@@ -7,7 +7,13 @@ import { directoryHoldsCapturePack } from '../../shared/packIdentity'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { AnnotationsFile, Manifest, TimelineFile } from '../../shared/types'
-import { archiveHoldsAPack, forgetMissingArchiveIdentities, packArchiveExt } from '../packArchive'
+import {
+  archiveHoldsAPack,
+  archivePackPrefix,
+  capturePackKindAt,
+  forgetMissingArchiveIdentities,
+  packArchiveExt,
+} from '../packArchive'
 
 const RESCAN_DEBOUNCE_MS = 300
 const MAX_DIR_FILES = 2000
@@ -438,28 +444,36 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
       entry = findEntry(ref)
     }
     if (entry) return openPack(entry.path, entry.kind, entry.id)
+    if (!path.isAbsolute(ref)) throw noPackMatches(ref)
+    // An unindexed absolute path opens only if it IS a pack (#525): existing is
+    // not enough, or a project folder, a Share Copy or a document would be read
+    // as one and replace the session's pinned capture.
+    const resolvedRef = path.resolve(ref)
+    const kind = capturePackKindAt(resolvedRef)
     if (
       current !== null &&
-      path.isAbsolute(ref) &&
-      path.resolve(ref).toLowerCase() === path.resolve(current.path).toLowerCase() &&
-      fs.existsSync(current.path)
+      resolvedRef.toLowerCase() === path.resolve(current.path).toLowerCase() &&
+      kind === current.kind
     ) {
-      const stat = fs.statSync(current.path)
-      const kind: PackKind = stat.isDirectory() ? 'dir' : 'zip'
-      if (kind === current.kind) {
-        return openPack(current.path, current.kind, current.id)
-      }
+      return openPack(current.path, current.kind, current.id)
     }
-    if (path.isAbsolute(ref) && fs.existsSync(ref)) {
-      const resolvedRef = path.resolve(ref)
-      const stat = fs.statSync(resolvedRef)
-      if (stat.isDirectory()) return openPack(resolvedRef, 'dir', path.basename(resolvedRef))
+    if (kind === 'dir') return openPack(resolvedRef, 'dir', path.basename(resolvedRef))
+    if (kind === 'zip') {
       const base = path.basename(resolvedRef)
       const ext = packArchiveExt(base)
       const id = ext !== null && base.length > ext.length ? base.slice(0, -ext.length) : base
       return openPack(resolvedRef, 'zip', id)
     }
-    throw new Error(
+    if (fs.existsSync(resolvedRef)) {
+      throw new Error(
+        `No pack matches "${ref}": it is not a CapturePack (a pack folder, or a .zip/.capturepack archive, whose manifest.json names format "capturepack"), so none of its contents are read. Call capturepack_list for known ids.`,
+      )
+    }
+    throw noPackMatches(ref)
+  }
+
+  function noPackMatches(ref: string): Error {
+    return new Error(
       `No pack matches "${ref}". Call capturepack_list for known ids, or pass an absolute path to a .capturepack file or extracted pack folder.`,
     )
   }
@@ -526,13 +540,18 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
       ensureFresh()
       if (idOrPath !== undefined && idOrPath.trim() !== '') return handleFor(idOrPath.trim())
       if (current) {
+        // The pin holds only while its path is still a pack of the same kind: a
+        // capture deleted and replaced by an ordinary folder or file under the
+        // same name (#525) — or not yet rescanned out of a watched index — is
+        // released, and the newest readable pack answers instead.
+        const pinnedKind = capturePackKindAt(current.path)
         const indexed = findEntry(current.path)
-        if (indexed && indexed.kind === current.kind) {
+        if (indexed && indexed.kind === current.kind && pinnedKind === indexed.kind) {
           current = { id: indexed.id, path: indexed.path, kind: indexed.kind }
           return openPack(indexed.path, indexed.kind, indexed.id)
         }
-        if (fs.existsSync(current.path)) return openPack(current.path, current.kind, current.id)
-        current = null // pinned pack was deleted: fall back to newest
+        if (pinnedKind === current.kind) return openPack(current.path, current.kind, current.id)
+        current = null
       }
       return newestHandle()
     },
@@ -572,13 +591,12 @@ function buildPackStore(options: { outputDir: string; watch: boolean }): Interna
         current = { id: entry.id, path: entry.path, kind: entry.kind }
         return
       }
-      if (path.isAbsolute(pinned.path) && fs.existsSync(pinned.path)) {
-        const stat = fs.statSync(pinned.path)
-        const kind: PackKind = stat.isDirectory() ? 'dir' : 'zip'
+      const kind = path.isAbsolute(pinned.path) ? capturePackKindAt(pinned.path) : null
+      if (kind !== null) {
         current = { id: pinned.id, path: pinned.path, kind }
         return
       }
-      throw new Error(`Pinned pack no longer exists: ${pinned.path}`)
+      throw new Error(`Pinned pack is no longer a CapturePack: ${pinned.path}`)
     },
   }
 }
@@ -706,16 +724,13 @@ export function openPack(absPath: string, kind: PackKind, id: string): PackHandl
 
 function zipReader(zipPath: string): PackReader {
   const zip = new AdmZip(zipPath)
-  const entries = zip.getEntries().filter((e) => !e.isDirectory)
+  const all = zip.getEntries()
+  const entries = all.filter((e) => !e.isDirectory)
   const names = entries.map((e) => e.entryName.replace(/\\/g, '/'))
-  // Packs normally keep manifest.json at the zip root, but tolerate archives
-  // wrapped in a single top-level folder by detecting the shortest prefix.
-  let prefix = ''
-  if (!names.includes('manifest.json')) {
-    const nested = names.filter((n) => n.endsWith('/manifest.json')).sort((a, b) => a.length - b.length)
-    const found = nested[0]
-    if (found) prefix = found.slice(0, -'manifest.json'.length)
-  }
+  // Packs keep manifest.json at the zip root; SPEC §3.2 also tolerates every
+  // entry wrapped in ONE top-level folder. A manifest.json buried anywhere
+  // else (a project's examples/pack/) is not this archive's root (#525).
+  const prefix = archivePackPrefix(all.map((e) => e.entryName)) ?? ''
   const byName = new Map<string, AdmZip.IZipEntry>()
   entries.forEach((entry, i) => {
     const name = names[i]

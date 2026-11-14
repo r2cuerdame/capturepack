@@ -23,7 +23,7 @@ import { FORMAT_NAME } from './types'
  * whatever the user pointed the output folder at, and reading an arbitrary
  * multi-gigabyte file called `manifest.json` into memory is its own bug.
  */
-const MAX_MANIFEST_BYTES = 4 * 1_048_576
+export const MAX_MANIFEST_BYTES = 4 * 1_048_576
 
 /** True when `raw` parses as a manifest that names this format. */
 export function manifestNamesCapturePack(raw: string): boolean {
