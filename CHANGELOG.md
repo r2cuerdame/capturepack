@@ -100,6 +100,16 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   dropped when its file is gone. Writing or replacing a Share Copy still checks
   the file on disk every time
   ([#515](https://github.com/r2cuerdame/capturepack/issues/515)).
+- A multi-monitor Share Copy no longer leaves a blur uncovered on another
+  screen. A screen whose recording started later keeps its stills on its own
+  clock, and those times are now converted to the capture's clock before
+  deciding which blurs are showing, so the solid fill and the cleared label
+  strip are applied. A blur that moves onto another screen is covered there,
+  including in captures saved before 0.7.0 that did not record each screen's
+  image size. A Share Copy is refused for a damaged
+  `replay_clock_offset_ms` (set on a screen with no recording, not 0 on the
+  main screen, or not a whole number)
+  ([#566](https://github.com/r2cuerdame/capturepack/issues/566)).
 - Storage sizes in History and Settings no longer read "1024 KB" or "1024 MB"
   just below a unit boundary; they move to "1.0 MB" and "1.0 GB", and a value
   that rounds to 100 or more is printed without a decimal ("100 KB", not
