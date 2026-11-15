@@ -41,14 +41,22 @@ import { displayReplayName, displaySnapshotName } from '../src/main/exporter'
 import type { DisplayCapture, ExportInput, InitialSaveInput } from '../src/main/exporter'
 import { aggregateRecorderState } from '../src/main/capture'
 import { replayUnavailableForToast } from '../src/main/session'
-import { displaySummaryLines, extraDisplayFiles, groupByDisplay } from '../src/main/report'
+import {
+  boxesOnDisplay,
+  buildReport,
+  displaySummaryLines,
+  extraDisplayFiles,
+  groupByDisplay,
+} from '../src/main/report'
+import { buildSkills } from '../src/main/packdocs'
+import { buildViewerHtml } from '../src/main/viewer'
 import { buildBoard, displayAtBoardPoint, toBoardPoint, toNativePoint } from '../src/renderer/editor/board'
 import type { BoardInput, BoardLayout } from '../src/renderer/editor/board'
 import type { ReplayUnavailablePayload, RecorderFailureReason } from '../src/shared/ipc'
 import type { RecorderState } from '../src/main/capture'
 import { makeT, recorderFailureText } from '../src/shared/i18n'
 import { focusedDisplayIndex } from '../src/shared/types'
-import type { Manifest } from '../src/shared/types'
+import type { Annotation, AnnotationsFile, Manifest } from '../src/shared/types'
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -1827,8 +1835,217 @@ function toastAndTrayChecks(): void {
   )
 }
 
+// ---------------------------------------------------------------------------
+// A BOX THAT CROSSES SCREENS IS LISTED ONCE, UNDER THE SCREEN THAT OWNS IT
+// (#568).
+//
+// annotationsOnDisplay() is the RENDERERS' rule (#86): a box whose tracking
+// samples or authored keyframes visit another screen is drawn on that screen
+// too. report.md and skills/overview.md used the same rule to LIST and COUNT
+// boxes, so such a box appeared under two headings — the second time with the
+// owning screen's coordinates under a heading that says they are this screen's
+// — and the per-display counts summed to more boxes than the pack holds, while
+// skills/annotations.md and viewer.html placed it on one screen.
+// ---------------------------------------------------------------------------
+function crossDisplayDocChecks(): void {
+  const manifest = buildManifest({
+    id: 'two-displays-crossing-boxes',
+    createdAt: new Date('2026-11-16T00:00:00.000Z'),
+    generatorVersion: 'check',
+    title: '',
+    note: '',
+    osVersion: 'check',
+    screens: [
+      { width: 1_920, height: 1_080, scale: 1 },
+      { width: 2_560, height: 1_440, scale: 1 },
+    ],
+    captureKind: 'video',
+    hasReplay: true,
+    replayFile: 'replay.webm',
+    replayDurationMs: 6_000,
+    snapshotTMs: null,
+    displays: [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+        scale: 1,
+        snapshotWidth: 1_920,
+        snapshotHeight: 1_080,
+        hasReplay: true,
+        replayDurationMs: 6_000,
+        snapshotFile: displaySnapshotName(1),
+        replayFile: displayReplayName(1),
+      },
+      {
+        index: 2,
+        focused: false,
+        bounds: { x: 1_920, y: 0, width: 2_560, height: 1_440 },
+        scale: 1,
+        snapshotWidth: 2_560,
+        snapshotHeight: 1_440,
+        hasReplay: true,
+        replayDurationMs: 6_000,
+        snapshotFile: displaySnapshotName(2),
+        replayFile: displayReplayName(2),
+      },
+    ],
+  })
+  // (a) display 1's box whose tracked window was dragged onto display 2,
+  // (b) display 1's box whose authored keyframe moves it onto display 2,
+  // (c) display 2's own box.
+  const tracked: Annotation = {
+    annotation_id: 'tracked-d1',
+    type: 'box',
+    bounds: { x: 101, y: 102, width: 30, height: 20 },
+    numbered: true,
+    start_ms: 0,
+    end_ms: 4_000,
+    tracking: {
+      enabled: true,
+      samples: [
+        { t_ms: 0, x: 101, y: 102, width: 30, height: 20 },
+        { t_ms: 2_000, display: 2, x: 40, y: 50, width: 30, height: 20 },
+      ],
+    },
+  }
+  const keyframed: Annotation = {
+    annotation_id: 'keyframed-d1',
+    type: 'box',
+    display: 1,
+    bounds: { x: 201, y: 202, width: 40, height: 25 },
+    numbered: true,
+    start_ms: 0,
+    end_ms: 4_000,
+    keyframes: [
+      { t_ms: 0, x: 201, y: 202, width: 40, height: 25 },
+      { t_ms: 3_000, display: 2, x: 60, y: 70, width: 40, height: 25 },
+    ],
+  }
+  const own: Annotation = {
+    annotation_id: 'own-d2',
+    type: 'box',
+    display: 2,
+    bounds: { x: 301, y: 302, width: 50, height: 35 },
+    numbered: true,
+  }
+  const annotations = [tracked, keyframed, own]
+  const annotationsFile: AnnotationsFile = { reference_width: 1_920, reference_height: 1_080, annotations }
+  const owner = new Map([
+    [tracked.annotation_id, 1],
+    [keyframed.annotation_id, 1],
+    [own.annotation_id, 2],
+  ])
+
+  // (1) groupByDisplay partitions the boxes: each in exactly one group, its owner's.
+  const groups = groupByDisplay(manifest, annotations)
+  const placements = annotations.map((a) =>
+    groups.filter((g) => g.annotations.includes(a)).map((g) => g.index),
+  )
+  check(
+    'report.md groups list every box exactly once, under the display that owns it — a box that ' +
+      'visits another screen is not listed there again (#568)',
+    groups.reduce((sum, g) => sum + g.annotations.length, 0) === annotations.length &&
+      annotations.every((a, i) => {
+        const p = placements[i] ?? []
+        return p.length === 1 && p[0] === owner.get(a.annotation_id)
+      }),
+    groups.map((g) => `${String(g.index)}:[${g.annotations.map((a) => a.annotation_id).join(',')}]`).join(' '),
+  )
+
+  // (2) report.md's display summary counts add up to the pack's boxes.
+  const summaryCounts = displaySummaryLines(manifest, undefined, annotations)
+    .slice(1)
+    .map((line) => {
+      const m = /^ {2}- (\d+): .*?, (\d+) annotations?/.exec(line)
+      return m === null ? null : { index: Number(m[1]), count: Number(m[2]) }
+    })
+  check(
+    'report.md’s display summary counts display 1: 2, display 2: 1 — they add up to the 3 boxes ' +
+      'the pack holds (#568)',
+    summaryCounts.length === 2 &&
+      summaryCounts.find((c) => c?.index === 1)?.count === 2 &&
+      summaryCounts.find((c) => c?.index === 2)?.count === 1,
+    JSON.stringify(summaryCounts),
+  )
+
+  // (3) Under each heading, only that display's boxes in that display's pixels.
+  const report = buildReport(manifest, annotationsFile)
+  const sections = new Map<number, string>()
+  for (const part of report.split(/^### /m).slice(1)) {
+    const m = /^Display (\d+)/.exec(part)
+    if (m !== null) sections.set(Number(m[1]), part.split(/^## /m)[0] ?? '')
+  }
+  const d1 = sections.get(1) ?? ''
+  const d2 = sections.get(2) ?? ''
+  check(
+    'report.md’s Display 2 section carries only display 2’s box, in display 2’s pixels — never ' +
+      'display 1’s coordinates under display 2’s heading (#568)',
+    d2.includes('box at (301, 302)') &&
+      !d2.includes('box at (101, 102)') &&
+      !d2.includes('box at (201, 202)') &&
+      d1.includes('box at (101, 102)') &&
+      d1.includes('box at (201, 202)') &&
+      !d1.includes('box at (301, 302)'),
+    `d1=${JSON.stringify(d1)} d2=${JSON.stringify(d2)}`,
+  )
+  check(
+    'a box that crossed screens says so in its own display’s list ("also visits display 2"), and ' +
+      'a box that never left its screen says nothing',
+    /box at \(101, 102\)[^\n]*\(also visits display 2\)/.test(d1) &&
+      /box at \(201, 202\)[^\n]*\(also visits display 2\)/.test(d1) &&
+      !/box at \(301, 302\)[^\n]*also visits/.test(d2),
+  )
+
+  // (4) report.md, skills/overview.md, skills/annotations.md and viewer.html agree.
+  const skills = buildSkills(manifest, annotationsFile, { t0: '2026-11-16T00:00:00.000Z', events: [] })
+  check(
+    'skills/overview.md counts display 1: 2, display 2: 1 — the same partition report.md lists (#568)',
+    skills.overview.includes('(display 1: 2, display 2: 1)'),
+  )
+  const skillPlacement = new Map<string, number>()
+  for (const part of skills.annotation.split(/^## /m).slice(1)) {
+    const id = /— (\S+) \(/.exec(part)?.[1] ?? /^(\S+) \(/.exec(part)?.[1]
+    const display = /- \*\*Display:\*\* (\d+)/.exec(part)?.[1]
+    if (id !== undefined && display !== undefined) skillPlacement.set(id, Number(display))
+  }
+  const viewerHtml = buildViewerHtml(manifest, annotationsFile, undefined, 'en')
+  const viewerList = /<ol class="annotations">([\s\S]*?)<\/ol>/.exec(viewerHtml)?.[1] ?? ''
+  const viewerDisplays = [...viewerList.matchAll(/<dt>Display<\/dt><dd>(\d+)/g)].map((m) => Number(m[1]))
+  const reportPlacement = new Map<string, number>()
+  for (const g of groups) for (const a of g.annotations) reportPlacement.set(a.annotation_id, g.index)
+  check(
+    'report.md, skills/annotations.md and viewer.html name the same display for every box (#568)',
+    viewerDisplays.length === annotations.length &&
+      annotations.every(
+        (a, i) =>
+          reportPlacement.get(a.annotation_id) === owner.get(a.annotation_id) &&
+          skillPlacement.get(a.annotation_id) === owner.get(a.annotation_id) &&
+          viewerDisplays[i] === owner.get(a.annotation_id),
+      ),
+    `report ${JSON.stringify([...reportPlacement])} skills ${JSON.stringify([...skillPlacement])} viewer ${JSON.stringify(viewerDisplays)}`,
+  )
+
+  // (5) Drawing is unchanged: display 2's renderers still carry every box that visits it.
+  check(
+    'RENDERING UNCHANGED: boxesOnDisplay() for display 2 still returns the tracked, the keyframed ' +
+      'and the own box, so the replay and stills of the screen a box moved to keep drawing it (#86)',
+    boxesOnDisplay(manifest, annotations, 2)
+      .map((a) => a.annotation_id)
+      .join(',') === 'tracked-d1,keyframed-d1,own-d2' &&
+      boxesOnDisplay(manifest, annotations, 1)
+        .map((a) => a.annotation_id)
+        .join(',') === 'tracked-d1,keyframed-d1',
+  )
+}
+
 void writtenPackChecks()
   .then(saveAsNewDisplaySanitizationChecks)
+  .then(() => {
+    console.log('')
+    console.log('A BOX THAT CROSSES SCREENS IS LISTED ONCE (#568)')
+    crossDisplayDocChecks()
+  })
   .then(() => {
     console.log('')
     console.log('THE DESK — three screens, portrait in the middle, focus on 3, recorder 2 dead (#76)')
