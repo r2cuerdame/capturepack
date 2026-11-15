@@ -126,6 +126,26 @@ check(
   check('a late manual box behind more changes than the cap allows', busy, 90_000)
 }
 
+// 2b. THE FINAL STILL ALREADY SHOWS A BOX. Boxes that stay alive to the end of
+//     the capture are in the reserved final still, so spending a cap slot on
+//     each of them as well starves a short box drawn later. Exactly as many
+//     boxes as the cap allows: none may be left out.
+{
+  const lasting: Annotation[] = []
+  for (let i = 0; i < MAX_KEYFRAMES - 1; i += 1) {
+    lasting.push(box(`long${String(i)}`, i * 1000, 90_000))
+  }
+  lasting.push(box('late-short', 60_000, 60_100))
+  check('boxes alive at the final still do not take the slot of a later short box', lasting, 90_000)
+  const { times } = computeKeyframes(lasting, 90_000)
+  const ok = times[times.length - 1] === 90_000
+  if (!ok) failures += 1
+  console.log(
+    `  ${ok ? 'PASS' : 'FAIL'}  the capture's final instant stays the last still` +
+      (ok ? '' : ` — got ${times.join(', ')}`),
+  )
+}
+
 // 3. Boxes with NO lifetime anchor at the capture instant (SPEC §5.7).
 check(
   'a box with no lifetime is represented at the capture instant',
