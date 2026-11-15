@@ -751,8 +751,14 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
   item(
     t('history.menuRerender'),
     {
-      disabled: !p.hasReplay || p.kind !== 'dir' || rendering.has(p.path),
-      title: !p.hasReplay ? t('history.playNoReplay') : t('history.rerenderTooltip'),
+      // A replay-less pack (image or degraded video) re-renders its annotated
+      // still from snapshot.png, so only the folder form and an in-flight
+      // render gate the menu — unlike Play, which needs a replay.
+      disabled: p.kind !== 'dir' || rendering.has(p.path),
+      title:
+        p.captureKind === 'image' || !p.hasReplay
+          ? t('history.rerenderStillTooltip')
+          : t('history.rerenderTooltip'),
     },
     () => startRerender(p),
   )

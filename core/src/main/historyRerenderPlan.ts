@@ -44,7 +44,8 @@ export function historyRerenderKind(manifest: Manifest): HistoryRerenderKind {
 
 /**
  * Reports whether the focused annotated output usable by a History card is on
- * disk. Image packs have no replay_annotated file: their equivalent output is
+ * disk. A pack that re-renders as a still (an image pack, or a replay-less
+ * legacy/degraded pack) has no replay_annotated file: its equivalent output is
  * the declared keyframe still set under frames/.
  */
 export function historyAnnotatedState(
@@ -52,7 +53,7 @@ export function historyAnnotatedState(
   annotationCount: number,
   filePresent: (relativePath: string) => boolean,
 ): HistoryAnnotatedState {
-  if (manifest.capture_kind === 'image') {
+  if (historyRerenderKind(manifest) === 'still') {
     if (annotationCount === 0) return 'none'
     const keyframes = manifest.media?.keyframes
     if (!Array.isArray(keyframes) || keyframes.length === 0) return 'missing'
@@ -66,6 +67,7 @@ export function historyAnnotatedState(
   }
 
   if (typeof manifest.media?.replay !== 'string') return 'none'
+  // Replay kind guarantees a string declaration; the guard narrows the type.
   const target =
     typeof manifest.media.replay_annotated === 'string'
     && manifest.media.replay_annotated.trim() !== ''
