@@ -695,7 +695,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       description:
         'Case-insensitive substring search across everything in a CapturePack: report.md lines, ' +
         'annotation texts, video timeline events when present, plugin JSON metadata and log lines, and the ' +
-        'manifest title/note. Returns hits grouped by source.',
+        'manifest title/note. Returns hits grouped by source. Each group lists at most 100 hits; a group ' +
+        'cut short is flagged (report_truncated, annotations_truncated, timeline_truncated with its ' +
+        '<group>_total_hits real match count, plugins_truncated). total_hits counts every match found and ' +
+        'returned_hits, present only when they differ, counts the hits listed.',
       inputSchema: {
         keyword: z.string().min(1).describe('Substring to search for (case-insensitive).'),
         ...idArg,
@@ -1148,13 +1151,17 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
   if (has(manifest?.title)) manifestHits.push({ field: 'title', value: manifest?.title ?? '' })
   if (has(manifest?.note)) manifestHits.push({ field: 'note', value: manifest?.note ?? '' })
 
+  // Report lines and timeline events are counted to the end even past the
+  // per-group cap: a silently short group reads as a short capture, so a
+  // truncated group says so and carries its real match count.
   const reportHits: Array<{ line: number; text: string }> = []
+  let reportMatches = 0
   const report = pack.report()
   if (report !== null) {
     report.split(/\r?\n/).forEach((line, i) => {
-      if (reportHits.length < MAX_HITS_PER_GROUP && line.toLowerCase().includes(kw)) {
-        reportHits.push({ line: i + 1, text: cap(line.trim(), 300) })
-      }
+      if (!line.toLowerCase().includes(kw)) return
+      reportMatches += 1
+      if (reportHits.length < MAX_HITS_PER_GROUP) reportHits.push({ line: i + 1, text: cap(line.trim(), 300) })
     })
   }
 
@@ -1162,22 +1169,30 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
   const annotationHits = allAnnotationHits.slice(0, MAX_HITS_PER_GROUP)
 
   const timelineHits: TimelineEvent[] = []
+  let timelineMatches = 0
   const timeline = pack.timeline()
   for (const e of Array.isArray(timeline?.events) ? timeline.events : []) {
-    if (timelineHits.length >= MAX_HITS_PER_GROUP) break
     if (has(e.type) || (e.data !== undefined && JSON.stringify(e.data).toLowerCase().includes(kw))) {
-      timelineHits.push(e)
+      timelineMatches += 1
+      if (timelineHits.length < MAX_HITS_PER_GROUP) timelineHits.push(e)
     }
   }
 
   const pluginSearch = pluginJsonSearch(pack, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES)
   const pluginHits = pluginSearch.matches
 
-  const total = manifestHits.length + reportHits.length + annotationHits.length + timelineHits.length + pluginHits.length
+  const reportTruncated = reportMatches > reportHits.length
+  const annotationsTruncated = allAnnotationHits.length > annotationHits.length
+  const timelineTruncated = timelineMatches > timelineHits.length
+  // total_hits counts every match found; plugin search stops at its budget, so
+  // with plugins_truncated the plugin share is the returned count, a lower bound.
+  const total = manifestHits.length + reportMatches + allAnnotationHits.length + timelineMatches + pluginHits.length
+  const returned = manifestHits.length + reportHits.length + annotationHits.length + timelineHits.length + pluginHits.length
   return {
     pack: pack.id,
     keyword,
     total_hits: total,
+    ...(returned !== total ? { returned_hits: returned } : {}),
     hits: {
       manifest: manifestHits,
       report: reportHits,
@@ -1185,7 +1200,19 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
       timeline: timelineHits,
       plugins: pluginHits,
     },
-    ...(allAnnotationHits.length > annotationHits.length ? { annotations_truncated: true } : {}),
+    ...(reportTruncated ? { report_truncated: true, report_total_hits: reportMatches } : {}),
+    ...(annotationsTruncated
+      ? { annotations_truncated: true, annotations_total_hits: allAnnotationHits.length }
+      : {}),
+    ...(timelineTruncated
+      ? {
+          timeline_truncated: true,
+          timeline_total_hits: timelineMatches,
+          timeline_note:
+            `Showing the first ${timelineHits.length} of ${timelineMatches} matching timeline events ` +
+            '(use capturepack_timeline to inspect full event log or filter by time range).',
+        }
+      : {}),
     ...(pluginSearch.warnings.length > 0 ? { plugin_warnings: pluginSearch.warnings } : {}),
     ...(pluginSearch.truncated ? { plugins_truncated: true } : {}),
     ...(total === 0
