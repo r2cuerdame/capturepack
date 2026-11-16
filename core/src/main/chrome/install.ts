@@ -124,51 +124,130 @@ function versionIn(dir: string): string | null {
   }
 }
 
+/** Writes one extension file. Replaceable so a check can fail a write part-way. */
+export type ExtensionFileWriter = (file: string, bytes: Buffer) => void
+
+const writeExtensionFile: ExtensionFileWriter = (file, bytes) => fs.writeFileSync(file, bytes)
+
 /**
  * Brings the stable copy up to this build's extension — AND ONLY WHEN IT MUST.
  *
  * The point of the stable location is that Chrome's loaded files stop changing
  * under it, so rewriting them on every launch would reintroduce the same
  * problem in a slower form: Chrome watches an unpacked extension and reloads
- * its service worker when the files change, which drops the native port. An
- * unchanged version therefore touches NOTHING — not a copy, not an mtime.
+ * its service worker when the files change, which drops the native port. A
+ * folder whose every shipped file already holds the shipped bytes therefore
+ * touches NOTHING — not a copy, not an mtime.
+ *
+ * COMPARED BY CONTENT, NOT BY THE VERSION STRING (#534). This used to compare
+ * only `manifest.json`'s version and then copy the tree in directory order —
+ * which writes `manifest.json` before `route-change.js`, a file the worker
+ * imports on its first line. A copy that failed after the manifest (a virus
+ * scanner holding a file, a full disk) left the new version stamped on a folder
+ * missing its scripts, and every later start saw the matching version and
+ * repaired nothing, forever. A file the user deleted or a backup restored
+ * half-way went unnoticed the same way.
+ *
+ * So every shipped file is read and compared, and only the ones that differ are
+ * written, in an order where a failure at any step leaves the browser no worse
+ * than before: new files first (nothing loads them yet), then changed helpers,
+ * then the worker entry that imports them, and the manifest strictly last. A
+ * write that fails stops the sync with the old manifest still in place, and the
+ * next start finishes the job. Files the source does not ship are left alone.
  */
-export function syncExtensionIfChanged(): void {
-  const source = bundledExtensionDir()
-  const target = extensionDir()
+export function syncExtensionIfChanged(
+  source: string = bundledExtensionDir(),
+  target: string = extensionDir(),
+  write: ExtensionFileWriter = writeExtensionFile,
+): void {
   if (source === '' || !fs.existsSync(source)) return
-  const bundled = versionIn(source)
-  const installed = versionIn(target)
-  if (bundled !== null && bundled === installed) return
   try {
-    // Copied into place rather than swapped: a rename would delete the
-    // directory Chrome has open, which is the failure being fixed.
-    fs.mkdirSync(target, { recursive: true })
-    copyTree(source, target)
+    const pending = filesToSync(source, target)
+    if (pending.length === 0) return
+    const installed = versionIn(target)
+    const bundled = versionIn(source)
+    // Written into place rather than swapped: a rename would delete the
+    // directory Chrome has open, which is the failure the stable folder fixes.
+    for (const file of pending) {
+      const dst = path.join(target, file.relative)
+      fs.mkdirSync(path.dirname(dst), { recursive: true })
+      write(dst, file.bytes)
+    }
+    const what = `${pending.length} file(s)`
     logInfo(
       installed === null
-        ? `[chrome] extension ${bundled ?? '?'} installed to ${target}`
-        : `[chrome] extension ${installed} -> ${bundled ?? '?'} in ${target}`,
+        ? `[chrome] extension ${bundled ?? '?'} installed to ${target} (${what})`
+        : installed === bundled
+          ? `[chrome] extension ${installed} repaired in ${target} (${what})`
+          : `[chrome] extension ${installed} -> ${bundled ?? '?'} in ${target} (${what})`,
     )
   } catch (err) {
     // Rule 1: the browser integration may never be why the app fails to start.
-    // A copy that did not happen leaves the previous copy working.
+    // The manifest is written last, so a sync that stopped here left the
+    // previous version's stamp in place and the next start retries it.
     logError('[chrome] could not update the extension folder:', err)
   }
 }
 
-/** Recursive copy that overwrites files in place and leaves extras alone. */
-function copyTree(from: string, to: string): void {
-  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    const src = path.join(from, entry.name)
-    const dst = path.join(to, entry.name)
-    if (entry.isDirectory()) {
-      fs.mkdirSync(dst, { recursive: true })
-      copyTree(src, dst)
-    } else if (entry.isFile()) {
-      fs.copyFileSync(src, dst)
+interface PendingExtensionFile {
+  relative: string
+  bytes: Buffer
+}
+
+/**
+ * The shipped files whose bytes the target does not already hold, in the order
+ * they may safely be written: missing payload, changed payload, the service
+ * worker entry, then `manifest.json`.
+ */
+function filesToSync(source: string, target: string): PendingExtensionFile[] {
+  const worker = workerEntryIn(source)
+  const missing: PendingExtensionFile[] = []
+  const changed: PendingExtensionFile[] = []
+  let entry: PendingExtensionFile | null = null
+  let manifest: PendingExtensionFile | null = null
+  for (const relative of listFiles(source)) {
+    const bytes = fs.readFileSync(path.join(source, relative))
+    let current: Buffer | null = null
+    try {
+      current = fs.readFileSync(path.join(target, relative))
+    } catch {
+      current = null
     }
+    if (current !== null && current.equals(bytes)) continue
+    const file = { relative, bytes }
+    if (relative === 'manifest.json') manifest = file
+    else if (relative === worker) entry = file
+    else if (current === null) missing.push(file)
+    else changed.push(file)
   }
+  return [...missing, ...changed, ...(entry === null ? [] : [entry]), ...(manifest === null ? [] : [manifest])]
+}
+
+/** The worker script the manifest names, as a path relative to the folder. */
+function workerEntryIn(dir: string): string {
+  try {
+    const raw = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')
+    const worker = (JSON.parse(raw) as { background?: { service_worker?: unknown } }).background
+      ?.service_worker
+    if (typeof worker === 'string' && worker !== '') return path.normalize(worker)
+  } catch {
+    // An unreadable manifest is still copied; the default name is the only guess.
+  }
+  return 'background.js'
+}
+
+/** Every regular file under `dir`, as sorted relative paths. */
+function listFiles(dir: string, prefix = ''): string[] {
+  const out: string[] = []
+  const entries = fs
+    .readdirSync(path.join(dir, prefix), { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  for (const entry of entries) {
+    const relative = prefix === '' ? entry.name : path.join(prefix, entry.name)
+    if (entry.isDirectory()) out.push(...listFiles(dir, relative))
+    else if (entry.isFile()) out.push(relative)
+  }
+  return out
 }
 
 /**

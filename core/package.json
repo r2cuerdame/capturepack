@@ -87,6 +87,7 @@
     "check:dxgi-replay-ab": "node scripts/dxgi-replay-ab-check.mjs",
     "check:settings": "node scripts/settings-limits-check.mjs",
     "check:storage-retention": "node scripts/storage-retention-check.mjs",
+    "check:log-rotation": "node scripts/log-rotation-check.mjs",
     "check:hotkeys": "node scripts/hotkey-registry-check.mjs",
     "check:about": "node scripts/about-window-check.mjs",
     "check:update-notice": "node scripts/update-notice-check.mjs",
