@@ -12,6 +12,7 @@ import {
   hostCommand,
   refreshHostManifestIfInstalled,
   resolveNativeHostScript,
+  syncExtensionIfChanged,
   writeHostManifest,
   writeLauncherIfNeeded,
 } from '../src/main/chrome/install'
@@ -269,6 +270,155 @@ console.log('\nNative host launcher and manifest isolation (CRLF poisoning guard
   )
 
   fs.rmSync(tempDir, { recursive: true, force: true })
+}
+
+console.log('\nStable extension folder sync (#534)')
+
+{
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-extension-sync-'))
+  const source = path.join(tempDir, 'bundled')
+  const target = path.join(tempDir, 'stable')
+  const put = (dir: string, relative: string, content: string | Buffer): void => {
+    const file = path.join(dir, relative)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, content)
+  }
+  const manifest = (version: string): string =>
+    `${JSON.stringify({ manifest_version: 3, version, background: { service_worker: 'background.js' } })}\n`
+  const read = (dir: string, relative: string): string | null => {
+    try {
+      return fs.readFileSync(path.join(dir, relative), 'utf8')
+    } catch {
+      return null
+    }
+  }
+  const sameTree = (): boolean => {
+    const walk = (dir: string, prefix = ''): string[] =>
+      fs.readdirSync(path.join(dir, prefix), { withFileTypes: true }).flatMap((e) => {
+        const relative = path.join(prefix, e.name)
+        return e.isDirectory() ? walk(dir, relative) : [relative]
+      })
+    return walk(source).every((relative) =>
+      fs.readFileSync(path.join(source, relative)).equals(
+        fs.existsSync(path.join(target, relative)) ? fs.readFileSync(path.join(target, relative)) : Buffer.alloc(0),
+      ),
+    )
+  }
+  const recorder = (written: string[], failOn?: string) => (file: string, bytes: Buffer): void => {
+    const relative = path.relative(target, file)
+    if (relative === failOn) throw new Error(`simulated locked file: ${relative}`)
+    written.push(relative)
+    fs.writeFileSync(file, bytes)
+  }
+  const icon = path.join('icons', 'icon-16.png')
+
+  try {
+    put(source, 'manifest.json', manifest('1.0.0'))
+    put(source, 'background.js', "importScripts('route-change.js')\n// v1\n")
+    put(source, 'content-script.js', '// content v1\n')
+    put(source, 'route-change.js', '// route v1\n')
+    put(source, icon, Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]))
+
+    const initial: string[] = []
+    syncExtensionIfChanged(source, target, recorder(initial))
+    check(
+      'a first sync installs every shipped file with the manifest written last',
+      sameTree() && initial.length === 5 && initial.at(-1) === 'manifest.json' && initial.at(-2) === 'background.js',
+      initial.join(', '),
+    )
+
+    // Criterion 1: an identical folder is not rewritten, not even its mtimes.
+    const old = new Date('2026-01-01T00:00:00Z')
+    const stamped = ['manifest.json', 'background.js', 'content-script.js', 'route-change.js', icon]
+    for (const relative of stamped) fs.utimesSync(path.join(target, relative), old, old)
+    const before = stamped.map((relative) => fs.statSync(path.join(target, relative)).mtimeMs)
+    const idle: string[] = []
+    syncExtensionIfChanged(source, target, recorder(idle))
+    const after = stamped.map((relative) => fs.statSync(path.join(target, relative)).mtimeMs)
+    check(
+      'an up-to-date folder is left untouched: no write and every mtime unchanged',
+      idle.length === 0 && before.every((mtime, i) => mtime === after[i]),
+      idle.join(', '),
+    )
+
+    // Criterion 4: new helper first, changed helper next, worker, manifest last.
+    put(source, 'manifest.json', manifest('1.0.1'))
+    put(source, 'background.js', "importScripts('route-change.js', 'zz-new-helper.js')\n// v2\n")
+    put(source, 'content-script.js', '// content v2\n')
+    put(source, 'zz-new-helper.js', '// helper v2\n')
+    const upgrade: string[] = []
+    syncExtensionIfChanged(source, target, recorder(upgrade))
+    check(
+      'an update writes a new helper, then changed helpers, then the worker, then the manifest',
+      upgrade.join('|') === ['zz-new-helper.js', 'content-script.js', 'background.js', 'manifest.json'].join('|') &&
+        sameTree(),
+      upgrade.join(', '),
+    )
+
+    // Criterion 2: a write that fails part-way leaves the previous manifest and
+    // worker in place, does not throw into app start, and the next sync repairs.
+    const manifestBefore = read(target, 'manifest.json')
+    const workerBefore = read(target, 'background.js')
+    put(source, 'manifest.json', manifest('1.0.2'))
+    put(source, 'background.js', "importScripts('route-change.js', 'zz-new-helper.js')\n// v3\n")
+    put(source, 'route-change.js', '// route v3\n')
+    put(source, 'route-content.js', '// route content v3\n')
+    const partial: string[] = []
+    let threw = false
+    try {
+      syncExtensionIfChanged(source, target, recorder(partial, 'route-change.js'))
+    } catch {
+      threw = true
+    }
+    check(
+      'a failed helper write keeps the previous manifest and worker and never throws',
+      !threw &&
+        read(target, 'manifest.json') === manifestBefore &&
+        read(target, 'background.js') === workerBefore &&
+        !partial.includes('manifest.json') &&
+        !partial.includes('background.js'),
+      partial.join(', '),
+    )
+    const retry: string[] = []
+    syncExtensionIfChanged(source, target, recorder(retry))
+    check(
+      'the next sync finishes the interrupted update with the manifest last',
+      sameTree() && retry.at(-1) === 'manifest.json' && !retry.includes('route-content.js'),
+      retry.join(', '),
+    )
+
+    // Criterion 3: same version, but a file deleted and another altered.
+    fs.unlinkSync(path.join(target, 'route-change.js'))
+    put(target, icon, Buffer.from([0, 0, 0]))
+    fs.utimesSync(path.join(target, 'manifest.json'), old, old)
+    const manifestMtime = fs.statSync(path.join(target, 'manifest.json')).mtimeMs
+    const repair: string[] = []
+    syncExtensionIfChanged(source, target, recorder(repair))
+    check(
+      'a matching version with a missing and an altered file rewrites exactly those two',
+      sameTree() &&
+        repair.length === 2 &&
+        repair[0] === 'route-change.js' &&
+        repair[1] === icon &&
+        fs.statSync(path.join(target, 'manifest.json')).mtimeMs === manifestMtime,
+      repair.join(', '),
+    )
+
+    put(target, 'user-extra.txt', 'kept')
+    syncExtensionIfChanged(source, target, recorder([]))
+    check('files the build does not ship are left alone', read(target, 'user-extra.txt') === 'kept')
+
+    let threwMissing = false
+    try {
+      syncExtensionIfChanged(path.join(tempDir, 'absent'), target)
+      syncExtensionIfChanged('', target)
+    } catch {
+      threwMissing = true
+    }
+    check('a missing bundled folder is a no-op, not a crash', !threwMissing && sameTree())
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

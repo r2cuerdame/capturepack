@@ -127,6 +127,15 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   instead of the "Checking…" label simply disappearing. The automatic check
   stays silent, and a real connection failure is still reported as a failure
   ([#523](https://github.com/r2cuerdame/capturepack/issues/523)).
+- The browser extension folder the app keeps for Chrome can no longer get stuck
+  half-updated. The app used to write the new version number before the
+  extension's scripts, so a copy that failed part-way (a locked file, a full
+  disk) left a folder that claimed to be current while missing files, and no
+  later start repaired it. Each start now compares every shipped file, rewrites
+  only the missing or different ones, and writes the version file last; a failed
+  copy keeps the previous version and is finished on the next start. An
+  up-to-date folder is still not touched at all
+  ([#534](https://github.com/r2cuerdame/capturepack/issues/534)).
 
 ### Documentation
 
