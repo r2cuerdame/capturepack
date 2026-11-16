@@ -474,5 +474,239 @@ console.log('\nREBASE ANNOTATION CLOCK ON ANNOTATION WITHOUT TRACKING')
   check('tracking remains omitted', shifted.tracking, undefined)
 }
 
+console.log('\nHEAD TRIM COLLAPSING ALL KEYFRAMES DROPS SINGLETON KEYFRAMES')
+{
+  const a = manualBox()
+  a.start_ms = 0
+  a.end_ms = 10_000
+  a.bounds = { x: 300, y: 200, width: 300, height: 150 }
+  a.keyframes = [
+    { t_ms: 100, x: 100, y: 200, width: 300, height: 150 },
+    { t_ms: 500, x: 500, y: 200, width: 300, height: 150 },
+  ]
+  const shifted = rebaseAnnotationClock(a, -1_000, 4_000)
+  check('collapsed head keyframe array is omitted', 'keyframes' in shifted, false)
+  check('surviving head placement becomes static bounds', shifted.bounds, {
+    x: 500,
+    y: 200,
+    width: 300,
+    height: 150,
+  })
+  check('collapsed lifetime shifts cleanly', [shifted.start_ms, shifted.end_ms], [0, 4_000])
+  check('renders statically at surviving head bounds', at(shifted, 2_000), shifted.bounds)
+}
+
+console.log('\nTAIL TRIM DOES NOT OVERWRITE EARLIER PLACEMENT WITH FUTURE KEYFRAMES')
+{
+  const atBoundary = manualBox()
+  atBoundary.start_ms = 0
+  atBoundary.end_ms = 5_000
+  atBoundary.bounds = { x: 500, y: 200, width: 300, height: 150 }
+  atBoundary.keyframes = [
+    { t_ms: 1_000, x: 200, y: 200, width: 300, height: 150 },
+    { t_ms: 3_000, x: 900, y: 200, width: 300, height: 150 },
+  ]
+  const trimmedBoundary = rebaseAnnotationClock(atBoundary, 0, 1_000)
+  check('tail boundary collapse drops singleton keyframes', 'keyframes' in trimmedBoundary, false)
+  check('tail cut preserves placement at cut boundary', trimmedBoundary.bounds, {
+    x: 200,
+    y: 200,
+    width: 300,
+    height: 150,
+  })
+
+  const allFuture = manualBox()
+  allFuture.start_ms = 0
+  allFuture.end_ms = 5_000
+  allFuture.bounds = { x: 400, y: 200, width: 300, height: 150 }
+  allFuture.keyframes = [
+    { t_ms: 2_000, x: 200, y: 200, width: 300, height: 150 },
+    { t_ms: 4_000, x: 900, y: 200, width: 300, height: 150 },
+  ]
+  const trimmedFuture = rebaseAnnotationClock(allFuture, 0, 1_000)
+  check('future-only tail collapse drops singleton keyframes', 'keyframes' in trimmedFuture, false)
+  check('future-only tail cut preserves earliest pre-cut hold placement', trimmedFuture.bounds, {
+    x: 200,
+    y: 200,
+    width: 300,
+    height: 150,
+  })
+
+  const multiKept = manualBox()
+  multiKept.start_ms = 0
+  multiKept.end_ms = 6_000
+  multiKept.bounds = { x: 400, y: 200, width: 300, height: 150 }
+  multiKept.keyframes = [
+    { t_ms: 1_000, x: 100, y: 200, width: 300, height: 150 },
+    { t_ms: 3_000, x: 300, y: 200, width: 300, height: 150 },
+    { t_ms: 5_000, x: 900, y: 200, width: 300, height: 150 },
+  ]
+  const trimmedMulti = rebaseAnnotationClock(multiKept, -1_000, 2_000)
+  check(
+    'future keyframe does not overwrite keyframe already at duration',
+    trimmedMulti.keyframes?.map((k) => [k.t_ms, k.x]),
+    [
+      [0, 100],
+      [2_000, 300],
+    ],
+  )
+  check('remaining keyframes resync bounds to trimmed midpoint', trimmedMulti.bounds, {
+    x: 200,
+    y: 200,
+    width: 300,
+    height: 150,
+  })
+  check('resynced bounds match rendered midpoint', trimmedMulti.bounds, at(trimmedMulti, 1_000))
+
+  const wholeLife = manualBox()
+  delete wholeLife.start_ms
+  delete wholeLife.end_ms
+  wholeLife.bounds = { x: 500, y: 200, width: 300, height: 150 }
+  wholeLife.keyframes = [
+    { t_ms: 1_000, x: 100, y: 200, width: 300, height: 150 },
+    { t_ms: 2_000, x: 400, y: 200, width: 300, height: 150 },
+    { t_ms: 4_000, x: 900, y: 200, width: 300, height: 150 },
+  ]
+  const trimmedWhole = rebaseAnnotationClock(wholeLife, 0, 2_000)
+  check('omitted lifetime uses trimmed duration as representative instant', trimmedWhole.bounds, {
+    x: 400,
+    y: 200,
+    width: 300,
+    height: 150,
+  })
+}
+
+console.log('\nCROSS-DISPLAY REBASE UPDATES DISPLAY AND PRESERVES FOCUSED OMISSION')
+{
+  const stayFocused = manualBox()
+  stayFocused.start_ms = 0
+  stayFocused.end_ms = 4_000
+  stayFocused.keyframes = [
+    { t_ms: 0, x: 100, y: 200, width: 300, height: 150, display: 0 },
+    { t_ms: 2_000, x: 500, y: 200, width: 300, height: 150, display: 0 },
+  ]
+  const stayShifted = rebaseAnnotationClock(stayFocused, -2_500, 1_500)
+  check('focused display omission stays omitted when staying on focused screen', 'display' in stayShifted, false)
+  check('focused collapse moves surviving rect into bounds', stayShifted.bounds, {
+    x: 500,
+    y: 200,
+    width: 300,
+    height: 150,
+  })
+
+  const focusedToSecondaryHead = manualBox()
+  focusedToSecondaryHead.start_ms = 0
+  focusedToSecondaryHead.end_ms = 4_000
+  focusedToSecondaryHead.keyframes = [
+    { t_ms: 0, x: 100, y: 100, width: 200, height: 100, display: 0 },
+    { t_ms: 5_000, x: 50, y: 60, width: 240, height: 120, display: 1 },
+  ]
+  const collapsedToSecondary = rebaseAnnotationClock(focusedToSecondaryHead, -5_000, 1_000)
+  check('head collapse onto non-focused display sets display', collapsedToSecondary.display, 1)
+  check('head collapse onto non-focused display updates bounds', collapsedToSecondary.bounds, {
+    x: 50,
+    y: 60,
+    width: 240,
+    height: 120,
+  })
+
+  const focusedToSecondaryTail = manualBox()
+  focusedToSecondaryTail.start_ms = 0
+  focusedToSecondaryTail.end_ms = 6_000
+  focusedToSecondaryTail.keyframes = [
+    { t_ms: 1_000, x: 50, y: 60, width: 240, height: 120, display: 1 },
+    { t_ms: 3_000, x: 100, y: 100, width: 200, height: 100, display: 0 },
+  ]
+  const tailCollapsedToSecondary = rebaseAnnotationClock(focusedToSecondaryTail, 0, 1_000)
+  check('tail collapse onto earlier secondary display sets display', tailCollapsedToSecondary.display, 1)
+  check('tail collapse onto earlier secondary display sets bounds', tailCollapsedToSecondary.bounds, {
+    x: 50,
+    y: 60,
+    width: 240,
+    height: 120,
+  })
+
+  const crossMulti = manualBox()
+  crossMulti.start_ms = 0
+  crossMulti.end_ms = 4_000
+  crossMulti.keyframes = [
+    { t_ms: 1_000, x: 100, y: 100, width: 200, height: 100, display: 0 },
+    { t_ms: 3_500, x: 50, y: 60, width: 240, height: 120, display: 1 },
+  ]
+  const crossShifted = rebaseAnnotationClock(crossMulti, -1_500, 2_500)
+  check('cross-display multi-keyframe picks closer endpoint display', crossShifted.display, 1)
+  check('cross-display multi-keyframe picks closer endpoint bounds', crossShifted.bounds, {
+    x: 50,
+    y: 60,
+    width: 240,
+    height: 120,
+  })
+
+  const secondaryToZero = manualBox()
+  secondaryToZero.display = 1
+  secondaryToZero.start_ms = 0
+  secondaryToZero.end_ms = 4_000
+  secondaryToZero.keyframes = [
+    { t_ms: 0, x: 50, y: 60, width: 240, height: 120, display: 1 },
+    { t_ms: 3_000, x: 100, y: 100, width: 200, height: 100, display: 0 },
+  ]
+  const movedToZero = rebaseAnnotationClock(secondaryToZero, -3_000, 1_000)
+  check('collapsed cross-display updates explicit display index', movedToZero.display, 0)
+  check('collapsed cross-display updates bounds to display 0', movedToZero.bounds, {
+    x: 100,
+    y: 100,
+    width: 200,
+    height: 100,
+  })
+}
+
+console.log('\nLEGACY TRACKED BOXES AND FIXED BOXES KEEP EXISTING CONTRACT')
+{
+  const trackedCollapse = pickedBox()
+  const originalBounds = { x: 777, y: 222, width: 300, height: 150 }
+  trackedCollapse.bounds = originalBounds
+  trackedCollapse.tracking!.picked_at_ms = 10_000
+  trackedCollapse.keyframes = [
+    { t_ms: 10_000, x: 100, y: 200, width: 300, height: 150 },
+    { t_ms: 10_100, x: 900, y: 200, width: 300, height: 150 },
+  ]
+  const collapsed = rebaseAnnotationClock(trackedCollapse, -10_200, 800)
+  check('tracked singleton keyframe array is dropped', 'keyframes' in collapsed, false)
+  check('tracked bounds preserve picked_at_ms contract', collapsed.bounds, originalBounds)
+  check('tracked picked_at_ms and samples still rebase', {
+    picked: collapsed.tracking?.picked_at_ms,
+    samples: collapsed.tracking?.samples?.map((s) => s.t_ms),
+  }, { picked: 0, samples: [0, 300] })
+
+  const trackedTail = pickedBox()
+  trackedTail.bounds = originalBounds
+  trackedTail.keyframes = [
+    { t_ms: 10_000, x: 100, y: 200, width: 300, height: 150 },
+    { t_ms: 10_400, x: 500, y: 200, width: 300, height: 150 },
+    { t_ms: 10_900, x: 999, y: 200, width: 300, height: 150 },
+  ]
+  const tailTracked = rebaseAnnotationClock(trackedTail, -10_000, 400)
+  check(
+    'tracked tail trim prevents future overwrite without moving bounds',
+    {
+      keyframes: tailTracked.keyframes?.map((k) => [k.t_ms, k.x]),
+      bounds: tailTracked.bounds,
+    },
+    {
+      keyframes: [
+        [0, 100],
+        [400, 500],
+      ],
+      bounds: originalBounds,
+    },
+  )
+
+  const fixed = manualBox()
+  const shiftedFixed = rebaseAnnotationClock(fixed, -10_200, 1_000)
+  check('plain fixed box keeps bounds unchanged', shiftedFixed.bounds, fixed.bounds)
+  check('plain fixed box keeps keyframes omitted', 'keyframes' in shiftedFixed, false)
+  check('plain fixed box keeps display omitted', 'display' in shiftedFixed, false)
+}
+
 console.log(failed === 0 ? '\nbox-motion-check ok' : `\nbox-motion-check FAILED (${failed})`)
 process.exitCode = failed === 0 ? 0 : 1

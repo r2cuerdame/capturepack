@@ -226,9 +226,12 @@ export function syncBoundsToRepresentative(
  * Per-display recordings can start at slightly different instants. Rebasing
  * only the lifetime makes authored keyframes and observed samples drift away
  * from the video they are rendered over, so the entire temporal annotation is
- * shifted as one value. Keyframes clipped onto the same boundary collapse with
- * the later source placement winning — that is the state visible at the first
- * frame of the retained replay.
+ * shifted as one value. Head clips collapsing at `0` keep the latest clipped
+ * keyframe (what is visible at the first retained frame); tail clips beyond
+ * `duration` never overwrite an earlier keyframe already at or before the cut.
+ * When fewer than two keyframes survive, `keyframes` is dropped (SPEC §8.9),
+ * and manual boxes resync `bounds` (and `display`) to the surviving or new
+ * representative midpoint placement.
  */
 export function rebaseAnnotationClock(
   a: Annotation,
@@ -241,23 +244,75 @@ export function rebaseAnnotationClock(
   const clamp = (ms: number): number =>
     Math.min(Math.max(0, Math.round(ms + offset)), duration)
 
-  const keyframes: AnnotationKeyframe[] | undefined =
+  const shiftedKeyframes: AnnotationKeyframe[] | undefined =
     a.keyframes === undefined
       ? undefined
       : a.keyframes.reduce<AnnotationKeyframe[]>((shifted, frame) => {
-          const next = { ...frame, t_ms: clamp(frame.t_ms) }
+          const unclamped = Math.round(frame.t_ms + offset)
+          const next = {
+            ...frame,
+            t_ms: Math.min(Math.max(0, unclamped), duration),
+          }
           const previous = shifted[shifted.length - 1]
-          if (previous?.t_ms === next.t_ms) shifted[shifted.length - 1] = next
-          else shifted.push(next)
+          if (previous?.t_ms === next.t_ms) {
+            if (unclamped <= duration) shifted[shifted.length - 1] = next
+          } else {
+            shifted.push(next)
+          }
           return shifted
         }, [])
 
+  const hasTiming = a.start_ms !== undefined && a.end_ms !== undefined
+  const nextStart = hasTiming ? clamp(a.start_ms!) : undefined
+  const nextEnd = hasTiming ? clamp(a.end_ms!) : undefined
+
+  let nextBounds = a.bounds
+  let nextDisplay = a.display
+  let omitDisplay = a.display === undefined
+  const keptKeyframes =
+    shiftedKeyframes !== undefined && shiftedKeyframes.length >= 2
+      ? shiftedKeyframes
+      : undefined
+
+  if (a.keyframes !== undefined && a.tracking?.enabled !== true) {
+    const oldMid = hasTiming
+      ? (a.start_ms! + a.end_ms!) / 2
+      : Number.POSITIVE_INFINITY
+    const oldDisplay = representativePlacementForFrames(
+      a.keyframes,
+      oldMid,
+      a.display,
+    )?.display
+    const nextMid =
+      nextStart === undefined || nextEnd === undefined
+        ? duration
+        : (nextStart + nextEnd) / 2
+    const representative =
+      shiftedKeyframes !== undefined && shiftedKeyframes.length > 0
+        ? representativePlacementForFrames(shiftedKeyframes, nextMid, a.display)
+        : null
+    if (representative !== null) {
+      nextBounds = representative.bounds
+      const resolvedDisplay = representative.display
+      omitDisplay =
+        resolvedDisplay === undefined ||
+        (a.display === undefined && resolvedDisplay === oldDisplay)
+      nextDisplay = omitDisplay ? undefined : resolvedDisplay
+    }
+  }
+
+  const { keyframes: _droppedKeyframes, display: _droppedDisplay, ...rest } = a
+
   return {
-    ...a,
-    ...(a.start_ms === undefined || a.end_ms === undefined
+    ...rest,
+    bounds: nextBounds,
+    ...(omitDisplay || nextDisplay === undefined
       ? {}
-      : { start_ms: clamp(a.start_ms), end_ms: clamp(a.end_ms) }),
-    ...(keyframes === undefined ? {} : { keyframes }),
+      : { display: nextDisplay }),
+    ...(nextStart === undefined || nextEnd === undefined
+      ? {}
+      : { start_ms: nextStart, end_ms: nextEnd }),
+    ...(keptKeyframes === undefined ? {} : { keyframes: keptKeyframes }),
     ...(a.tracking === undefined
       ? {}
       : {
@@ -279,26 +334,42 @@ export function rebaseAnnotationClock(
   }
 }
 
-/** The interpolated rectangle at `tMs`; kept beside the edits it has to agree with. */
-function boundsAtAuthored(
+type KeyframeSpan =
+  | { kind: 'edge'; frame: AnnotationKeyframe }
+  | { kind: 'span'; prev: AnnotationKeyframe; next: AnnotationKeyframe }
+
+interface RepresentativePlacement {
+  bounds: AnnotationBounds
+  display: number | undefined
+}
+
+function findKeyframeSpan(
   frames: readonly AnnotationKeyframe[],
   tMs: number,
-): AnnotationBounds | null {
+): KeyframeSpan | null {
   if (frames.length === 0) return null
   const first = frames[0]!
-  if (frames.length === 1 || tMs <= first.t_ms) return rectOf(first)
+  if (frames.length === 1 || tMs <= first.t_ms) {
+    return { kind: 'edge', frame: first }
+  }
   const last = frames[frames.length - 1]!
-  if (tMs >= last.t_ms) return rectOf(last)
-  let prev = first
-  let next = last
+  if (tMs >= last.t_ms) {
+    return { kind: 'edge', frame: last }
+  }
   for (let i = 1; i < frames.length; i += 1) {
     const candidate = frames[i]!
     if (candidate.t_ms >= tMs) {
-      next = candidate
-      prev = frames[i - 1]!
-      break
+      return { kind: 'span', prev: frames[i - 1]!, next: candidate }
     }
   }
+  return { kind: 'edge', frame: last }
+}
+
+function interpolateSpan(
+  prev: AnnotationKeyframe,
+  next: AnnotationKeyframe,
+  tMs: number,
+): AnnotationBounds {
   const span = next.t_ms - prev.t_ms
   if (span <= 0) return rectOf(next)
   const w = (tMs - prev.t_ms) / span
@@ -308,6 +379,49 @@ function boundsAtAuthored(
     width: Math.round(prev.width + (next.width - prev.width) * w),
     height: Math.round(prev.height + (next.height - prev.height) * w),
   }
+}
+
+function representativePlacementForFrames(
+  frames: readonly AnnotationKeyframe[],
+  tMs: number,
+  fallbackDisplay: number | undefined,
+): RepresentativePlacement | null {
+  const found = findKeyframeSpan(frames, tMs)
+  if (found === null) return null
+  if (found.kind === 'edge') {
+    return {
+      bounds: rectOf(found.frame),
+      display: found.frame.display ?? fallbackDisplay,
+    }
+  }
+  const { prev, next } = found
+  const prevDisplay = prev.display ?? fallbackDisplay
+  const nextDisplay = next.display ?? fallbackDisplay
+  if (prevDisplay !== nextDisplay) {
+    const span = next.t_ms - prev.t_ms
+    const closer =
+      span <= 0 || tMs - prev.t_ms >= next.t_ms - tMs ? next : prev
+    return {
+      bounds: rectOf(closer),
+      display: closer.display ?? fallbackDisplay,
+    }
+  }
+  return {
+    bounds: interpolateSpan(prev, next, tMs),
+    display: prevDisplay,
+  }
+}
+
+/** The interpolated rectangle at `tMs`; kept beside the edits it has to agree with. */
+function boundsAtAuthored(
+  frames: readonly AnnotationKeyframe[],
+  tMs: number,
+): AnnotationBounds | null {
+  const found = findKeyframeSpan(frames, tMs)
+  if (found === null) return null
+  return found.kind === 'edge'
+    ? rectOf(found.frame)
+    : interpolateSpan(found.prev, found.next, tMs)
 }
 
 function rectOf(f: AnnotationKeyframe): AnnotationBounds {
