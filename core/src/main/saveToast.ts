@@ -18,6 +18,7 @@ import { type ActionResult, mergeActionResults } from '../shared/actions'
 import { stripUtf8Bom } from '../shared/json'
 import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
+import type { Settings } from '../shared/types'
 import { readActionResults, retryAction } from './actions/host'
 import { loadSettings } from './settings'
 
@@ -40,6 +41,23 @@ interface ActiveToast {
   timer: NodeJS.Timeout | null
   ceiling: NodeJS.Timeout
   actionResults: ActionResult[]
+  replayUnavailable: ReplayUnavailablePayload | null
+  // The LATEST render status, not the one the toast opened with: a render or
+  // an action can report before the page has loaded, and a message sent then
+  // is lost — did-finish-load replays these instead of the opening values.
+  renderState: ToastRenderState
+  renderProgress: number | undefined
+  loaded: boolean
+}
+
+/**
+ * The toast's fixed height for what it shows. The window does not resize
+ * itself and clips, so every caller sizes it from this one sum — the
+ * replay-unavailable line included, which is the one warning that matters.
+ */
+export function toastHeight(replayUnavailable: boolean, actionCount: number): number {
+  const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
+  return TOAST_HEIGHT + (replayUnavailable ? REPLAY_WARNING_HEIGHT : 0) + actionExtraHeight
 }
 
 /** True while the toast is reporting work the user is waiting on. */
@@ -68,6 +86,16 @@ function armAutoClose(toast: ActiveToast, state: ToastRenderState): void {
 // One toast at a time: a new save replaces the previous toast.
 let active: ActiveToast | null = null
 let ipcRegistered = false
+// The running app's settings object, which the settings GUI mutates in place.
+// loadSettings() is the STARTUP path: it rewrites settings.json and re-arms an
+// --output-dir override the user may since have replaced, so the toast only
+// falls back to it when no live object was handed over.
+let liveSettings: Settings | null = null
+
+/** Call once at startup (after settings load) with the live settings object. */
+export function setToastLiveSettings(live: Settings): void {
+  liveSettings = live
+}
 
 /**
  * The exact Copy Prompt text (FIXED CONTRACT — do not reword). It lives in
@@ -87,17 +115,17 @@ export function showSaveToast(options: {
   renderState: ToastRenderState
   // Resolved UI language for the toast strings (shared/i18n Language).
   uiLanguage: string
+  // The caller's live settings; remembered for later updates and retries.
+  settings?: Settings
 }): void {
   registerToastIpc()
+  if (options.settings !== undefined) liveSettings = options.settings
   if (active !== null && !active.win.isDestroyed()) active.win.close()
   active = null
 
   const work = screen.getPrimaryDisplay().workArea
-  const settings = loadSettings().settings
   const actionResults = readActionResults(options.folderPath)
-  const actionCount = actionResults.length
-  const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
-  const height = TOAST_HEIGHT + (options.replayUnavailable === null ? 0 : REPLAY_WARNING_HEIGHT) + actionExtraHeight
+  const height = toastHeight(options.replayUnavailable !== null, actionResults.length)
   const win = new BrowserWindow({
     x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
     y: work.y + work.height - height - TOAST_MARGIN,
@@ -126,6 +154,10 @@ export function showSaveToast(options: {
     timer: null,
     ceiling,
     actionResults: [...actionResults],
+    replayUnavailable: options.replayUnavailable,
+    renderState: options.renderState,
+    renderProgress: undefined,
+    loaded: false,
   }
   armAutoClose(toast, options.renderState)
   win.on('closed', () => {
@@ -135,17 +167,29 @@ export function showSaveToast(options: {
   })
 
   win.webContents.on('did-finish-load', () => {
+    // A newer save replaced this toast, or it closed while loading: a late
+    // load must not paint (or show) a window nobody is reporting into.
+    if (win.isDestroyed() || active !== toast) return
+    toast.loaded = true
+    const settings = liveSettings ?? loadSettings().settings
+    // Whatever reached the toast or the pack while the page loaded wins over
+    // what the toast opened with.
+    toast.actionResults = mergeActionResults(readActionResults(options.folderPath), toast.actionResults)
     const init: ToastInitPayload = {
       folderName: path.basename(options.folderPath),
       folderPath: options.folderPath,
       hasBlur: options.hasBlur,
       replayUnavailable: options.replayUnavailable,
-      renderState: options.renderState,
+      renderState: toast.renderState,
       uiLanguage: options.uiLanguage,
-      actionResults,
+      actionResults: toast.actionResults,
       actionConfigs: settings.actionConfigs,
     }
     win.webContents.send(IPC.toastInit, init)
+    if (toast.renderProgress !== undefined) {
+      win.webContents.send(IPC.toastRenderStatus, { state: toast.renderState, progress: toast.renderProgress })
+    }
+    fitToastHeight(toast)
     // showInactive: a toast must never steal focus from the user's work.
     win.showInactive()
   })
@@ -166,12 +210,32 @@ export function updateToastRenderStatus(
 ): void {
   if (active === null || active.win.isDestroyed()) return
   if (active.folderPath !== folderPath) return
-  active.win.webContents.send(IPC.toastRenderStatus, {
-    state,
-    ...(progress === undefined ? {} : { progress }),
-  })
+  active.renderState = state
+  active.renderProgress = progress
+  // Before the page loads the message would be lost; did-finish-load sends
+  // the state kept above instead.
+  if (active.loaded) {
+    active.win.webContents.send(IPC.toastRenderStatus, {
+      state,
+      ...(progress === undefined ? {} : { progress }),
+    })
+  }
   // A terminal state is when the countdown may finally start.
   armAutoClose(active, state)
+}
+
+/** Grows the fixed-size toast to fit what it now shows; never shrinks it. */
+function fitToastHeight(toast: ActiveToast): void {
+  const targetHeight = toastHeight(toast.replayUnavailable !== null, toast.actionResults.length)
+  const current = toast.win.getBounds()
+  if (current.height >= targetHeight) return
+  const work = screen.getPrimaryDisplay().workArea
+  toast.win.setBounds({
+    x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
+    y: work.y + work.height - targetHeight - TOAST_MARGIN,
+    width: TOAST_WIDTH,
+    height: targetHeight,
+  })
 }
 
 /**
@@ -183,29 +247,21 @@ export function updateToastActionResults(
 ): void {
   if (active === null || active.win.isDestroyed()) return
   if (active.folderPath !== folderPath) return
-  const settings = loadSettings().settings
   const stored = readActionResults(folderPath)
   const base = stored.length > 0 ? stored : active.actionResults
   const effective = mergeActionResults(base, results)
   active.actionResults = effective
-  const payload: ToastActionResultsPayload = {
-    results: effective,
-    actionConfigs: settings.actionConfigs,
+  // Before the page loads the message would be lost; did-finish-load sends
+  // the results kept above instead.
+  if (active.loaded) {
+    const settings = liveSettings ?? loadSettings().settings
+    const payload: ToastActionResultsPayload = {
+      results: effective,
+      actionConfigs: settings.actionConfigs,
+    }
+    active.win.webContents.send(IPC.toastActionResults, payload)
   }
-  active.win.webContents.send(IPC.toastActionResults, payload)
-  const actionCount = effective.length
-  const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
-  const work = screen.getPrimaryDisplay().workArea
-  const current = active.win.getBounds()
-  const targetHeight = TOAST_HEIGHT + actionExtraHeight
-  if (current.height < targetHeight) {
-    active.win.setBounds({
-      x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
-      y: work.y + work.height - targetHeight - TOAST_MARGIN,
-      width: TOAST_WIDTH,
-      height: targetHeight,
-    })
-  }
+  fitToastHeight(active)
 }
 
 function fromActiveToast(event: IpcMainEvent | IpcMainInvokeEvent): ActiveToast | null {
@@ -248,7 +304,7 @@ function registerToastIpc(): void {
     if (typeof configId !== 'string' || configId === '') {
       return { ok: false, error: 'Invalid config id' }
     }
-    const settings = loadSettings().settings
+    const settings = liveSettings ?? loadSettings().settings
     const config = settings.actionConfigs.find((c) => c.configId === configId)
     if (config === undefined || !config.enabled) {
       return { ok: false, error: 'Action configuration is disabled or not found' }
