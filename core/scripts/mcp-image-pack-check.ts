@@ -328,6 +328,20 @@ async function main(): Promise<void> {
     path: 'C:\\packs\\short-timeline-pack',
     timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: shortTimelineEvents }),
   }
+  // A report with more matching lines than one search group lists.
+  const longReportText = [
+    '# CapturePack with a long report',
+    '',
+    ...Array.from({ length: 150 }, (_, index) => `- Step ${index + 1}: overflow-marker observed`),
+    '',
+    'Closing line without the keyword.',
+  ].join('\n')
+  const longReportPack = {
+    ...pack,
+    id: 'long-report-pack',
+    path: 'C:\\packs\\long-report-pack',
+    report: () => longReportText,
+  }
   const preT0TimelineEvents = [
     { t_ms: -4000, type: 'plugin.hotkey.down', source: 'plugin' },
     { t_ms: -2500, type: 'input.pointer.move', source: 'windows', data: { x: 10, y: 20 } },
@@ -504,6 +518,7 @@ async function main(): Promise<void> {
       if (id === windowsPack.id) return windowsPack
       if (id === longTimelinePack.id) return longTimelinePack
       if (id === shortTimelinePack.id) return shortTimelinePack
+      if (id === longReportPack.id) return longReportPack
       if (id === preT0TimelinePack.id) return preT0TimelinePack
       if (id === invalidPluginPack.id) return invalidPluginPack
       if (id === minimalPack.id) return minimalPack
@@ -840,6 +855,69 @@ async function main(): Promise<void> {
       String(invalidSearchWarnings[0]?.error).startsWith('invalid JSON:') &&
       String(invalidSearch.message).includes('could not be searched'),
     'capturepack_search surfaces plugin parse failures instead of a silent false negative',
+  )
+
+  console.log('SEARCH TRUNCATION')
+  const longReportSearch = await callbacks.get('capturepack_search')?.({
+    id: longReportPack.id,
+    keyword: 'OVERFLOW-MARKER',
+  })
+  const longReportSearchJson = textJson(longReportSearch as ToolResult)
+  const longReportHits = (longReportSearchJson.hits as Record<string, unknown>).report as Array<{ line: number; text: string }>
+  check(
+    longReportSearch?.isError !== true &&
+      longReportHits.length === 100 &&
+      longReportHits[0]?.line === 3 &&
+      longReportHits[99]?.line === 102 &&
+      longReportSearchJson.report_truncated === true &&
+      longReportSearchJson.report_total_hits === 150,
+    'capturepack_search lists 100 report lines, flags the rest and reports the real 150 matches',
+  )
+  check(
+    longReportSearchJson.total_hits === 150 &&
+      longReportSearchJson.returned_hits === 100 &&
+      !('timeline_truncated' in longReportSearchJson) &&
+      !('annotations_truncated' in longReportSearchJson),
+    'capturepack_search total_hits counts every report match and returned_hits counts the listed ones',
+  )
+  const longTimelineSearch = await callbacks.get('capturepack_search')?.({
+    id: longTimelinePack.id,
+    keyword: 'input.pointer.move',
+  })
+  const longTimelineSearchJson = textJson(longTimelineSearch as ToolResult)
+  const longTimelineHits = (longTimelineSearchJson.hits as Record<string, unknown>).timeline as Array<{ t_ms: number }>
+  check(
+    longTimelineSearch?.isError !== true &&
+      longTimelineHits.length === 100 &&
+      longTimelineHits[0]?.t_ms === 0 &&
+      longTimelineHits[99]?.t_ms === 1_980 &&
+      longTimelineSearchJson.timeline_truncated === true &&
+      longTimelineSearchJson.timeline_total_hits === 500,
+    'capturepack_search lists 100 timeline events in order, flags the rest and reports the real 500 matches',
+  )
+  check(
+    String(longTimelineSearchJson.timeline_note).includes('first 100 of 500') &&
+      String(longTimelineSearchJson.timeline_note).includes('capturepack_timeline'),
+    'a truncated timeline search points at capturepack_timeline for the rest',
+  )
+  check(
+    longTimelineSearchJson.total_hits === 500 &&
+      longTimelineSearchJson.returned_hits === 100 &&
+      !('report_truncated' in longTimelineSearchJson),
+    'capturepack_search total_hits counts every timeline match',
+  )
+  const shortTimelineSearch = await callbacks.get('capturepack_search')?.({
+    id: shortTimelinePack.id,
+    keyword: 'input.window',
+  })
+  const shortTimelineSearchJson = textJson(shortTimelineSearch as ToolResult)
+  const shortTimelineHits = (shortTimelineSearchJson.hits as Record<string, unknown>).timeline as unknown[]
+  check(
+    shortTimelineSearch?.isError !== true &&
+      shortTimelineHits.length === 2 &&
+      shortTimelineSearchJson.total_hits === 2 &&
+      JSON.stringify(Object.keys(shortTimelineSearchJson)) === JSON.stringify(['pack', 'keyword', 'total_hits', 'hits']),
+    'a search under the cap keeps the original response shape with no truncation fields',
   )
   const emptyWindowsResult = await callbacks.get('capturepack_windows')?.({ id: pack.id })
   const emptyWindowsJson = textJson(emptyWindowsResult as ToolResult)
