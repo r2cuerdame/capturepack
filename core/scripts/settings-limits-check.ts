@@ -1,6 +1,22 @@
 // Settings regressions that must stay runnable without Electron.
-import { readFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
+import {
+  clearOutputDirOverride,
+  loadSettings,
+  persistSettings,
+  readSettings,
+  settingsFilePath,
+} from '../src/main/settings'
 import {
   MAX_CAPTURE_FPS,
   MIN_CAPTURE_FPS,
@@ -233,6 +249,303 @@ check(
     settingsWindow.includes('startDomBridge()') &&
     settingsWindow.includes('stopDomBridge()'),
 )
+
+interface FsHooks {
+  readFileSync: ((proceed: () => string | Buffer, file: unknown) => string | Buffer) | null
+  existsSync: ((proceed: () => boolean, file: unknown) => boolean) | null
+  lstatSync: ((proceed: () => unknown, file: unknown) => unknown) | null
+}
+
+function fsHooks(): FsHooks {
+  const hooks = (globalThis as { __capturepackFsHooks?: FsHooks }).__capturepackFsHooks
+  if (hooks === undefined) {
+    throw new Error('settings-limits-check.mjs must provide __capturepackFsHooks')
+  }
+  return hooks
+}
+
+function resetFsHooks(): void {
+  const hooks = fsHooks()
+  hooks.readFileSync = null
+  hooks.existsSync = null
+  hooks.lstatSync = null
+}
+
+function errnoError(code: string, message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code })
+}
+
+function withProfileEnv<T>(argvExtra: readonly string[], fn: (dirs: { root: string; userData: string; desktop: string }) => T): T {
+  const root = mkdtempSync(path.join(tmpdir(), 'capturepack-settings-behavior-'))
+  const userData = path.join(root, 'user-data')
+  const desktop = path.join(root, 'desktop')
+  const prevUserData = process.env.CAPTUREPACK_TEST_USER_DATA
+  const prevDesktop = process.env.CAPTUREPACK_TEST_DESKTOP
+  const prevArgv = [...process.argv]
+  process.env.CAPTUREPACK_TEST_USER_DATA = userData
+  process.env.CAPTUREPACK_TEST_DESKTOP = desktop
+  process.argv = [...prevArgv.filter((arg) => !arg.startsWith('--output-dir=')), ...argvExtra]
+  try {
+    return fn({ root, userData, desktop })
+  } finally {
+    resetFsHooks()
+    process.argv = prevArgv
+    if (prevUserData === undefined) delete process.env.CAPTUREPACK_TEST_USER_DATA
+    else process.env.CAPTUREPACK_TEST_USER_DATA = prevUserData
+    if (prevDesktop === undefined) delete process.env.CAPTUREPACK_TEST_DESKTOP
+    else process.env.CAPTUREPACK_TEST_DESKTOP = prevDesktop
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+function withTargetReadFailure(
+  targetFile: string,
+  code: string,
+  options: { hideFromExistsSync: boolean; failLstat: boolean },
+  fn: () => void,
+): void {
+  const resolvedTarget = path.resolve(targetFile)
+  const hooks = fsHooks()
+  hooks.readFileSync = (proceed, file) => {
+    if (path.resolve(String(file)) === resolvedTarget) {
+      throw errnoError(code, `${code}: simulated read failure for ${resolvedTarget}`)
+    }
+    return proceed()
+  }
+  hooks.existsSync = (proceed, file) => {
+    if (options.hideFromExistsSync && path.resolve(String(file)) === resolvedTarget) {
+      return false
+    }
+    return proceed()
+  }
+  hooks.lstatSync = (proceed, file) => {
+    if (options.failLstat && path.resolve(String(file)) === resolvedTarget) {
+      throw errnoError(code, `${code}: simulated lstat failure for ${resolvedTarget}`)
+    }
+    return proceed()
+  }
+  try {
+    fn()
+  } finally {
+    resetFsHooks()
+  }
+}
+
+console.log('\nSETTINGS PRESERVATION ON UNREADABLE OR CORRUPT FILES')
+withProfileEnv([], ({ desktop }) => {
+  const loaded = loadSettings()
+  const onDisk = JSON.parse(readFileSync(settingsFilePath(), 'utf8')) as Record<string, unknown>
+  check(
+    'a missing settings.json reports firstRun=true and writes default settings',
+    loaded.firstRun === true &&
+      existsSync(settingsFilePath()) &&
+      onDisk.fps === 15 &&
+      onDisk.welcomeShown === false &&
+      onDisk.outputDir === path.join(desktop, 'CapturePack'),
+  )
+})
+
+for (const failure of [
+  { label: 'EBUSY lock', code: 'EBUSY' },
+  { label: 'EACCES permission error', code: 'EACCES' },
+]) {
+  withProfileEnv([], ({ userData }) => {
+    mkdirSync(userData, { recursive: true })
+    const original = '{"fps":29,"outputDir":"C:\\\\Users\\\\Test\\\\CustomCaptures","welcomeShown":true}\n'
+    const file = settingsFilePath()
+    writeFileSync(file, original, 'utf8')
+
+    let loaded!: ReturnType<typeof loadSettings>
+    withTargetReadFailure(
+      file,
+      failure.code,
+      { hideFromExistsSync: true, failLstat: true },
+      () => {
+        loaded = loadSettings()
+      },
+    )
+
+    check(
+      `${failure.label} does not mistake existing settings.json for firstRun`,
+      loaded.firstRun === false && loaded.settings.fps === 15,
+    )
+    check(
+      `${failure.label} leaves original settings.json untouched on startup`,
+      readFileSync(file, 'utf8') === original,
+    )
+
+    persistSettings({
+      ...loaded.settings,
+      recordingEnabled: false,
+      showEditorTutorial: false,
+      showShortcutOverlay: false,
+      welcomeShown: true,
+      editorWindowBounds: { x: 10, y: 20, width: 800, height: 600 },
+      fps: 24,
+    })
+    check(
+      `${failure.label} preserves original settings.json across runtime persistSettings even after lock clears`,
+      readFileSync(file, 'utf8') === original,
+    )
+
+    // Mid-run readSettings() (used by saveToast) reads the unlocked file
+    // without cancelling startup preservation for the initial defaults object.
+    const midRun = readSettings()
+    persistSettings({ ...loaded.settings, recordingEnabled: false })
+    check(
+      `${failure.label} mid-run readSettings reads current disk values without clearing startup preservation`,
+      midRun.fps === 29 && readFileSync(file, 'utf8') === original,
+    )
+  })
+}
+
+withProfileEnv([], ({ userData }) => {
+  mkdirSync(userData, { recursive: true })
+  const dirAsSettings = settingsFilePath()
+  mkdirSync(dirAsSettings)
+  const loaded = loadSettings()
+  check(
+    'a real unreadable entry (directory at settings.json) reports firstRun=false without crashing',
+    loaded.firstRun === false && loaded.settings.fps === 15,
+  )
+  let persistThrew = false
+  try {
+    persistSettings({ ...loaded.settings, fps: 24 })
+  } catch {
+    persistThrew = true
+  }
+  check(
+    'persistSettings skips overwriting a real unreadable entry instead of failing or staging .tmp',
+    !persistThrew && existsSync(dirAsSettings) && !existsSync(`${dirAsSettings}.tmp`),
+  )
+})
+
+for (const malformed of [
+  { label: 'malformed JSON', body: '{"fps": 24, "outputDir": "D:\\\\Saved", broken' },
+  { label: 'non-object JSON array', body: '[1, 2, 3]' },
+]) {
+  withProfileEnv([], () => {
+    mkdirSync(path.dirname(settingsFilePath()), { recursive: true })
+    const file = settingsFilePath()
+    writeFileSync(file, malformed.body, 'utf8')
+    const loaded = loadSettings()
+    check(
+      `${malformed.label} reports firstRun=false and preserves disk bytes on startup`,
+      loaded.firstRun === false &&
+        loaded.settings.fps === 15 &&
+        readFileSync(file, 'utf8') === malformed.body,
+    )
+
+    persistSettings({
+      ...loaded.settings,
+      recordingEnabled: false,
+      showEditorTutorial: false,
+      showShortcutOverlay: false,
+      welcomeShown: true,
+      editorWindowBounds: { x: 10, y: 20, width: 800, height: 600 },
+      fps: 24,
+    })
+    check(
+      `${malformed.label} stays preserved across editor/tray/welcome/settings persistSettings calls`,
+      readFileSync(file, 'utf8') === malformed.body,
+    )
+
+    unlinkSync(file)
+    persistSettings({
+      ...loaded.settings,
+      fps: 24,
+      showShortcutOverlay: false,
+    })
+    const saved = existsSync(file)
+      ? (JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>)
+      : null
+    check(
+      `${malformed.label} resumes normal saving after the user deletes the preserved file`,
+      saved !== null && saved.fps === 24 && saved.showShortcutOverlay === false,
+    )
+
+    persistSettings({
+      ...loaded.settings,
+      fps: 28,
+      showShortcutOverlay: false,
+    })
+    const updated = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    check(
+      `${malformed.label} continues saving subsequent changes normally`,
+      updated.fps === 28,
+    )
+  })
+}
+
+withProfileEnv(['--output-dir=/tmp/capturepack-cli-override'], ({ root, desktop }) => {
+  const overridePath = path.resolve('/tmp/capturepack-cli-override')
+  const persistedOut = path.join(root, 'persisted-packs')
+  const explicitOut = path.join(root, 'explicit-packs')
+  mkdirSync(path.dirname(settingsFilePath()), { recursive: true })
+  const file = settingsFilePath()
+  writeFileSync(
+    file,
+    `\uFEFF${JSON.stringify({ settingsVersion: 3, fps: 24, outputDir: persistedOut, futurePluginFlag: 'keep-me' })}`,
+    'utf8',
+  )
+  const loaded = loadSettings()
+  const afterLoad = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  check(
+    'normal BOM profile loads unknown fields, sets firstRun=false, and keeps --output-dir out of disk',
+    loaded.firstRun === false &&
+      loaded.settings.fps === 24 &&
+      loaded.settings.outputDir === overridePath &&
+      Reflect.get(loaded.settings, 'futurePluginFlag') === 'keep-me' &&
+      afterLoad.outputDir === persistedOut,
+  )
+
+  persistSettings({ ...loaded.settings, replaySeconds: 45 })
+  const afterPersist = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  check(
+    'persistSettings keeps on-disk outputDir while --output-dir override is active',
+    afterPersist.replaySeconds === 45 &&
+      afterPersist.outputDir === persistedOut &&
+      afterPersist.futurePluginFlag === 'keep-me',
+  )
+
+  clearOutputDirOverride()
+  persistSettings({ ...loaded.settings, outputDir: explicitOut })
+  const afterExplicit = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  check(
+    'explicit outputDir change after clearOutputDirOverride persists to disk',
+    afterExplicit.outputDir === explicitOut,
+  )
+
+  // With --output-dir still active via argv on a new load, deleting a preserved
+  // corrupt file falls back to the default outputDir instead of persisting the override.
+  process.argv = [...process.argv.filter((arg) => !arg.startsWith('--output-dir=')), '--output-dir=/tmp/capturepack-cli-override']
+  writeFileSync(file, '{corrupt', 'utf8')
+  const corruptLoaded = loadSettings()
+  persistSettings({ ...corruptLoaded.settings, fps: 22 })
+  check(
+    '--output-dir run preserves corrupt file on persistSettings while it exists',
+    readFileSync(file, 'utf8') === '{corrupt',
+  )
+  unlinkSync(file)
+  persistSettings({ ...corruptLoaded.settings, fps: 22 })
+  const afterDelete = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  check(
+    'deleting a preserved corrupt file under --output-dir writes default outputDir instead of override',
+    afterDelete.fps === 22 && afterDelete.outputDir === path.join(desktop, 'CapturePack'),
+  )
+})
+
+withProfileEnv([], () => {
+  mkdirSync(path.dirname(settingsFilePath()), { recursive: true })
+  const file = settingsFilePath()
+  writeFileSync(file, '   \n', 'utf8')
+  const loaded = loadSettings()
+  const repaired = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  check(
+    'an empty/whitespace settings.json is not firstRun and initializes default JSON',
+    loaded.firstRun === false && repaired.fps === 15,
+  )
+})
 
 if (failed > 0) {
   console.error(`\nsettings-limits-check failed: ${failed}`)
