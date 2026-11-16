@@ -127,6 +127,31 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   instead of the "Checking…" label simply disappearing. The automatic check
   stays silent, and a real connection failure is still reported as a failure
   ([#523](https://github.com/r2cuerdame/capturepack/issues/523)).
+- The browser extension folder the app keeps for Chrome can no longer get stuck
+  half-updated. The app used to write the new version number before the
+  extension's scripts, so a copy that failed part-way (a locked file, a full
+  disk) left a folder that claimed to be current while missing files, and no
+  later start repaired it. Each start now compares every shipped file, rewrites
+  only the missing or different ones, and writes the version file last; a failed
+  copy keeps the previous version and is finished on the next start. An
+  up-to-date folder is still not touched at all
+  ([#534](https://github.com/r2cuerdame/capturepack/issues/534)).
+- The anonymous once-a-day usage signal is now sent on every local day the app
+  is running, not only on the day it was launched. An app started at login and
+  left open or asleep across midnight checks the date hourly and sends the new
+  day's signal once. The fields sent, the one-per-day limit and the silent
+  no-retry on failure are unchanged, and the unread reply is closed instead of
+  holding its connection
+  ([#537](https://github.com/r2cuerdame/capturepack/issues/537)).
+- The save toast no longer loses an After Save Action result, its retry button
+  or an image copy/render status that arrives before the toast has finished
+  opening; it opens on the latest state instead of the one it started with. A
+  toast that also says the replay is unavailable now grows tall enough for both
+  lines instead of cutting off the bottom 44 px. A toast replaced by a newer
+  save stays closed, and opening, updating or retrying the toast reads the
+  running settings rather than rewriting `settings.json` or bringing back an
+  `--output-dir` override the user had replaced
+  ([#540](https://github.com/r2cuerdame/capturepack/issues/540)).
 
 ### Documentation
 
