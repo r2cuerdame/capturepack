@@ -15,7 +15,10 @@ try {
     stub,
     `const p=require('node:path');exports.app={getPath:()=>p.join(${JSON.stringify(work)},'logs'),` +
       `getAppPath:()=>'.',isPackaged:false,getVersion:()=>'0.0.0-check',on:()=>{},` +
-      `whenReady:()=>Promise.resolve()};\n`,
+      `whenReady:()=>Promise.resolve()};` +
+      `exports.screen={getAllDisplays:()=>[]};` +
+      `exports.BrowserWindow=class{};` +
+      `exports.ipcMain={on:()=>{},removeListener:()=>{}};\n`,
   )
   const bundle = path.join(work, 'check.cjs')
   execFileSync(
