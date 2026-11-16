@@ -1,6 +1,14 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { dailyTelemetryLaunchPolicy, sendDailyTelemetry, telemetryOs, type TelemetryPayload } from '../src/main/telemetry'
+import {
+  DAILY_TELEMETRY_TICK_MS,
+  dailyTelemetryLaunchPolicy,
+  sendDailyTelemetry,
+  startDailyTelemetryScheduler,
+  stopDailyTelemetryScheduler,
+  telemetryOs,
+  type TelemetryPayload,
+} from '../src/main/telemetry'
 
 function requiredCheckDirectory(): string {
   const directory = process.env.CAPTUREPACK_TELEMETRY_CHECK_DIR
@@ -137,6 +145,138 @@ await sendDailyTelemetry({
   },
 })
 check('corrupt state is replaced with a persistent valid UUID', repaired?.install_id === INSTALL_ID)
+
+// #537: an app started at login and left running across midnight.
+const scheduledPath = join(checkDirectory, 'scheduled.json')
+const scheduled: TelemetryPayload[] = []
+let clock = new Date(2026, 8, 20, 10)
+let tick: (() => Promise<void>) | undefined
+let tickInterval = 0
+let unrefs = 0
+let cancelled = 0
+let postImpl = async (payload: TelemetryPayload): Promise<void> => {
+  scheduled.push(payload)
+}
+const startScheduler = (environment?: string): Promise<void> =>
+  startDailyTelemetryScheduler({
+    statePath: scheduledPath,
+    version: '0.6.1',
+    os: 'windows',
+    ...(environment === undefined ? {} : { environment }),
+    createInstallId: () => INSTALL_ID,
+    post: async (payload) => postImpl(payload),
+    clock: () => clock,
+    schedule: (callback, intervalMs) => {
+      tick = callback
+      tickInterval = intervalMs
+      return { unref: () => { unrefs += 1 } }
+    },
+    cancel: () => { cancelled += 1 },
+  })
+const fire = async (): Promise<void> => {
+  if (tick === undefined) throw new Error('the scheduler registered no tick')
+  await tick()
+}
+
+await startScheduler()
+check('the scheduler attempts once at launch', scheduled.length === 1)
+check('the scheduler looks hourly', tickInterval === DAILY_TELEMETRY_TICK_MS && DAILY_TELEMETRY_TICK_MS === 60 * 60 * 1_000)
+check('the scheduler timer never keeps the app alive', unrefs === 1)
+check(
+  'a scheduled payload keeps the same anonymous allowlist',
+  JSON.stringify(Object.keys(scheduled[0] ?? {}).sort()) ===
+    JSON.stringify(['install_id', 'os', 'platform', 'project_id', 'version']) &&
+    scheduled[0]?.install_id === INSTALL_ID && scheduled[0]?.platform === 'electron',
+)
+clock = new Date(2026, 8, 20, 11)
+await fire()
+clock = new Date(2026, 8, 20, 23, 59)
+await fire()
+await fire()
+check('hourly checks on the same local day send nothing more', scheduled.length === 1)
+await startScheduler()
+check('restarting on the same local day sends nothing more', scheduled.length === 1 && cancelled === 1)
+clock = new Date(2026, 8, 21, 0, 30)
+await fire()
+check('crossing midnight while running sends the new day exactly once', scheduled.length === 2 && scheduled[1]?.install_id === INSTALL_ID)
+clock = new Date(2026, 8, 21, 1, 30)
+await fire()
+check('the next hourly check on the new day sends nothing more', scheduled.length === 2)
+clock = new Date(2026, 8, 25, 7, 5)
+await fire()
+check('the first check after a multi-day sleep sends once', scheduled.length === 3)
+await fire()
+check('a second check after waking sends nothing more', scheduled.length === 3)
+
+let markPosting!: () => void
+const posting = new Promise<void>((resolve) => { markPosting = resolve })
+let release!: () => void
+const held = new Promise<void>((resolve) => { release = resolve })
+let overlapping = 0
+postImpl = async (payload) => {
+  overlapping += 1
+  scheduled.push(payload)
+  markPosting()
+  await held
+}
+clock = new Date(2026, 8, 26, 9)
+const first = fire()
+const second = fire()
+await posting
+const third = fire()
+check('a check during an in-flight attempt joins it instead of racing the gate', overlapping === 1)
+release()
+await Promise.all([first, second, third])
+check('the joined attempt still sent exactly once', scheduled.length === 4 && overlapping === 1)
+
+let failedScheduled = 0
+postImpl = async () => {
+  failedScheduled += 1
+  throw new Error('offline')
+}
+clock = new Date(2026, 8, 27, 9)
+await fire()
+clock = new Date(2026, 8, 27, 10)
+await fire()
+check('a scheduled send failure stays silent and is not retried that day', failedScheduled === 1)
+
+postImpl = async (payload) => {
+  scheduled.push(payload)
+}
+const beforeStop = scheduled.length
+stopDailyTelemetryScheduler()
+check('stopping cancels the timer', cancelled === 2)
+clock = new Date(2026, 8, 28, 9)
+await fire()
+check('a tick after stop sends nothing', scheduled.length === beforeStop)
+stopDailyTelemetryScheduler()
+check('stopping twice is harmless', cancelled === 2)
+
+await startScheduler('test')
+check('the scheduler keeps the explicit test environment', scheduled.at(-1)?.environment === 'test')
+stopDailyTelemetryScheduler()
+
+// The real sender closes the response it never reads.
+const realFetch = globalThis.fetch
+let bodyCancelled = false
+let postedBody: unknown
+globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+  postedBody = JSON.parse(String(init?.body))
+  return new Response(new ReadableStream({ cancel: () => { bodyCancelled = true } }), { status: 202 })
+}) as typeof fetch
+try {
+  await sendDailyTelemetry({
+    statePath: join(checkDirectory, 'network.json'),
+    version: 'test',
+    os: 'windows',
+    now: new Date(2026, 8, 14, 12),
+    createInstallId: () => INSTALL_ID,
+  })
+} finally {
+  globalThis.fetch = realFetch
+}
+check('the real sender posts the allowlisted payload', (postedBody as TelemetryPayload | undefined)?.install_id === INSTALL_ID)
+check('the real sender cancels the unread response body', bodyCancelled)
 
 if (failed !== 0) {
   console.error(`\n${failed}/${passed + failed} telemetry checks failed.`)

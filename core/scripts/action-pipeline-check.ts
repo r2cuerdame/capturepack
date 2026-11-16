@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import * as electron from 'electron'
 import { app } from 'electron'
 import {
   clearPackLedger,
@@ -48,6 +49,10 @@ import {
   totalAttempts,
 } from '../src/shared/actions'
 import { runPipeline, canRetry, SaveActionLifecycle, failureResults } from '../src/shared/actionPipeline'
+import { setToastLiveSettings, showSaveToast, toastHeight, updateToastActionResults, updateToastRenderStatus } from '../src/main/saveToast'
+import { clearOutputDirOverride, loadSettings, persistSettings, settingsFilePath } from '../src/main/settings'
+import { IPC } from '../src/shared/ipc'
+import type { ReplayUnavailablePayload, ToastInitPayload } from '../src/shared/ipc'
 
 let failed = 0
 
@@ -1894,6 +1899,178 @@ console.log('\nACTION RESULTS FOLLOW THE PACK, ANNOUNCE THEMSELVES AND SURVIVE A
     check('an unsubscribed listener is no longer told', notified.length === before)
   } finally {
     unsubscribe()
+    rmSync(work, { recursive: true, force: true })
+  }
+}
+
+console.log('\nTHE SAVE TOAST SHOWS THE LATEST STATE, FITS ITS LINES AND LEAVES SETTINGS ALONE (#540)')
+{
+  // The stub's windows (action-pipeline-check.mjs): nothing loads until the
+  // check calls finishLoad(), so "a result arrived before the page" is exact.
+  interface FakeWindow {
+    sent: Array<{ channel: string; payload: unknown }>
+    shown: boolean
+    getBounds(): { x: number; y: number; width: number; height: number }
+    close(): void
+    finishLoad(): void
+    webContents: unknown
+  }
+  const stub = electron as unknown as {
+    __windows: FakeWindow[]
+    __ipcHandlers: Record<string, (event: unknown, ...args: unknown[]) => unknown>
+  }
+  const work = mkdtempSync(path.join(tmpdir(), 'capturepack-toast-540-'))
+  const savedArgv = process.argv
+  const overrideDir = path.join(work, 'override-output')
+  try {
+    // A run started with --output-dir whose user then picked a folder in
+    // Settings: the override is cleared, and must stay cleared.
+    process.argv = [...savedArgv, `--output-dir=${overrideDir}`]
+    const live = loadSettings().settings
+    clearOutputDirOverride()
+    rmSync(settingsFilePath(), { force: true })
+    live.actionConfigs = [config({ configId: 'cfg-540', enabled: false })]
+    setToastLiveSettings(live)
+
+    const makePack = (name: string): string => {
+      const dir = path.join(work, name)
+      mkdirSync(dir)
+      writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: PACK }), 'utf8')
+      return dir
+    }
+    const replayUnavailable: ReplayUnavailablePayload = {
+      reason: 'did-not-start', screens: 1, total: 2, focused: false,
+    }
+    const failedResult: ActionResult = {
+      actionId: 'webhook', configId: 'cfg-540', outcome: 'failed', attempts: 1, durationMs: 4, message: 'refused', retryable: true,
+    }
+
+    // 1 + 2. Results and render status land before the page has loaded.
+    const raced = makePack('Raced')
+    showSaveToast({
+      folderPath: raced, hasBlur: false, replayUnavailable, renderState: 'rendering', uiLanguage: 'en', settings: live,
+    })
+    const racedWin = stub.__windows[stub.__windows.length - 1]
+    updateToastRenderStatus(raced, 'rendering', 0.5)
+    updateToastActionResults(raced, [failedResult])
+    updateToastRenderStatus(raced, 'done')
+    check(
+      'nothing is sent to a toast page that has not loaded yet',
+      racedWin !== undefined && racedWin.sent.length === 0,
+      JSON.stringify(racedWin?.sent.map((m) => m.channel)),
+    )
+    check(
+      'a result arriving before the load already grows the window to fit the replay warning AND the action row',
+      racedWin?.getBounds().height === toastHeight(true, 1) && toastHeight(true, 1) === 272,
+      `${String(racedWin?.getBounds().height)} px`,
+    )
+    racedWin?.finishLoad()
+    const init = racedWin?.sent.find((m) => m.channel === IPC.toastInit)?.payload as ToastInitPayload | undefined
+    check(
+      'the loaded toast opens on the LATEST render state, not the one it was created with',
+      init?.renderState === 'done',
+      String(init?.renderState),
+    )
+    check(
+      'and with the action result that arrived while it loaded, retry still offered',
+      init?.actionResults?.length === 1 && init.actionResults[0]?.outcome === 'failed' && init.actionResults[0]?.retryable === true,
+      JSON.stringify(init?.actionResults),
+    )
+    check('and with the live action configurations', init?.actionConfigs === live.actionConfigs)
+    check(
+      'a stale progress value is not replayed over a terminal state',
+      racedWin?.sent.filter((m) => m.channel === IPC.toastRenderStatus).length === 0,
+    )
+    check('the loaded toast is shown without taking focus', racedWin?.shown === true)
+    check('and still fits both lines after load', racedWin?.getBounds().height === 272, `${String(racedWin?.getBounds().height)} px`)
+
+    // An in-flight progress value reported before load follows the init.
+    const progressing = makePack('Progressing')
+    showSaveToast({
+      folderPath: progressing, hasBlur: false, replayUnavailable: null, renderState: 'trimming', uiLanguage: 'en', settings: live,
+    })
+    const progressWin = stub.__windows[stub.__windows.length - 1]
+    updateToastRenderStatus(progressing, 'rendering', 0.25)
+    progressWin?.finishLoad()
+    const progressInit = progressWin?.sent[0]?.payload as ToastInitPayload | undefined
+    const progressStatus = progressWin?.sent[1]
+    check(
+      'a render still in flight at load is replayed with its progress',
+      progressInit?.renderState === 'rendering'
+        && progressStatus?.channel === IPC.toastRenderStatus
+        && JSON.stringify(progressStatus.payload) === JSON.stringify({ state: 'rendering', progress: 0.25 }),
+      JSON.stringify(progressWin?.sent),
+    )
+    updateToastActionResults(progressing, [failedResult])
+    check(
+      'after load, results go straight to the page',
+      progressWin?.sent[progressWin.sent.length - 1]?.channel === IPC.toastActionResults,
+    )
+    check(
+      'and a toast with no replay warning grows only by the action row',
+      progressWin?.getBounds().height === toastHeight(false, 1) && toastHeight(false, 1) === 228,
+      `${String(progressWin?.getBounds().height)} px`,
+    )
+
+    // 3. A toast replaced before its page loaded stays dark.
+    const first = makePack('First')
+    const second = makePack('Second')
+    showSaveToast({
+      folderPath: first, hasBlur: false, replayUnavailable: null, renderState: 'none', uiLanguage: 'en', settings: live,
+    })
+    const firstWin = stub.__windows[stub.__windows.length - 1]
+    showSaveToast({
+      folderPath: second, hasBlur: false, replayUnavailable: null, renderState: 'none', uiLanguage: 'en', settings: live,
+    })
+    const secondWin = stub.__windows[stub.__windows.length - 1]
+    firstWin?.finishLoad()
+    check(
+      'a replaced toast finishing its load sends nothing and is never shown',
+      firstWin !== secondWin && firstWin?.sent.length === 0 && firstWin.shown === false,
+      JSON.stringify(firstWin?.sent.map((m) => m.channel)),
+    )
+    updateToastActionResults(first, [failedResult])
+    check('and a late result for the replaced pack does not reach the new toast', secondWin?.sent.length === 0)
+    secondWin?.close()
+    secondWin?.finishLoad()
+    check('a toast closed before its load sends nothing and is never shown', secondWin?.sent.length === 0 && secondWin.shown === false)
+
+    // 4. Opening, updating and retrying read the live settings — the file is
+    // never rewritten and the cleared --output-dir override never comes back.
+    const retried = makePack('Retried')
+    showSaveToast({
+      folderPath: retried, hasBlur: false, replayUnavailable: null, renderState: 'none', uiLanguage: 'en', settings: live,
+    })
+    const retriedWin = stub.__windows[stub.__windows.length - 1]
+    retriedWin?.finishLoad()
+    updateToastActionResults(retried, [failedResult])
+    const retry = stub.__ipcHandlers[IPC.toastActionRetry]
+    const retryResult = retry === undefined
+      ? null
+      : await (retry({ sender: retriedWin?.webContents }, 'cfg-540') as Promise<{ ok: boolean; error?: string }>)
+    check(
+      'a retry resolves its configuration from the live settings',
+      retryResult?.ok === false && retryResult.error === 'Action configuration is disabled or not found',
+      JSON.stringify(retryResult),
+    )
+    check(
+      'opening, updating and retrying the toast never rewrote settings.json',
+      !existsSync(settingsFilePath()),
+    )
+    persistSettings({ ...live, outputDir: overrideDir })
+    const persisted = JSON.parse(readFileSync(settingsFilePath(), 'utf8')) as { outputDir?: string }
+    check(
+      'the --output-dir override the user cleared stays cleared, so their folder choice is persisted',
+      persisted.outputDir === overrideDir,
+      String(persisted.outputDir),
+    )
+    retriedWin?.close()
+  } finally {
+    // Closing clears each toast's auto-close timers, which would otherwise
+    // hold this process open.
+    for (const win of stub.__windows) win.close()
+    process.argv = savedArgv
+    rmSync(settingsFilePath(), { force: true })
     rmSync(work, { recursive: true, force: true })
   }
 }

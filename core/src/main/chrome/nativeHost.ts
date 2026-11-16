@@ -24,6 +24,7 @@
 import * as fs from 'node:fs'
 import * as net from 'node:net'
 import { createReconnectBackoff, NativeHostReplayBuffer } from './lifecycle'
+import { createUtf8LineReader } from './lineReader'
 
 /** The pipe the running app listens on; the host dials it. */
 export function domPipePath(
@@ -72,7 +73,7 @@ function frame(message: unknown): Buffer {
  * base64 chunks, each its own frame — so no legitimate frame comes near this,
  * and the bound still means what it always did.
  */
-const MAX_FRAME_BYTES = 4 * 1024 * 1024
+export const MAX_FRAME_BYTES = 4 * 1024 * 1024
 
 /**
  * Runs the process as Chrome's native messaging host until stdin closes.
@@ -140,24 +141,24 @@ export function runNativeHostMode(): Promise<void> {
         // next tab event left an idle browser disconnected indefinitely.
         reconnect.schedule()
       })
-      // Anything the app says goes back to the extension, framed.
-      let inbound = ''
-      socket.on('data', (chunk: Buffer) => {
-        inbound += chunk.toString('utf8')
-        let cut = inbound.indexOf('\n')
-        while (cut !== -1) {
-          const line = inbound.slice(0, cut)
-          inbound = inbound.slice(cut + 1)
-          if (line.trim() !== '') {
-            try {
-              writeFrame(frame(JSON.parse(line)))
-            } catch {
-              // A line the app did not mean as JSON is not worth relaying.
-            }
+      // Anything the app says goes back to the extension, framed. Lines are cut
+      // on the newline byte and decoded whole, so a character split across two
+      // pipe pieces survives (#549), and bounded like a frame from the browser:
+      // a line no reply could ever be is a broken pipe, not something to buffer.
+      const inbound = createUtf8LineReader({
+        maxBytes: MAX_FRAME_BYTES,
+        onOverflow: () => socket.destroy(),
+        onLine: (line) => {
+          if (line.trim() === '') return
+          try {
+            writeFrame(frame(JSON.parse(line)))
+          } catch {
+            // A line the app did not mean as JSON is not worth relaying.
           }
-          cut = inbound.indexOf('\n')
-        }
+        },
       })
+      socket.on('data', (chunk: Buffer) => inbound.push(chunk))
+      socket.on('close', () => inbound.reset())
     }
 
     // FILE DESCRIPTORS, NOT process.stdin/stdout.

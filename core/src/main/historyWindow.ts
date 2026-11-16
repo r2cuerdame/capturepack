@@ -855,10 +855,11 @@ export function summarize(entry: RawPackEntry): HistoryPackSummary {
   if (cached && cached.stamp === stamp) {
     // The files declared by media.keyframes live below frames/. Removing one
     // changes neither manifest.json nor the pack directory mtime on Windows,
-    // so re-check an annotated image pack even when its metadata is cached.
+    // so re-check an annotated still pack (an image pack, or a replay-less
+    // video/legacy pack) even when its metadata is cached.
     const annotated =
       entry.kind === 'dir'
-      && cached.summary.captureKind === 'image'
+      && (cached.summary.captureKind === 'image' || !cached.summary.hasReplay)
       && cached.summary.annotationCount > 0
         ? (() => {
             const pack = openPack(entry.path, entry.kind, entry.id)
