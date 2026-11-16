@@ -99,7 +99,7 @@ existed in an earlier Lane-A frame may legitimately be absent from the final
 ## Video-core regression matrix
 
 The tables in this document map a reported failure to the check that would now
-catch it. They are a map, not an inventory: the gate discovers 102 checks and
+catch it. They are a map, not an inventory: the gate discovers 103 checks and
 only some of them have ever had a defect worth naming.
 
 `npm run qa:video` runs type checking plus a subset — 61 of the 91 — so some
@@ -185,6 +185,7 @@ evidence rules.
 | CI reports that it made a pack, and the pack proves nothing | `--save-now`'s argv parsing, its verdicts over a sequence of flow events, and its person-less export payload are pinned — including that main and the capture flow actually call into it, since an unwired flag runs never. Separately, every assertion `assert-capturepack.mjs` makes is exercised against a pack that must pass and a mutant that must not, because an assertion that cannot fail is a green tick over a broken build. | `check:save-now`, `check:pack-assertions` |
 | Native replay fallback crashes on locked Windows sessions or swallows helper crashes | `check:native-replay-fallback` verifies that `native-replay-capture.exe` falls back to virtual desktop DC or cleanly skips live capture only on verified locked sessions (`error.status === 1` and stdout `locked`). Startup crashes and absent helpers fail loudly, and forced interactive mode (`CAPTUREPACK_DESKTOP_INTERACTIVE=1`) reports access-denied rejections as assertion failures. | `check:native-replay-fallback` |
 | Optional console context is absent, slow, sensitive or cannot be written | `check:console-plugin` verifies bounded/redacted output, metadata and payload, absent/denied/over-deadline omission, and failure cleanup; capture declares the plugin only after a successful write. | `check:console-plugin` |
+| One held-open old log file switches `main.log` off for the rest of the run ([#531](https://github.com/r2cuerdame/capturepack/issues/531)) | The real `logInfo()` writes against a temporary userData folder, with a non-empty directory standing in for a held-open generation. With `main.5.log` held, `main.log` still rotates to `main.1.log`, the line that rotated it lands in the new `main.log`, and logging survives ten more rotations; with nothing held, five generations are kept and the oldest lines go first; a `main.log` that cannot itself move is still counted as a failed write and disables file logging on the third, as before. Full-profile only. | `check:log-rotation` |
 
 The `_223519` fixture is a distilled copy of the relevant numeric evidence, not
 the owner's private pack. The strict forensic gate can additionally audit the
