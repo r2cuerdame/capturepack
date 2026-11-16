@@ -325,6 +325,42 @@ async function run(): Promise<void> {
     `annotated=${summaryAnnotatedImage.annotated}`,
   )
 
+  // #554: a video capture whose replay was never written re-renders as a still,
+  // so an annotated one owes the same frames/ output an image pack does.
+  const packDirReplaylessVideo = path.join(tmpBase, 'Pack_Replayless_Video')
+  fs.mkdirSync(packDirReplaylessVideo, { recursive: true })
+  fs.mkdirSync(path.join(packDirReplaylessVideo, 'skills'))
+  fs.writeFileSync(path.join(packDirReplaylessVideo, 'snapshot.png'), 'fake-snapshot')
+  fs.writeFileSync(
+    path.join(packDirReplaylessVideo, 'annotations.json'),
+    fs.readFileSync(path.join(packDirAnnotatedImage, 'annotations.json')),
+  )
+  const manifestReplaylessVideo: Manifest = {
+    ...manifestA,
+    capture_kind: 'video',
+    id: 'pack-replayless-video',
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+  }
+  fs.writeFileSync(
+    path.join(packDirReplaylessVideo, 'manifest.json'),
+    JSON.stringify(manifestReplaylessVideo),
+  )
+  const entryReplaylessVideo: RawPackEntry = {
+    id: manifestReplaylessVideo.id,
+    path: packDirReplaylessVideo,
+    kind: 'dir',
+    mtimeMs: fs.statSync(packDirReplaylessVideo).mtimeMs,
+  }
+  const summaryReplaylessVideo = summarize(entryReplaylessVideo)
+  check(
+    'summarize marks an annotated replay-less video with no keyframe render as missing (#554)',
+    summaryReplaylessVideo.annotated === 'missing' && summaryReplaylessVideo.hasReplay === false,
+    `annotated=${summaryReplaylessVideo.annotated}, hasReplay=${String(summaryReplaylessVideo.hasReplay)}`,
+  )
+
   console.log('\n--- 4. History IPC invocation ---')
   if (electronStub) {
     const settings = loadSettings().settings
@@ -399,6 +435,49 @@ async function run(): Promise<void> {
           missingAgain.annotated === 'missing',
           `annotated=${missingAgain.annotated}`,
         )
+      }
+
+      electronStub.__renderStarts.length = 0
+      const replaylessResult = await rerenderHandler(mockEvent, packDirReplaylessVideo)
+      check(
+        'IPC.historyRerender accepts a replay-less video pack as a still (#554)',
+        replaylessResult?.ok === true,
+        JSON.stringify(replaylessResult),
+      )
+      await waitFor(() => {
+        const current = JSON.parse(
+          fs.readFileSync(path.join(packDirReplaylessVideo, 'manifest.json'), 'utf8'),
+        ) as Manifest
+        const keyframe = current.media.keyframes?.[0]?.file
+        return typeof keyframe === 'string'
+          && fs.existsSync(path.join(packDirReplaylessVideo, keyframe))
+          && summarize(entryReplaylessVideo).renderInFlight === false
+      })
+      check(
+        'replay-less video retry dispatched a still render payload (#554)',
+        electronStub.__renderStarts.length === 1
+          && electronStub.__renderStarts[0]?.replayWebm === null
+          && electronStub.__renderStarts[0]?.snapshotPng !== null,
+      )
+      const replaylessReady = summarize(entryReplaylessVideo)
+      check(
+        'completed replay-less video retry moves the History summary to ready (#554)',
+        replaylessReady.annotated === 'ready',
+        `annotated=${replaylessReady.annotated}`,
+      )
+      const replaylessKeyframe = (JSON.parse(
+        fs.readFileSync(path.join(packDirReplaylessVideo, 'manifest.json'), 'utf8'),
+      ) as Manifest).media.keyframes?.[0]?.file
+      if (typeof replaylessKeyframe === 'string') {
+        fs.rmSync(path.join(packDirReplaylessVideo, replaylessKeyframe))
+        const replaylessMissingAgain = summarize(entryReplaylessVideo)
+        check(
+          'cached replay-less video summary detects a removed declared keyframe as missing (#554)',
+          replaylessMissingAgain.annotated === 'missing',
+          `annotated=${replaylessMissingAgain.annotated}`,
+        )
+      } else {
+        check('replay-less video retry declares a keyframe in manifest.json (#554)', false, 'undeclared')
       }
     }
 
@@ -902,6 +981,15 @@ async function run(): Promise<void> {
     historyRendererSource.includes(
       "playBtn.disabled = !p.hasReplay || p.annotated !== 'ready' || p.kind !== 'dir'",
     ),
+  )
+  check(
+    'History More > Re-render stays enabled for replay-less folder packs (#554)',
+    historyRendererSource.includes(
+      "disabled: p.kind !== 'dir' || rendering.has(p.path),\n      title:\n        p.captureKind === 'image' || !p.hasReplay\n          ? t('history.rerenderStillTooltip')",
+    )
+      && !historyRendererSource.includes(
+        "disabled: !p.hasReplay || p.kind !== 'dir' || rendering.has(p.path)",
+      ),
   )
   check(
     'History Play explains that replay-less image packs have no replay',
