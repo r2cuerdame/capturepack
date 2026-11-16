@@ -13,12 +13,12 @@
 // still comes from startKeyframeStill() below.
 import { app, BrowserWindow, ipcMain } from 'electron'
 import type { IpcMainEvent } from 'electron'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
 import type { Language } from '../shared/i18n'
-import { displayFramesDir, keyframeFileName } from '../shared/keyframes'
+import { displayFramesDir } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
 import type { AuthoredMotionSpace } from '../shared/track'
 import {
@@ -26,7 +26,12 @@ import {
   BoundedBackgroundMediaQueue,
   copyBufferResponsively,
 } from './backgroundMediaQueue'
-import { writeAnnotatedReplayOutput } from './annotatedReplayOutput'
+import {
+  type AnnotatedOutputFsOps,
+  type WriteKeyframesOptions,
+  writeAnnotatedReplayOutput,
+  writeKeyframesOutput,
+} from './annotatedReplayOutput'
 import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
 import { beginPackOperation } from './packOperations'
 import { PackRenderBatchTracker, type RenderBatchFinish } from './renderBatch'
@@ -128,9 +133,8 @@ const renderStateListeners = new Set<RenderStateListener>()
 // saves cannot fan out either.
 //
 // Serializing globally also makes the frames/ directory swap safe by
-// construction: writeKeyframes() removes frames/ and rewrites it, so two
-// renders of the SAME pack overlapping could leave the manifest declaring
-// files the other render deleted.
+// construction: writeKeyframes() atomically replaces frames/ and then updates
+// manifest.json, so two renders of the SAME pack cannot race each other.
 //
 // Plain-trim renders use this queue too. Exact-length cutting is background
 // work, and serializing it with annotated renders prevents a multi-display save
@@ -238,16 +242,99 @@ export function startAnnotatedRender(
     })
 }
 
+export interface PersistAnnotatedReplayOptions {
+  replay: Uint8Array
+  replayMimeType: string
+  frames: readonly RenderFramePayload[]
+  display?: number
+  docLanguage?: Language
+  signal?: AbortSignal
+  fsOps?: AnnotatedOutputFsOps
+}
+
+export interface PersistKeyframeStillOptions {
+  frames: readonly RenderFramePayload[]
+  display?: number
+  docLanguage?: Language
+  fsOps?: AnnotatedOutputFsOps
+}
+
+/**
+ * Publishes a finished video render's derived replay, keyframe stills, and
+ * manifest declaration. Clears any stale stills directory when writing new
+ * keyframes fails so an emptied declaration never leaves mismatched files on
+ * disk.
+ */
+export async function persistAnnotatedReplayRender(
+  handle: PackHandle,
+  options: PersistAnnotatedReplayOptions,
+): Promise<void> {
+  const framesDir = options.display === undefined ? 'frames' : displayFramesDir(options.display)
+  await writeAnnotatedReplayOutput(
+    handle.dirPath,
+    options.replay,
+    options.replayMimeType,
+    options.display,
+    options.fsOps,
+  )
+  throwIfRenderAborted(options.signal)
+  // The stills are the smaller half of this job: losing them must never cost
+  // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
+  let keyframes: ManifestKeyframe[] = []
+  try {
+    keyframes = await writeKeyframes(handle, options.frames, framesDir, {
+      fs: options.fsOps,
+    })
+  } catch (err) {
+    console.error('capturepack: writing annotated keyframes failed:', errorMessage(err))
+    const rmFn = options.fsOps?.rm ?? rm
+    await rmFn(path.join(handle.dirPath, framesDir), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+  }
+  await setManifestRenderOutputs(handle, {
+    replayAnnotated: true,
+    keyframes,
+    ...(options.display === undefined ? {} : { display: options.display }),
+  })
+  await refreshDocs(handle, options.docLanguage)
+}
+
+/**
+ * Publishes a finished still render's keyframe output, refusing empty results
+ * or partial writes without altering the existing stills directory or manifest.
+ */
+export async function persistKeyframeStillRender(
+  handle: PackHandle,
+  options: PersistKeyframeStillOptions,
+): Promise<Buffer> {
+  const framesDir = options.display === undefined ? 'frames' : displayFramesDir(options.display)
+  const keyframes = await writeKeyframes(handle, options.frames, framesDir, {
+    allowEmpty: false,
+    fs: options.fsOps,
+  })
+  if (keyframes.length === 0) throw new Error('still render produced no keyframe')
+  await setManifestRenderOutputs(handle, {
+    replayAnnotated: false,
+    keyframes,
+    ...(options.display === undefined ? {} : { display: options.display }),
+  })
+  await refreshDocs(handle, options.docLanguage)
+  const rendered = options.frames[0]
+  if (rendered === undefined) throw new Error('still render produced no final image')
+  return Buffer.from(rendered.png)
+}
+
 async function renderAnnotatedReplay(
   handle: PackHandle,
   job: AnnotatedRenderJob,
   onProgress?: (ratio: number) => void,
 ): Promise<void> {
   // The render AND its write phase are one queued unit: writeKeyframes()
-  // removes frames/ and rewrites it, so another render of the same pack landing
-  // between the writes and the declaration would leave the manifest pointing at
-  // files that no longer exist.
-  const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
+  // swaps frames/ and updates the manifest, so another render of the same pack
+  // landing between the writes and the declaration would leave the manifest
+  // pointing at files that no longer exist.
   await enqueueRender(async (signal) => {
     // Allocate/copy only after this job owns the single media lane. Queued
     // displays retain their source Buffer but create neither an ArrayBuffer nor
@@ -278,27 +365,14 @@ async function renderAnnotatedReplay(
     )
     throwIfRenderAborted(signal)
     if (result.webm === undefined) throw new Error('render window returned no video')
-    await writeAnnotatedReplayOutput(
-      handle.dirPath,
-      Buffer.from(result.webm),
-      job.replayMimeType,
-      job.display,
-    )
-    throwIfRenderAborted(signal)
-    // The stills are the smaller half of this job: losing them must never cost
-    // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
-    let keyframes: ManifestKeyframe[] = []
-    try {
-      keyframes = await writeKeyframes(handle, frames, framesDir)
-    } catch (err) {
-      console.error('capturepack: writing annotated keyframes failed:', errorMessage(err))
-    }
-    await setManifestRenderOutputs(handle, {
-      replayAnnotated: true,
-      keyframes,
-      ...(job.display === undefined ? {} : { display: job.display }),
+    await persistAnnotatedReplayRender(handle, {
+      replay: Buffer.from(result.webm),
+      replayMimeType: job.replayMimeType,
+      frames,
+      display: job.display,
+      docLanguage: job.docLanguage,
+      signal,
     })
-    await refreshDocs(handle, job.docLanguage)
   })
 }
 
@@ -417,7 +491,6 @@ export async function renderOpaqueShareStill(job: OpaqueShareStillJob): Promise<
 }
 
 async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): Promise<Buffer> {
-  const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
   return await enqueueRender(async (signal) => {
     const payload: RenderStartPayload = {
       // No video: the still job draws snapshot.png instead.
@@ -441,65 +514,25 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
       signal,
     )
     throwIfRenderAborted(signal)
-    const keyframes = await writeKeyframes(handle, frames, framesDir)
-    if (keyframes.length === 0) throw new Error('still render produced no keyframe')
-    await setManifestRenderOutputs(handle, {
-      replayAnnotated: false,
-      keyframes,
-      ...(job.display === undefined ? {} : { display: job.display }),
+    return await persistKeyframeStillRender(handle, {
+      frames,
+      display: job.display,
+      docLanguage: job.docLanguage,
     })
-    await refreshDocs(handle, job.docLanguage)
-    const rendered = frames[0]
-    if (rendered === undefined) throw new Error('still render produced no final image')
-    return Buffer.from(rendered.png)
   })
 }
 
 /**
- * Writes frames/ from scratch and returns the manifest declarations.
- * Stale stills never outlive the render that replaced them: the directory is
- * removed first (the same rule replay_annotated.(webm|mp4) follows), so a re-edit or
- * a History re-render can only ever leave the CURRENT set behind.
+ * Stages `frames` in a temporary directory and atomically swaps them into
+ * `dir`, returning the manifest declarations.
  */
 async function writeKeyframes(
   handle: PackHandle,
   frames: readonly RenderFramePayload[],
   dir: string,
+  options: WriteKeyframesOptions = {},
 ): Promise<ManifestKeyframe[]> {
-  const framesDir = path.join(handle.dirPath, dir)
-  await rm(framesDir, { recursive: true, force: true })
-  if (frames.length === 0) return []
-  await mkdir(framesDir, { recursive: true })
-  const declared: ManifestKeyframe[] = []
-  // Order is the render's own ascending order; NN is the 1-based position in
-  // the surviving list, so the numbering stays contiguous even if a still
-  // failed to encode.
-  for (const [i, frame] of frames.entries()) {
-    const t_ms = Math.max(0, Math.round(frame.t_ms))
-    const file = keyframeFileName(i + 1, t_ms, dir)
-    const png = Buffer.from(frame.png)
-    await writeFile(path.join(handle.dirPath, file), png)
-    // Read back from the bytes just written, not from the job's requested size:
-    // the render adds a label gutter below the source frame (#133), so the two
-    // legitimately differ and only the file knows by how much.
-    const size = pngSize(png)
-    declared.push({ file, t_ms, ...(size === null ? {} : size) })
-  }
-  return declared
-}
-
-/**
- * A PNG's declared dimensions, straight out of its IHDR.
- *
- * Eight-byte signature, then the first chunk, which a PNG REQUIRES to be IHDR:
- * 4 length + 4 type + width + height. Cheaper and more honest than trusting the
- * size the render was asked for — the written file is what a reader will open.
- */
-function pngSize(png: Buffer): { width: number; height: number } | null {
-  if (png.length < 24 || png.toString('ascii', 12, 16) !== 'IHDR') return null
-  const width = png.readUInt32BE(16)
-  const height = png.readUInt32BE(20)
-  return width > 0 && height > 0 ? { width, height } : null
+  return await writeKeyframesOutput(handle.dirPath, frames, dir, options)
 }
 
 export interface TrimRenderJob {
