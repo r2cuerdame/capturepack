@@ -9,7 +9,12 @@
 import { makeT } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
-import { annotationsOnDisplay, declaredDisplayIndices, focusedDisplayIndex } from '../shared/types'
+import {
+  annotationDisplayIndex,
+  annotationsOnDisplay,
+  declaredDisplayIndices,
+  focusedDisplayIndex,
+} from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
 import { computeKeyframes, keyframeFileName } from '../shared/keyframes'
 import { replayCoverage } from '../shared/displayClock'
@@ -181,6 +186,52 @@ export function boxesOnDisplay(
 }
 
 /**
+ * The boxes ONE display OWNS (SPEC §8.8): those whose resolved `display` is
+ * this index, and nothing else. This is the documents' grouping, not the
+ * renderers' (#568).
+ *
+ * boxesOnDisplay()/annotationsOnDisplay() also return a box from ANOTHER screen
+ * whose tracking samples or keyframes visit this one (#86) — right for drawing,
+ * because the video of the screen a window moved to must carry its box. Wrong
+ * for a list: the same box then appeared under two headings, with the owning
+ * screen's coordinates printed under a heading that says they are this
+ * screen's, and the per-display counts added up to more boxes than the pack
+ * holds. skills/annotations.md, viewer.html and the MCP export already place a
+ * box on exactly one screen with annotationDisplayIndex(); this is that rule.
+ */
+export function ownedBoxesOnDisplay(
+  manifest: Manifest,
+  annotations: readonly Annotation[],
+  index: number,
+): Annotation[] {
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  const focused = packFocusedDisplay(manifest)
+  const declared = packDisplayIndices(manifest)
+  return safe.filter((a) => annotationDisplayIndex(a, focused, declared) === index)
+}
+
+/**
+ * The OTHER declared displays a box's tracking samples or authored keyframes
+ * visit, ascending — what a document may say about a box that crossed screens
+ * without listing it a second time under another screen (#568).
+ */
+export function visitedOtherDisplays(manifest: Manifest, a: Annotation): number[] {
+  const declared = packDisplayIndices(manifest)
+  if (declared === undefined) return []
+  const owner = annotationDisplayIndex(a, packFocusedDisplay(manifest), declared)
+  const visited = new Set<number>()
+  if (a.tracking?.enabled === true) {
+    for (const s of a.tracking.samples ?? []) {
+      if (typeof s.display === 'number') visited.add(s.display)
+    }
+  }
+  for (const frame of a.keyframes ?? []) {
+    if (typeof frame.display === 'number') visited.add(frame.display)
+  }
+  return [...visited].filter((index) => index !== owner && declared.has(index)).sort((x, y) => x - y)
+}
+
+/**
  * The boxes of the pack grouped by the display they were drawn on (SPEC §8.8),
  * FOCUSED display first and the rest by index — the reading order a human would
  * pick, and the order every generated document uses.
@@ -194,15 +245,15 @@ export function groupByDisplay(
 ): Array<{ index: number; focused: boolean; annotations: Annotation[] }> {
   const displays = manifest.media.displays
   if (!Array.isArray(displays) || displays.length < 2) return []
-  const focused = packFocusedDisplay(manifest)
-  const declared = packDisplayIndices(manifest)
   const ordered = [...displays].sort((a, b) =>
     a.focused === b.focused ? a.index - b.index : a.focused ? -1 : 1,
   )
+  // Each box under the ONE screen that owns it, so the groups partition the
+  // pack's boxes (#568) — see ownedBoxesOnDisplay().
   return ordered.map((d) => ({
     index: d.index,
     focused: d.focused,
-    annotations: annotationsOnDisplay(annotations, d.index, focused, declared),
+    annotations: ownedBoxesOnDisplay(manifest, annotations, d.index),
   }))
 }
 
@@ -225,8 +276,6 @@ export function displaySummaryLines(
   const displays = manifest.media.displays
   if (displays === undefined || displays.length < 2) return []
   const safeAnnotations = Array.isArray(annotations) ? annotations : []
-  const focusedIndex = packFocusedDisplay(manifest)
-  const declared = packDisplayIndices(manifest)
   const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
   for (const d of displays) {
     // A DISPLAY WHOSE REPLAY IS NOT ON THE CAPTURE'S CLOCK SAYS SO (#110).
@@ -256,7 +305,8 @@ export function displaySummaryLines(
     const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
     // How many boxes were drawn on THIS screen — the single most useful thing
     // to know about a display once every display is annotatable (SPEC §8.8).
-    const count = annotationsOnDisplay(safeAnnotations, d.index, focusedIndex, declared).length
+    // Owned boxes only, so the counts add up to the pack's boxes (#568).
+    const count = ownedBoxesOnDisplay(manifest, safeAnnotations, d.index).length
     const boxes = count === 0 ? '' : `, ${count} annotation${count === 1 ? '' : 's'}`
     lines.push(
       `  - ${d.index}: ${displayPixels(d)} at ${px(d.bounds.x)},${px(d.bounds.y)} @${d.scale}x — ` +
@@ -498,16 +548,25 @@ function annotationLines(
   annotations: readonly Annotation[],
   numbers: ReadonlyMap<string, number>,
   t: TranslateFn,
+  visits: (a: Annotation) => readonly number[] = () => [],
 ): string[] {
   const lines: string[] = []
+  // A box that crossed screens stays under the screen that owns it, in that
+  // screen's pixels; the screens it visited are named, never listed as a
+  // second copy (#568).
+  const describe = (a: Annotation): string => {
+    const other = visits(a)
+    const note = other.length === 0 ? '' : ` (also visits display ${other.join(', ')})`
+    return `${describeAnnotation(a, t)}${note}`
+  }
   const numbered = annotations
     .filter((a) => numbers.has(a.annotation_id))
     .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
   for (const a of numbered) {
-    lines.push(`${numbers.get(a.annotation_id)}. ${describeAnnotation(a, t)}`)
+    lines.push(`${numbers.get(a.annotation_id)}. ${describe(a)}`)
   }
   for (const a of annotations) {
-    if (!numbers.has(a.annotation_id)) lines.push(`- ${describeAnnotation(a, t)}`)
+    if (!numbers.has(a.annotation_id)) lines.push(`- ${describe(a)}`)
   }
   return lines
 }
@@ -598,7 +657,8 @@ export function buildReport(
       lines.push(...annotationLines(annotations, numbers, t))
     } else {
       // Multi-display pack: a box belongs to the screen it was drawn on, and
-      // its coordinates are in THAT screen's snapshot (SPEC §8.8). Listing them
+      // its coordinates are in THAT screen's snapshot (SPEC §8.8) — listed
+      // there once, even when it later visits another screen (#568). Listing them
       // in one flat list would silently mix three coordinate spaces.
       lines.push(
         'This capture froze more than one display. Boxes are grouped by the display they were ' +
@@ -623,7 +683,9 @@ export function buildReport(
           `### ${t('pack.display')} ${g.index}${g.focused ? ` (${t('pack.displayFocused')})` : ''} — ${snapshot}`,
         )
         lines.push('')
-        lines.push(...annotationLines(g.annotations, numbers, t))
+        lines.push(
+          ...annotationLines(g.annotations, numbers, t, (a) => visitedOtherDisplays(manifest, a)),
+        )
       }
     }
   }
