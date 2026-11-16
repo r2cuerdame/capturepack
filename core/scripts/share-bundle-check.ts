@@ -1108,6 +1108,185 @@ try {
     firstDisplayMaskStayedClear && maskedPixelIsSolid(secondDisplayPixels, 2, 1) &&
       secondDisplayPixels !== undefined && !maskedPixelIsSolid(secondDisplayPixels, 0, 1))
 
+  // A secondary recorder that started late has its own clock (SPEC §5.6:
+  // t_i = t + replay_clock_offset_ms). Its keyframe at its own 1000 ms is pack
+  // 3000 ms, where both a sensitive blur on that screen and a blur that has
+  // moved onto it are live. Comparing the raw 1000 ms dropped both masks.
+  const secondaryClockCase = async (
+    name: string,
+    secondaryDurationMs: number,
+    declaredOffsetMs: number | undefined,
+  ): Promise<{ focused: Buffer | undefined; secondary: Buffer | undefined }> => {
+    const fixture = makeFixture(name, false, solidPatternPng(4, 4, 0x51))
+    const manifestPath = path.join(fixture.dir, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.media.replay_duration_ms = 5_000
+    manifest.media.displays[0].replay_duration_ms = 5_000
+    manifest.media.displays[1].replay_duration_ms = secondaryDurationMs
+    if (declaredOffsetMs !== undefined) {
+      manifest.media.displays[0].replay_clock_offset_ms = 0
+      manifest.media.displays[1].replay_clock_offset_ms = declaredOffsetMs
+    }
+    manifest.media.keyframes = [{ file: 'frames/frame-01_00-01.000.png', t_ms: 3_000, width: 4, height: 4 }]
+    manifest.media.displays[1].keyframes = [{ file: 'frames-d2/frame-01_00-01.000.png', t_ms: 1_000, width: 4, height: 6 }]
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    const annotationPath = path.join(fixture.dir, 'annotations.json')
+    const annotations = JSON.parse(readFileSync(annotationPath, 'utf8'))
+    annotations.reference_width = 4
+    annotations.reference_height = 4
+    annotations.annotations = [
+      {
+        ...annotations.annotations[0],
+        annotation_id: 'ann_000008',
+        display: 2,
+        text: 'SECRET_SECONDARY_BLUR_LABEL',
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        start_ms: 3_000,
+        end_ms: 4_500,
+      },
+      {
+        ...annotations.annotations[0],
+        annotation_id: 'ann_000009',
+        display: 1,
+        text: '',
+        bounds: { x: 0, y: 1, width: 1, height: 1 },
+        start_ms: 0,
+        end_ms: 5_000,
+        keyframes: [
+          { t_ms: 2_000, display: 1, x: 0, y: 1, width: 1, height: 1 },
+          { t_ms: 3_000, display: 2, x: 2, y: 1, width: 1, height: 1 },
+        ],
+      },
+    ]
+    writeFileSync(annotationPath, `${JSON.stringify(annotations, null, 2)}\n`)
+    writeFileSync(path.join(fixture.dir, 'frames/frame-01_00-01.000.png'), solidPatternPng(4, 4, 0x51))
+    writeFileSync(path.join(fixture.dir, 'frames-d2/frame-01_00-01.000.png'), solidPatternPng(4, 6, 0x51))
+    const plan = await planShareBundle(fixture.dir, { opaqueRedaction: true })
+    const pixels = await Promise.all(plan.entries.map(async (entry) => ({
+      entry,
+      pixels: canonicalRgbaPixels((await readCanonicalShareStill(entry)).bytes),
+    })))
+    const secondary = pixels.find(({ entry }) => entry.display === 2)
+    check(`${name}: a secondary keyframe keeps its own replay-clock t_ms and converts it to the pack clock`,
+      secondary?.entry.t_ms === 1_000 && secondary.entry.pack_t_ms === 3_000 &&
+        secondary.entry.displayAnnotations.map((annotation) => annotation.annotation_id).join(',') ===
+          'ann_000008,ann_000009')
+    return {
+      focused: pixels.find(({ entry }) => entry.display === 1)?.pixels,
+      secondary: secondary?.pixels,
+    }
+  }
+  const secondaryClockMasked = (
+    pixels: { focused: Buffer | undefined; secondary: Buffer | undefined },
+  ): boolean =>
+    maskedPixelIsSolid(pixels.secondary, 0, 0) &&
+    maskedPixelIsSolid(pixels.secondary, 2, 1) &&
+    !maskedPixelIsSolid(pixels.secondary, 1, 1) &&
+    !maskedPixelIsSolid(pixels.secondary, 3, 3) &&
+    [0, 1, 2, 3].every((x) => maskedPixelIsSolid(pixels.secondary, x, 4) && maskedPixelIsSolid(pixels.secondary, x, 5)) &&
+    pixels.focused !== undefined &&
+    !maskedPixelIsSolid(pixels.focused, 0, 1) &&
+    !maskedPixelIsSolid(pixels.focused, 2, 1)
+  // Declared -2000 ms wins over the -1500 ms end-alignment estimate.
+  const declaredClock = await secondaryClockCase('opaque-secondary-declared-clock', 3_500, -2_000)
+  check('a declared secondary clock offset masks the live blur, its sensitive gutter, and motion arriving on that screen only',
+    secondaryClockMasked(declaredClock))
+  const fallbackClock = await secondaryClockCase('opaque-secondary-legacy-clock', 3_000, undefined)
+  check('an omitted secondary clock offset uses the duration-difference fallback for every opaque mask',
+    secondaryClockMasked(fallbackClock))
+
+  // Before 0.7.0 a display entry may omit snapshot_width/height. Motion that
+  // crosses screens still needs each screen's pixel size; the layout already
+  // resolved it, and an undefined size made the moved rectangle NaN.
+  const legacyMotion = makeFixture('opaque-legacy-multidisplay-motion', false, solidPatternPng(4, 4, 0x51))
+  const legacyMotionManifestPath = path.join(legacyMotion.dir, 'manifest.json')
+  const legacyMotionManifest = JSON.parse(readFileSync(legacyMotionManifestPath, 'utf8'))
+  legacyMotionManifest.format_version = '0.6.0'
+  for (const display of legacyMotionManifest.media.displays) {
+    delete display.snapshot_width
+    delete display.snapshot_height
+  }
+  legacyMotionManifest.media.keyframes = [{ file: 'frames/frame-01_00-01.000.png', t_ms: 750 }]
+  legacyMotionManifest.media.displays[1].keyframes = [{ file: 'frames-d2/frame-01_00-01.000.png', t_ms: 750 }]
+  writeFileSync(legacyMotionManifestPath, `${JSON.stringify(legacyMotionManifest, null, 2)}\n`)
+  const legacyMotionAnnotationPath = path.join(legacyMotion.dir, 'annotations.json')
+  const legacyMotionAnnotations = JSON.parse(readFileSync(legacyMotionAnnotationPath, 'utf8'))
+  legacyMotionAnnotations.reference_width = 4
+  legacyMotionAnnotations.reference_height = 4
+  legacyMotionAnnotations.annotations = [{
+    ...legacyMotionAnnotations.annotations[0],
+    annotation_id: 'ann_00000a',
+    text: '',
+    display: 1,
+    bounds: { x: 0, y: 1, width: 1, height: 1 },
+    start_ms: 0,
+    end_ms: 1_000,
+    keyframes: [
+      { t_ms: 0, display: 1, x: 0, y: 1, width: 1, height: 1 },
+      { t_ms: 1_000, display: 2, x: 2, y: 1, width: 1, height: 1 },
+    ],
+  }]
+  writeFileSync(legacyMotionAnnotationPath, `${JSON.stringify(legacyMotionAnnotations, null, 2)}\n`)
+  writeFileSync(path.join(legacyMotion.dir, 'frames/frame-01_00-01.000.png'), solidPatternPng(4, 4, 0x51))
+  writeFileSync(path.join(legacyMotion.dir, 'frames-d2/frame-01_00-01.000.png'), solidPatternPng(4, 4, 0x51))
+  const legacyMotionPlan = await planShareBundle(legacyMotion.dir, { opaqueRedaction: true })
+  const legacyMotionPixels = await Promise.all(legacyMotionPlan.entries.map(async (entry) => ({
+    display: entry.display,
+    pixels: canonicalRgbaPixels((await readCanonicalShareStill(entry)).bytes),
+  })))
+  const legacyFocusedPixels = legacyMotionPixels.find((entry) => entry.display === 1)?.pixels
+  const legacySecondaryPixels = legacyMotionPixels.find((entry) => entry.display === 2)?.pixels
+  // At 750 ms the box interpolates to desktop x 4.5, rounded to 5: native x 1
+  // on screen 2. An undefined screen width made that NaN and masked nothing.
+  check('a pre-0.7 multi-display pack places cross-screen blur motion with its resolved screen sizes',
+    legacyMotionPlan.entries.every((entry) =>
+      entry.motionSpace?.displays.every((display) => display.width === 4 && display.height === 4) === true) &&
+      maskedPixelIsSolid(legacySecondaryPixels, 1, 1) &&
+      !maskedPixelIsSolid(legacySecondaryPixels, 0, 1) &&
+      !maskedPixelIsSolid(legacySecondaryPixels, 2, 1) &&
+      legacyFocusedPixels !== undefined &&
+      [0, 1, 2, 3].every((x) => !maskedPixelIsSolid(legacyFocusedPixels, x, 1)))
+
+  for (const [name, mutate] of [
+    ['clock offset on a replay-less secondary', (manifest: any) => {
+      const secondary = manifest.media.displays[1]
+      secondary.replay = null
+      delete secondary.replay_duration_ms
+      delete secondary.replay_annotated
+      secondary.keyframes[0].t_ms = 0
+      secondary.replay_clock_offset_ms = -5
+    }],
+    ['nonzero focused clock offset', (manifest: any) => {
+      manifest.media.displays[0].replay_clock_offset_ms = 5
+    }],
+    ['fractional secondary clock offset', (manifest: any) => {
+      manifest.media.displays[1].replay_clock_offset_ms = 1.5
+    }],
+    ['string secondary clock offset', (manifest: any) => {
+      manifest.media.displays[1].replay_clock_offset_ms = '-5'
+    }],
+  ] as const) {
+    const malformed = makeFixture(`display-${name.replaceAll(' ', '-')}`)
+    const manifestFile = path.join(malformed.dir, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
+    mutate(manifest)
+    writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`)
+    await expectError('invalid-pack', () => planShareBundle(malformed.dir, { opaqueRedaction: true }))
+    check(`${name} is rejected before any Share Copy is planned`, !existsSync(malformed.share))
+  }
+  const replaylessSecondary = makeFixture('display-replay-less-secondary-without-offset')
+  const replaylessManifestFile = path.join(replaylessSecondary.dir, 'manifest.json')
+  const replaylessManifest = JSON.parse(readFileSync(replaylessManifestFile, 'utf8'))
+  replaylessManifest.media.displays[0].replay_clock_offset_ms = 0
+  replaylessManifest.media.displays[1].replay = null
+  delete replaylessManifest.media.displays[1].replay_duration_ms
+  delete replaylessManifest.media.displays[1].replay_annotated
+  replaylessManifest.media.displays[1].keyframes[0].t_ms = 0
+  writeFileSync(replaylessManifestFile, `${JSON.stringify(replaylessManifest, null, 2)}\n`)
+  const replaylessPlan = await planShareBundle(replaylessSecondary.dir, { opaqueRedaction: true })
+  check('a zero focused offset and a replay-less secondary without one stay valid',
+    replaylessPlan.entries.find((entry) => entry.display === 2)?.pack_t_ms === null)
+
   // Screenshot-only lanes use stored bounds and every annotation, just like
   // renderStill's null clock, even when imported metadata has lifetimes/motion.
   temporalManifest.media.replay = null

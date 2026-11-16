@@ -17,6 +17,7 @@ import * as net from 'node:net'
 import { stripUtf8Bom } from '../../shared/json'
 import { bundledExtensionVersion } from './install'
 import { ExtensionConnectionLedger } from './lifecycle'
+import { createUtf8LineReader } from './lineReader'
 import { domPipePath } from './nativeHost'
 import { logError, logInfo, logWarn } from '../log'
 import { pngPixelSizeOf } from '../png'
@@ -1278,6 +1279,19 @@ export function parseDomPayload(text: string | null): DomEvent[] {
 }
 
 /**
+ * The longest line a host may send. A host that never sends a newline must not
+ * grow the buffer without bound.
+ *
+ * Raised from 4 MB with #133: one reply now carries a document per VISIBLE
+ * BROWSER WINDOW, up to six, each up to 4000 elements. A realistic page runs
+ * 100-200 bytes an element, so a full desk lands around 5 MB — over the old
+ * bound, which would have destroyed the socket and cost the pack every page
+ * rather than the one that was too big. Still bounded, which is the only thing
+ * this number was ever for. Counted in bytes since #549.
+ */
+export const DOM_LINE_MAX_BYTES = 32 * 1024 * 1024
+
+/**
  * Starts listening for native hosts.
  *
  * Rule 1 of context data applies here too: a browser that cannot be reached is
@@ -1303,30 +1317,19 @@ export function startDomBridge(): void {
   const srv = net.createServer((socket) => {
     hostSeen = true
     hostSockets.add(socket)
-    let buffer = ''
     const disconnect = (): void => {
       hostSockets.delete(socket)
       extensionConnections.remove(socket)
       dropPendingPagesOn(socket)
+      lines.reset()
     }
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8')
-      // A host that never sends a newline must not grow this without bound.
-      //
-      // Raised from 4 MB with #133: one reply now carries a document per VISIBLE
-      // BROWSER WINDOW, up to six, each up to 4000 elements. A realistic page
-      // runs 100-200 bytes an element, so a full desk lands around 5 MB — over
-      // the old bound, which would have destroyed the socket and cost the pack
-      // every page rather than the one that was too big. Still bounded, which is
-      // the only thing this line was ever for.
-      if (buffer.length > 32 * 1024 * 1024) {
-        socket.destroy()
-        return
-      }
-      let cut = buffer.indexOf('\n')
-      while (cut !== -1) {
-        const line = buffer.slice(0, cut)
-        buffer = buffer.slice(cut + 1)
+    // Lines are cut on the newline BYTE and decoded whole (#549): a reply this
+    // size arrives in many pipe pieces, and decoding each piece on its own
+    // turned every character straddling a boundary into U+FFFD.
+    const lines = createUtf8LineReader({
+      maxBytes: DOM_LINE_MAX_BYTES,
+      onOverflow: () => socket.destroy(),
+      onLine: (line) => {
         if (line.trim() !== '') {
           let parsed: unknown
           try {
@@ -1436,9 +1439,9 @@ export function startDomBridge(): void {
             prune()
           }
         }
-        cut = buffer.indexOf('\n')
-      }
+      },
     })
+    socket.on('data', (chunk: Buffer) => lines.push(chunk))
     socket.on('error', () => socket.destroy())
     socket.on('close', disconnect)
   })
