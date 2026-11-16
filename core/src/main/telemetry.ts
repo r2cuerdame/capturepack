@@ -76,12 +76,16 @@ async function postTelemetry(payload: TelemetryPayload): Promise<void> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), TELEMETRY_TIMEOUT_MS)
   try {
-    await fetch(PURPLEPULSE_ENDPOINT, {
+    const response = await fetch(PURPLEPULSE_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
       signal: controller.signal,
     })
+    // The status is not consulted and the body is never read. Left uncancelled,
+    // it holds its connection until garbage collection, and an app kept running
+    // for weeks would leave one behind every day (same as #511's webhook).
+    await response.body?.cancel().catch(() => undefined)
   } finally {
     clearTimeout(timeout)
   }
@@ -116,6 +120,70 @@ export async function sendDailyTelemetry(options: DailyTelemetryOptions): Promis
   } catch {
     // Telemetry must never affect startup or surface an error to the user.
   }
+}
+
+/**
+ * How often the scheduler LOOKS at the calendar day, which is not how often it
+ * sends. A tray app started at login and only ever put to sleep would otherwise
+ * be counted on the day it launched and never again (#537). One date comparison
+ * an hour survives sleep the same way the retention sweep does (storage.ts);
+ * the persisted daily gate is what keeps it to one attempt per local day.
+ */
+export const DAILY_TELEMETRY_TICK_MS = 60 * 60 * 1_000
+
+export interface TelemetrySchedulerTimer {
+  unref?: () => unknown
+}
+
+export interface DailyTelemetrySchedulerOptions extends Omit<DailyTelemetryOptions, 'now'> {
+  /** Read on every attempt; the default is the wall clock. */
+  clock?: () => Date
+  /** Defaults to setInterval. A test fires the tick by hand and awaits it. */
+  schedule?: (tick: () => Promise<void>, intervalMs: number) => TelemetrySchedulerTimer
+  cancel?: (timer: TelemetrySchedulerTimer) => void
+}
+
+let schedulerTimer: TelemetrySchedulerTimer | null = null
+let schedulerCancel: ((timer: TelemetrySchedulerTimer) => void) | null = null
+let schedulerGeneration = 0
+
+/**
+ * Attempts once now, then once every tick for as long as the app runs. No new
+ * state: sendDailyTelemetry's file gate decides whether a tick sends. A tick
+ * that lands while an attempt is still in flight joins it instead of racing it
+ * through the gate, and the timer never keeps the process alive.
+ *
+ * Resolves when the immediate attempt has finished; it never rejects.
+ */
+export function startDailyTelemetryScheduler(options: DailyTelemetrySchedulerOptions): Promise<void> {
+  stopDailyTelemetryScheduler()
+  const generation = ++schedulerGeneration
+  const { clock, schedule, cancel, ...send } = options
+  let inFlight: Promise<void> | null = null
+  const attempt = (): Promise<void> => {
+    if (generation !== schedulerGeneration) return Promise.resolve()
+    if (inFlight !== null) return inFlight
+    inFlight = sendDailyTelemetry({ ...send, now: (clock ?? (() => new Date()))() }).finally(() => {
+      inFlight = null
+    })
+    return inFlight
+  }
+  const timer = (schedule ?? ((tick, intervalMs) => setInterval(() => { void tick() }, intervalMs)))(
+    attempt,
+    DAILY_TELEMETRY_TICK_MS,
+  )
+  timer.unref?.()
+  schedulerTimer = timer
+  schedulerCancel = cancel ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>))
+  return attempt()
+}
+
+/** An attempt already in flight finishes; nothing is attempted after this. */
+export function stopDailyTelemetryScheduler(): void {
+  schedulerGeneration += 1
+  if (schedulerTimer !== null && schedulerCancel !== null) schedulerCancel(schedulerTimer)
+  schedulerTimer = null
+  schedulerCancel = null
 }
 
 /** Keep packaged QA out of production counts and out of the production daily gate. */
