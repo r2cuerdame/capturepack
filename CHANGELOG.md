@@ -143,6 +143,15 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   no-retry on failure are unchanged, and the unread reply is closed instead of
   holding its connection
   ([#537](https://github.com/r2cuerdame/capturepack/issues/537)).
+- The save toast no longer loses an After Save Action result, its retry button
+  or an image copy/render status that arrives before the toast has finished
+  opening; it opens on the latest state instead of the one it started with. A
+  toast that also says the replay is unavailable now grows tall enough for both
+  lines instead of cutting off the bottom 44 px. A toast replaced by a newer
+  save stays closed, and opening, updating or retrying the toast reads the
+  running settings rather than rewriting `settings.json` or bringing back an
+  `--output-dir` override the user had replaced
+  ([#540](https://github.com/r2cuerdame/capturepack/issues/540)).
 
 ### Documentation
 
