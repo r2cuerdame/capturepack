@@ -19,7 +19,7 @@ import { stripUtf8Bom } from '../shared/json'
 import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
 import { readActionResults, retryAction } from './actions/host'
-import { loadSettings } from './settings'
+import { readSettings } from './settings'
 
 const TOAST_WIDTH = 420
 const TOAST_HEIGHT = 180
@@ -93,7 +93,7 @@ export function showSaveToast(options: {
   active = null
 
   const work = screen.getPrimaryDisplay().workArea
-  const settings = loadSettings().settings
+  const settings = readSettings()
   const actionResults = readActionResults(options.folderPath)
   const actionCount = actionResults.length
   const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
@@ -183,7 +183,7 @@ export function updateToastActionResults(
 ): void {
   if (active === null || active.win.isDestroyed()) return
   if (active.folderPath !== folderPath) return
-  const settings = loadSettings().settings
+  const settings = readSettings()
   const stored = readActionResults(folderPath)
   const base = stored.length > 0 ? stored : active.actionResults
   const effective = mergeActionResults(base, results)
@@ -248,7 +248,7 @@ function registerToastIpc(): void {
     if (typeof configId !== 'string' || configId === '') {
       return { ok: false, error: 'Invalid config id' }
     }
-    const settings = loadSettings().settings
+    const settings = readSettings()
     const config = settings.actionConfigs.find((c) => c.configId === configId)
     if (config === undefined || !config.enabled) {
       return { ok: false, error: 'Action configuration is disabled or not found' }

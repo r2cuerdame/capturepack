@@ -37,7 +37,7 @@ import type {
 import type { ActionResult } from '../shared/actions'
 import { onActionResultsChange, parseActionResults, readActionResults, retryAction } from './actions/host'
 import { stripUtf8Bom } from '../shared/json'
-import { loadSettings } from './settings'
+import { readSettings } from './settings'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Manifest, Settings } from '../shared/types'
 import { captureKindOf } from '../shared/captureMedia'
@@ -537,7 +537,7 @@ export function registerHistoryIpc(live: Settings): void {
     if (entry.kind !== 'dir') {
       return { ok: false, error: 'Cannot retry actions on an archived pack' }
     }
-    const settings = liveSettings ?? loadSettings().settings
+    const settings = liveSettings ?? readSettings()
     const config = settings.actionConfigs.find((c) => c.configId === configId)
     if (config === undefined || !config.enabled) {
       return { ok: false, error: 'Action configuration is disabled or not found' }
