@@ -136,6 +136,13 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   copy keeps the previous version and is finished on the next start. An
   up-to-date folder is still not touched at all
   ([#534](https://github.com/r2cuerdame/capturepack/issues/534)).
+- The anonymous once-a-day usage signal is now sent on every local day the app
+  is running, not only on the day it was launched. An app started at login and
+  left open or asleep across midnight checks the date hourly and sends the new
+  day's signal once. The fields sent, the one-per-day limit and the silent
+  no-retry on failure are unchanged, and the unread reply is closed instead of
+  holding its connection
+  ([#537](https://github.com/r2cuerdame/capturepack/issues/537)).
 
 ### Documentation
 
