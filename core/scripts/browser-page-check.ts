@@ -19,22 +19,26 @@
 //
 // Run: npm run check:browser-page
 
+import { spawn } from 'node:child_process'
 import * as net from 'node:net'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { greyPng } from './fixtures/greyPng'
 import {
+  DOM_LINE_MAX_BYTES,
   domBridgeStatus,
   browserPageStats,
   onBrowserPageCaptured,
   parseDomPayload,
+  requestDomForCapture,
   startDomBridge,
   stopDomBridge,
   type BrowserPageCapture,
   type DomEvent,
 } from '../src/main/chrome/domBridge'
-import { domPipePath } from '../src/main/chrome/nativeHost'
+import { createUtf8LineReader } from '../src/main/chrome/lineReader'
+import { domPipePath, MAX_FRAME_BYTES, runNativeHostMode } from '../src/main/chrome/nativeHost'
 import { ChromeDomProvider } from '../src/main/context/domProvider'
 import { domEventForPack, writeDomPlugin, DOM_PLUGIN_VERSION } from '../src/main/exporter'
 import type { SurfaceInfo } from '../src/shared/context/protocol'
@@ -58,6 +62,44 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boo
     await sleep(25)
   }
   return predicate()
+}
+
+// ---------------------------------------------------------------------------
+// Characters that take two, three and four bytes in UTF-8 (#549), and the
+// means to cut a message inside them and send it piece by piece.
+// ---------------------------------------------------------------------------
+
+const MULTIBYTE = '긴 한글 페이지 — 日本語 Ελληνικά 🎉👩‍💻 끝'
+
+/** Cut positions that fall inside a multibyte character, at varying depths. */
+function midCharacterCuts(bytes: Buffer, max: number): number[] {
+  const cuts: number[] = []
+  for (let i = 0; i < bytes.length && cuts.length < max; i += 1) {
+    const lead = bytes[i] ?? 0
+    const length = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1
+    if (length === 1) continue
+    cuts.push(i + 1 + (cuts.length % (length - 1)))
+    i += length - 1
+  }
+  return cuts
+}
+
+function splitAt(bytes: Buffer, cuts: readonly number[]): Buffer[] {
+  const pieces: Buffer[] = []
+  let from = 0
+  for (const cut of [...cuts, bytes.length]) {
+    pieces.push(bytes.subarray(from, cut))
+    from = cut
+  }
+  return pieces
+}
+
+/** Each piece its own write, spaced so the reader sees it as its own read. */
+async function writeInPieces(socket: net.Socket, bytes: Buffer, cuts: readonly number[]): Promise<void> {
+  for (const piece of splitAt(bytes, cuts)) {
+    await new Promise<void>((resolve) => socket.write(piece, () => resolve()))
+    await sleep(15)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -288,9 +330,196 @@ async function bridgeHalf(): Promise<void> {
     stats.received === 3 && stats.refused >= 5 && stats.pending === 0, JSON.stringify(stats))
   check('nothing above was mistaken for a pick', domBridgeStatus().elementPicks === 0)
 
+  console.log('\nA character split across pipe pieces arrives whole (#549)')
+  {
+    const { header, chunks } = bundle({ captureId: 'multibyte' })
+    const tab = { url: 'https://example.test/한글', title: MULTIBYTE }
+    header['tab'] = tab
+    ;(header['page'] as Record<string, unknown>)['title'] = MULTIBYTE
+    const doc = header['document'] as { title: string; elements: Array<{ text: string }> }
+    doc.title = MULTIBYTE
+    for (const element of doc.elements) element.text = MULTIBYTE
+    const bytes = Buffer.from(`${JSON.stringify(header)}\n`, 'utf8')
+    const cuts = midCharacterCuts(bytes, 24)
+    check('the header is cut inside characters, which a per-piece decode would break',
+      cuts.length >= 12 && splitAt(bytes, cuts).map((p) => p.toString('utf8')).join('').includes('�'))
+    await writeInPieces(socket, bytes, cuts)
+    for (const chunk of chunks) send(chunk)
+    await waitFor(() => replyFor('multibyte') !== undefined, 5_000)
+    const capture = received[received.length - 1]
+    check('a page header cut inside characters is accepted',
+      replyFor('multibyte')?.['ok'] === true && capture?.captureId === 'multibyte', JSON.stringify(replyFor('multibyte')))
+    check('its tab title, URL and element text are restored exactly, with no U+FFFD',
+      capture?.tab.title === MULTIBYTE && capture.tab.url === tab.url
+      && capture.document?.elements.every((e) => e.text === MULTIBYTE) === true
+      && !JSON.stringify(capture.tab).includes('�'),
+      JSON.stringify(capture?.tab))
+  }
+  {
+    const asked = requestDomForCapture(5_000)
+    await waitFor(() => replies.some((r) => r['type'] === 'dom.request'), 5_000)
+    const request = replies.find((r) => r['type'] === 'dom.request')
+    // Large enough that the pipe itself hands it over in several pieces, and
+    // cut inside characters on top of that.
+    const longText = `${MULTIBYTE} `.repeat(4000)
+    const response = {
+      type: 'dom.response',
+      protocol: 1,
+      timestamp: Date.now(),
+      request_id: request?.['request_id'],
+      ok: true,
+      tab: { url: 'https://example.test/', title: MULTIBYTE },
+      document: { title: MULTIBYTE, body: longText },
+      documents: [{ tab: { url: 'https://example.test/2', title: MULTIBYTE }, document: { title: MULTIBYTE } }],
+    }
+    const bytes = Buffer.from(`${JSON.stringify(response)}\n`, 'utf8')
+    await writeInPieces(socket, bytes, midCharacterCuts(bytes, 24))
+    const answer = await asked
+    const document = answer?.document as { title?: string; body?: string } | undefined
+    check('a DOM reply cut inside characters is restored exactly',
+      answer !== null && answer.tab?.title === MULTIBYTE && document?.title === MULTIBYTE
+      && document.body === longText && answer.windows[0]?.tab?.title === MULTIBYTE,
+      JSON.stringify(answer?.tab))
+  }
+  {
+    // A host that never sends a newline is hung up on at the bound, not buffered.
+    const flood = net.connect(domPipePath())
+    let closed = false
+    flood.on('close', () => { closed = true })
+    flood.on('error', () => undefined)
+    await new Promise<void>((resolve) => flood.once('connect', () => resolve()))
+    const piece = Buffer.alloc(1024 * 1024, 0x61)
+    for (let sent = 0; sent <= DOM_LINE_MAX_BYTES && !closed; sent += piece.length) {
+      await Promise.race([new Promise<void>((resolve) => flood.write(piece, () => resolve())), sleep(2_000)])
+    }
+    check('a line past the bound with no newline closes that host\'s connection',
+      await waitFor(() => closed, 5_000))
+    flood.destroy()
+    check('and the other host keeps its connection', !socket.destroyed)
+  }
+
   socket.destroy()
   onBrowserPageCaptured(null)
   stopDomBridge()
+}
+
+// ---------------------------------------------------------------------------
+
+function readerHalf(): void {
+  console.log('\nThe line reader decodes whole lines and holds a bound (#549)')
+  const text = `${MULTIBYTE}\n{"title":"${MULTIBYTE}"}\n`
+  const bytes = Buffer.from(text, 'utf8')
+  for (const size of [1, 2, 3]) {
+    const lines: string[] = []
+    let overflows = 0
+    const reader = createUtf8LineReader({ maxBytes: 1024, onLine: (l) => lines.push(l), onOverflow: () => { overflows += 1 } })
+    for (let i = 0; i < bytes.length; i += size) reader.push(bytes.subarray(i, i + size))
+    check(`fed ${String(size)} byte(s) at a time, every line comes back exactly`,
+      lines.length === 2 && lines[0] === MULTIBYTE && lines[1] === `{"title":"${MULTIBYTE}"}`
+      && overflows === 0 && reader.pendingBytes === 0, JSON.stringify(lines))
+  }
+  {
+    const lines: string[] = []
+    let overflows = 0
+    const reader = createUtf8LineReader({ maxBytes: 16, onLine: (l) => lines.push(l), onOverflow: () => { overflows += 1 } })
+    reader.push(Buffer.alloc(10, 0x61))
+    check('an unterminated tail under the bound is held', reader.pendingBytes === 10 && overflows === 0)
+    reader.push(Buffer.alloc(7, 0x61))
+    check('past the bound with no newline it overflows once and holds nothing',
+      overflows === 1 && reader.pendingBytes === 0 && lines.length === 0)
+    reader.push(Buffer.from('late\n'))
+    check('and ignores what follows until it is reset', overflows === 1 && lines.length === 0)
+    reader.reset()
+    reader.push(Buffer.from('fresh\n'))
+    check('after a reset it reads again', lines.length === 1 && lines[0] === 'fresh')
+  }
+  {
+    let overflows = 0
+    const reader = createUtf8LineReader({ maxBytes: 16, onLine: () => undefined, onOverflow: () => { overflows += 1 } })
+    reader.push(Buffer.from(`${'a'.repeat(17)}\n`))
+    check('a finished line longer than the bound overflows too', overflows === 1)
+  }
+  {
+    const lines: string[] = []
+    const reader = createUtf8LineReader({ maxBytes: 1024, onLine: (l) => lines.push(l), onOverflow: () => undefined })
+    reader.push(Buffer.from(MULTIBYTE, 'utf8').subarray(0, 5))
+    reader.reset()
+    reader.push(Buffer.from('next\n'))
+    check('a reset on close drops the half-received tail', lines.length === 1 && lines[0] === 'next', JSON.stringify(lines))
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+const NATIVE_HOST_CHILD = '--native-host-child'
+
+async function nativeHostHalf(): Promise<void> {
+  console.log('\nThe native host relays the app\'s replies whole, and bounded (#549)')
+  // The host reads fd 0 and writes fd 1, so it runs as a child of this check —
+  // this same bundle, in host mode — against a pipe this check listens on.
+  const suffix = `host-check-${String(process.pid)}`
+  const environment = { ...process.env, CAPTUREPACK_DOM_PIPE_SUFFIX: suffix }
+  const connections: net.Socket[] = []
+  const server = net.createServer((connection) => {
+    connection.on('error', () => undefined)
+    connections.push(connection)
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(domPipePath(environment), () => resolve())
+  })
+  const child = spawn(process.execPath, [process.argv[1] ?? '', NATIVE_HOST_CHILD], {
+    env: environment,
+    stdio: ['pipe', 'pipe', 'inherit'],
+  })
+  let exited = false
+  child.on('exit', () => { exited = true })
+  const frames: string[] = []
+  let out = Buffer.alloc(0)
+  child.stdout.on('data', (chunk: Buffer) => {
+    out = Buffer.concat([out, chunk])
+    while (out.length >= 4 && out.length >= 4 + out.readUInt32LE(0)) {
+      const length = out.readUInt32LE(0)
+      frames.push(out.subarray(4, 4 + length).toString('utf8'))
+      out = out.subarray(4 + length)
+    }
+  })
+  const relay = async (app: net.Socket, message: Record<string, unknown>, expected: number): Promise<boolean> => {
+    const bytes = Buffer.from(`${JSON.stringify(message)}\n`, 'utf8')
+    await writeInPieces(app, bytes, midCharacterCuts(bytes, 24))
+    await waitFor(() => frames.length >= expected, 5_000)
+    return frames.length === expected && frames[expected - 1] === JSON.stringify(message)
+  }
+  try {
+    check('the host dials the app', await waitFor(() => connections.length === 1, 5_000))
+    const app = connections[0]
+    if (app !== undefined) {
+      const reply = { type: 'page.received', protocol: 1, capture_id: 'multibyte', ok: false, reason: MULTIBYTE }
+      check('a reply cut inside characters reaches the extension as one whole frame, with no U+FFFD',
+        await relay(app, reply, 1) && !(frames[0] ?? '').includes('�'), JSON.stringify(frames))
+
+      let closed = false
+      app.on('close', () => { closed = true })
+      const piece = Buffer.alloc(256 * 1024, 0x61)
+      for (let sent = 0; sent <= MAX_FRAME_BYTES && !closed; sent += piece.length) {
+        await Promise.race([new Promise<void>((resolve) => app.write(piece, () => resolve())), sleep(2_000)])
+      }
+      check('a reply past the frame bound with no newline makes the host hang up the pipe',
+        await waitFor(() => closed, 5_000))
+      check('without relaying any of it', frames.length === 1, String(frames.length))
+      check('and the host redials rather than dying',
+        await waitFor(() => connections.length >= 2, 10_000) && !exited)
+      const again = connections[1]
+      check('the new connection starts clean and relays whole frames again',
+        again !== undefined && await relay(again, { ...reply, capture_id: 'again' }, 2), JSON.stringify(frames.slice(1)))
+    }
+  } finally {
+    child.stdin.end()
+    if (!await waitFor(() => exited, 5_000)) child.kill()
+    for (const connection of connections) connection.destroy()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+  check('the host exits when the browser hangs up', exited)
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +732,9 @@ function sourceHalf(): void {
 }
 
 async function main(): Promise<void> {
+  readerHalf()
   await bridgeHalf()
+  await nativeHostHalf()
   placementHalf()
   await sleep(50)
   await payloadHalf()
@@ -512,7 +743,11 @@ async function main(): Promise<void> {
   if (failed > 0) process.exitCode = 1
 }
 
-void main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error))
-  process.exitCode = 1
-})
+if (process.argv.includes(NATIVE_HOST_CHILD)) {
+  void runNativeHostMode().then(() => process.exit(0))
+} else {
+  void main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error))
+    process.exitCode = 1
+  })
+}

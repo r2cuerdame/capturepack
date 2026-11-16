@@ -82,6 +82,31 @@ check('annotated image packs without declarations are missing', historyAnnotated
 check('declared but absent image keyframes are missing', historyAnnotatedState(renderedImageManifest, 1, () => false) === 'missing')
 check('declared and present image keyframes are ready', historyAnnotatedState(renderedImageManifest, 1, (file) => file === 'frames/frame-01_00-00.000.png') === 'ready')
 
+console.log('\nReplay-less video History recovery (#554)')
+const replaylessVideoManifest = {
+  capture_kind: 'video',
+  media: { snapshot: 'snapshot.png', replay: null },
+}
+const renderedReplaylessVideoManifest = {
+  ...replaylessVideoManifest,
+  media: {
+    ...replaylessVideoManifest.media,
+    keyframes: [{ file: 'frames/frame-01_00-00.000.png', t_ms: 0 }],
+  },
+}
+const legacyReplaylessManifest = { media: { snapshot: 'snapshot.png' } }
+check('replay-less video packs select the still renderer', historyRerenderKind(replaylessVideoManifest) === 'still')
+check('unannotated replay-less video packs need no derived still', historyAnnotatedState(replaylessVideoManifest, 0, () => true) === 'none')
+check('unannotated legacy replay-less packs need no derived still', historyAnnotatedState(legacyReplaylessManifest, 0, () => false) === 'none')
+check('annotated replay-less video packs without declarations are missing', historyAnnotatedState(replaylessVideoManifest, 2, () => false) === 'missing')
+check('annotated legacy replay-less packs without declarations are missing', historyAnnotatedState(legacyReplaylessManifest, 1, () => false) === 'missing')
+check('declared but deleted replay-less keyframes are missing', historyAnnotatedState(renderedReplaylessVideoManifest, 1, () => false) === 'missing')
+check('declared and present replay-less keyframes are ready', historyAnnotatedState(renderedReplaylessVideoManifest, 1, (file) => file === 'frames/frame-01_00-00.000.png') === 'ready')
+check('blank keyframe declarations are missing', historyAnnotatedState({ ...replaylessVideoManifest, media: { ...replaylessVideoManifest.media, keyframes: [{ file: ' ', t_ms: 0 }] } }, 1, () => true) === 'missing')
+const replayVideoManifest = { capture_kind: 'video', media: { snapshot: 'snapshot.png', replay: 'replay.mp4' } }
+check('replay video packs still look for replay_annotated.mp4', historyAnnotatedState(replayVideoManifest, 1, (file) => file === 'replay_annotated.mp4') === 'ready')
+check('replay video packs without replay_annotated are missing', historyAnnotatedState(replayVideoManifest, 1, () => false) === 'missing')
+
 console.log('\nHistory wiring')
 const historySource = readFileSync('src/main/historyWindow.ts', 'utf8').replaceAll('\r\n', '\n')
 const rendererSource = readFileSync('src/renderer/render/render.ts', 'utf8')
@@ -90,6 +115,11 @@ check('secondary replay jobs use the display renderer', historySource.includes('
 check('secondary still-only jobs use the keyframe renderer', historySource.includes('startKeyframeStill(handle, {'))
 check('focused still retries dispatch the saved snapshot', historySource.includes('snapshotPng: focusedSource,'))
 check('renderer rejects an incomplete contract before making the overlay', rendererSource.includes('const contractError = renderContractError(job)'))
+check(
+  'cached listings re-check frames/ for every annotated replay-less folder pack (#554)',
+  historySource.includes("&& (cached.summary.captureKind === 'image' || !cached.summary.hasReplay)\n      && cached.summary.annotationCount > 0")
+    && !historySource.includes("&& cached.summary.captureKind === 'image'\n      && cached.summary.annotationCount > 0"),
+)
 
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'

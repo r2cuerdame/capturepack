@@ -16,6 +16,7 @@ import { lstat, readFile, readdir, realpath, rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { deflateSync, inflateSync } from 'node:zlib'
 import { captureMediaViolations } from '../shared/captureMedia'
+import { resolvedReplayClockOffsetMs } from '../shared/displayClock'
 import { stripUtf8Bom } from '../shared/json'
 import type {
   Annotation,
@@ -43,6 +44,13 @@ export interface ShareMediaPlanEntry {
   display: number | null
   /** Replay-clock instant, or null for a screenshot-only lane with no clock. */
   t_ms: number | null
+  /**
+   * The same instant on the pack clock that annotation lifetimes and motion
+   * use. A non-focused replay's keyframe is on that display's own clock
+   * (`t_i = t + offset`, SPEC §5.6), so it is converted back before any
+   * annotation is evaluated; the focused lane's clock IS the pack clock.
+   */
+  pack_t_ms: number | null
   /** Private to the local planning/creation path; never written into the ZIP. */
   sourcePath: string
   /** Pack-relative and used only for revision checks and error reporting. */
@@ -126,6 +134,7 @@ interface MediaCandidate {
   kind: ShareMediaKind
   display: number | null
   t_ms: number | null
+  pack_t_ms: number | null
   declaredWidth?: number
   declaredHeight?: number
   sourceFrame?: ShareSourceFrame
@@ -144,6 +153,8 @@ interface ShareDisplayLayout {
   displays: ManifestDisplayMedia[]
   declared: ReadonlySet<number>
   frameByDisplay: ReadonlyMap<number | null, ShareSourceFrame>
+  /** Resolved pack→display clock offsets for non-focused replay lanes only. */
+  clockOffsetByDisplay: ReadonlyMap<number, number>
 }
 
 /**
@@ -187,6 +198,24 @@ export async function planShareBundle(
     throw new ShareBundleError('derived-media-not-ready')
   }
 
+  // Motion crossing displays is placed in desktop space from each display's
+  // pixel size. A pre-0.7.0 entry may omit snapshot_width/height; the layout
+  // has already resolved that frame, so use it rather than the raw field.
+  const motionSpace = layout.displays.length < 2 || layout.focused === null
+    ? undefined
+    : {
+        focusedIndex: layout.focused,
+        displays: layout.displays.map((display) => {
+          const frame = layout.frameByDisplay.get(display.index)
+          if (frame === undefined) throw new ShareBundleError('invalid-pack')
+          return {
+            index: display.index,
+            width: frame.width,
+            height: frame.height,
+            bounds: display.bounds,
+          }
+        }),
+      }
   const entries: ShareMediaPlanEntry[] = []
   const destinations = new Set<string>()
   let totalBytes = 0
@@ -330,24 +359,19 @@ export async function planShareBundle(
       sourceSnapshotMtimeMs,
       annotations: pack.annotations,
       displayAnnotations: candidate.display === null
-        ? pack.annotations.filter((annotation) => visibleAt(annotation, candidate.t_ms))
-        : pack.annotations.filter((annotation) =>
-          (annotation.display ?? layout.focused) === candidate.display && visibleAt(annotation, candidate.t_ms)),
+        ? pack.annotations.filter((annotation) => visibleAt(annotation, candidate.pack_t_ms))
+        : pack.annotations.filter((annotation) => {
+          if (!visibleAt(annotation, candidate.pack_t_ms)) return false
+          const resolved = candidate.pack_t_ms === null
+            ? annotation
+            : annotationAt(annotation, candidate.pack_t_ms, motionSpace)
+          return (resolved.display ?? layout.focused) === candidate.display
+        }),
       opaqueRedaction,
       frameWidth,
       frameHeight,
       focusedDisplay: layout.focused,
-      ...(layout.displays.length < 2 || layout.focused === null ? {} : {
-        motionSpace: {
-          focusedIndex: layout.focused ?? 1,
-          displays: layout.displays.map((display) => ({
-            index: display.index,
-            width: display.snapshot_width,
-            height: display.snapshot_height,
-            bounds: display.bounds,
-          })),
-        },
-      }),
+      ...(motionSpace === undefined ? {} : { motionSpace }),
     })
   }
 
@@ -464,7 +488,7 @@ export async function readCanonicalShareStill(
       throw new ShareBundleError('pack-changed')
     }
     const canonical = opaqueRedactPng(sourceStill, entry.annotations, snapshotDimensions.height,
-      entry.t_ms, entry.motionSpace, entry.display, entry.focusedDisplay)
+      entry.pack_t_ms, entry.motionSpace, entry.display, entry.focusedDisplay)
     const dimensions = canonicalPngDimensions(canonical)
     const decodedRasterBytes = dimensions.width * dimensions.height * 4
     if (!Number.isSafeInteger(decodedRasterBytes) || decodedRasterBytes > MAX_SHARE_STILL_BYTES ||
@@ -853,6 +877,7 @@ function mediaCandidates(manifest: Manifest, layout: ShareDisplayLayout): MediaC
     layout.frameByDisplay.get(topDisplay),
     manifest.media.replay,
     manifest.media.replay_duration_ms,
+    0,
   )
   for (const display of layout.displays) {
     if (display.focused === true || display.index === topDisplay) continue
@@ -864,6 +889,7 @@ function mediaCandidates(manifest: Manifest, layout: ShareDisplayLayout): MediaC
       layout.frameByDisplay.get(display.index),
       display.replay ?? null,
       display.replay_duration_ms,
+      layout.clockOffsetByDisplay.get(display.index) ?? 0,
     )
   }
   return candidates
@@ -877,6 +903,7 @@ function addLaneCandidates(
   sourceFrame: ShareSourceFrame | undefined,
   replay: string | null,
   replayDurationMs: number | undefined,
+  clockOffsetMs: number,
 ): void {
   const lane = display === null ? 'media/capture' : `media/display-${String(display)}`
   if (keyframes === undefined) return
@@ -917,6 +944,7 @@ function addLaneCandidates(
       kind: 'annotated-still',
       display,
       t_ms: replay === null ? null : frame.t_ms,
+      pack_t_ms: replay === null ? null : frame.t_ms - clockOffsetMs,
       ...(frame.width === undefined ? {} : { declaredWidth: frame.width }),
       ...(frame.height === undefined ? {} : { declaredHeight: frame.height }),
       ...(sourceFrame === undefined ? {} : { sourceFrame }),
@@ -983,6 +1011,7 @@ function shareDisplayLayout(
       displays: [],
       declared: new Set<number>(),
       frameByDisplay,
+      clockOffsetByDisplay: new Map(),
     }
   }
   if (rawDisplays === undefined) {
@@ -1001,6 +1030,7 @@ function shareDisplayLayout(
       displays: [],
       declared: new Set([1]),
       frameByDisplay,
+      clockOffsetByDisplay: new Map(),
     }
   }
   if (!Array.isArray(rawDisplays) || rawDisplays.length === 0) {
@@ -1008,6 +1038,7 @@ function shareDisplayLayout(
   }
   const displays: ManifestDisplayMedia[] = []
   const declared = new Set<number>()
+  const clockOffsetByDisplay = new Map<number, number>()
   let focused: number | null = null
   for (const value of rawDisplays) {
     if (
@@ -1065,6 +1096,19 @@ function shareDisplayLayout(
     ) {
       throw new ShareBundleError('invalid-pack')
     }
+    // SPEC §5.6: an observed clock conversion exists only for a real replay,
+    // is integer milliseconds, and is 0 on the focused display, whose replay
+    // IS the pack clock. A damaged value would silently fall back to
+    // end-alignment and test redaction against the wrong instant.
+    const declaredOffset = value['replay_clock_offset_ms']
+    if (
+      declaredOffset !== undefined &&
+      (displayReplay === null ||
+        !Number.isSafeInteger(declaredOffset) ||
+        (display.focused && declaredOffset !== 0))
+    ) {
+      throw new ShareBundleError('invalid-pack')
+    }
     if (display.focused) {
       if (
         focused !== null ||
@@ -1089,12 +1133,24 @@ function shareDisplayLayout(
       ) {
         throw new ShareBundleError('invalid-pack')
       }
+      // Only a focused replay defines a pack clock to align against. Without
+      // one the secondary keeps its own instants, exactly as before.
+      if (typeof displayReplay === 'string' && typeof replay === 'string') {
+        clockOffsetByDisplay.set(
+          display.index,
+          resolvedReplayClockOffsetMs(
+            declaredOffset,
+            value['replay_duration_ms'] as number,
+            replayDuration as number,
+          ),
+        )
+      }
     }
     frameByDisplay.set(display.index, displayFrame)
     displays.push(display)
   }
   if (focused === null) throw new ShareBundleError('invalid-pack')
-  return { focused, displays, declared, frameByDisplay }
+  return { focused, displays, declared, frameByDisplay, clockOffsetByDisplay }
 }
 
 function formatVersion(value: unknown): { major: number; minor: number; patch: number } {
