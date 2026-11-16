@@ -176,6 +176,9 @@ export function computeKeyframes(
     if (keep.size >= budget) break
     const from = lifeStart(a, durationMs)
     const to = lifeEnd(a, durationMs)
+    // The final instant is always kept, so a box alive at it is already shown;
+    // spending a budget slot on it as well starves a box drawn later.
+    if (from <= final && final <= to) continue
     if (times.some((t) => t !== final && keep.has(t) && t >= from && t <= to)) continue
     const own = times.find((t) => t !== final && t >= from && t <= to)
     if (own !== undefined) keep.add(own)
