@@ -61,7 +61,12 @@ import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
-import { dailyTelemetryLaunchPolicy, sendDailyTelemetry, telemetryOs } from './telemetry'
+import {
+  dailyTelemetryLaunchPolicy,
+  startDailyTelemetryScheduler,
+  stopDailyTelemetryScheduler,
+  telemetryOs,
+} from './telemetry'
 import {
   checkNow,
   holdSessionEndForUpdate,
@@ -240,6 +245,7 @@ function main(): void {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     stopRecorderStateListener()
+    stopDailyTelemetryScheduler()
     // The Context Host is a child process of ours and exits on stdin EOF anyway,
     // but stopping it here is what makes the surface timeline's final cost line
     // land in the log before the process goes (issues #64/#65).
@@ -305,7 +311,7 @@ function main(): void {
     void new BrowserWindow({ show: false, width: 1, height: 1, skipTaskbar: true, focusable: false })
     const telemetryPolicy = dailyTelemetryLaunchPolicy(app.isPackaged, process.env)
     if (telemetryPolicy.enabled) {
-      void sendDailyTelemetry({
+      void startDailyTelemetryScheduler({
         statePath: path.join(app.getPath('userData'), telemetryPolicy.stateFile),
         version: app.getVersion(),
         os: telemetryOs(),
