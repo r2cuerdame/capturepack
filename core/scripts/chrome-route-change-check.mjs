@@ -65,9 +65,10 @@ assert.equal(forwarded.length, 2, 'a valid long route hint is delivered')
 assert.equal(forwarded[1].tab.url.length, 2048, 'forwarded URL is capped at 2,048 characters')
 assert.equal(forwarded[1].tab.title.length, 512, 'forwarded title is capped at 512 characters')
 
-// The app recopies the extension folder only when the manifest version moves
-// (syncExtensionIfChanged), so a fix the version leaves alone never reaches an
-// installed browser. 0.4.3 shipped the worker that dropped the raced hint.
+// The app rewrites the extension folder's changed files (syncExtensionIfChanged),
+// but the extension only asks Chromium to reload when the version it reports
+// moves, so a fix the version leaves alone never reaches a running worker.
+// 0.4.3 shipped the worker that dropped the raced hint.
 const background = readFileSync(path.join(root, 'extensions/chrome/background.js'), 'utf8')
 assert.equal(background.match(/importScripts\('route-change\.js'\)/gu)?.length, 1,
   'the worker loads the route resolver exactly once')
