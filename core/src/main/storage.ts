@@ -28,7 +28,7 @@ import { logError, logInfo } from './log'
 import { createPackStore } from './mcp/store'
 import type { PackStore, RawPackEntry } from './mcp/store'
 import { siblingArchive, siblingShareBundle } from './packArchive'
-import { beginPackOperation } from './packOperations'
+import { beginPackOperation, editorFlowOpen, packHeldByEditor } from './packOperations'
 
 /**
  * The ages the Settings panel offers, in days — and ZERO, which means
@@ -245,6 +245,10 @@ async function trashPacks(doomed: readonly StoredPack[], reason: string): Promis
   let bytesFreed = 0
   let firstError: string | null = null
   for (const pack of doomed) {
+    if (packHeldByEditor(pack.path)) {
+      if (firstError === null) firstError = 'pack is busy'
+      continue
+    }
     const release = beginPackOperation(pack.path)
     if (release === null) {
       if (firstError === null) firstError = 'pack is busy'
@@ -380,6 +384,10 @@ export async function runRetentionSweep(
   live: Settings,
   trigger: 'startup' | 'daily',
 ): Promise<StoragePurgeResult> {
+  if (editorFlowOpen()) {
+    logInfo(`[storage] retention sweep (${trigger}): deferred while an editor is open`)
+    return { ok: false, packsDeleted: 0, bytesFreed: 0, error: 'pack is busy' }
+  }
   lastSweepMs = Date.now()
   const policy = retentionPolicyOf(live)
   const plan = planRetention(storedPacks(live.outputDir), policy, lastSweepMs)
