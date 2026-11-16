@@ -1,4 +1,4 @@
-import { HotkeyRegistry } from '../src/main/hotkeyRegistry'
+import { acceleratorIdentity, HotkeyRegistry } from '../src/main/hotkeyRegistry'
 import type { ShortcutBackend } from '../src/main/hotkeyRegistry'
 
 class FakeBackend implements ShortcutBackend {
@@ -77,6 +77,114 @@ check(
   'invalid image syntax still leaves video live',
   backend.handlers.has('Ctrl+Shift+C') && registry.current('video') === 'Ctrl+Shift+C',
 )
+
+// #528: the same key combination spelled another way (alias, order, case,
+// whitespace) is still the same combination. Like Electron, this backend keys
+// its registrations by the combination, so a missed overlap would let the
+// second action take the keys and later release them for both.
+class CombinationBackend implements ShortcutBackend {
+  readonly held = new Map<string, string>()
+
+  register(accelerator: string): boolean {
+    this.held.set(acceleratorIdentity(accelerator, 'win32'), accelerator)
+    return true
+  }
+
+  unregister(accelerator: string): void {
+    this.held.delete(acceleratorIdentity(accelerator, 'win32'))
+  }
+}
+
+check(
+  'alias, order, case and whitespace spellings name one combination',
+  [
+    'Ctrl+Alt+C',
+    'Alt+Ctrl+C',
+    'Control+Alt+C',
+    'CommandOrControl+Alt+C',
+    'CmdOrCtrl+Option+C',
+    'CTRL+alt+c',
+    ' Ctrl + Alt + C ',
+  ]
+    .map((a) => acceleratorIdentity(a, 'win32'))
+    .every((id) => id === acceleratorIdentity('Ctrl+Alt+C', 'win32')),
+)
+check(
+  'Super, Meta, Command and Cmd name one modifier off macOS',
+  ['Meta+Shift+K', 'Command+Shift+K', 'Cmd+Shift+K'].every(
+    (a) => acceleratorIdentity(a, 'win32') === acceleratorIdentity('Super+Shift+K', 'win32'),
+  ),
+)
+check(
+  'CommandOrControl is Ctrl, not Super, off macOS',
+  acceleratorIdentity('CommandOrControl+Alt+C', 'win32') !==
+    acceleratorIdentity('Super+Alt+C', 'win32'),
+)
+check(
+  'Return and Esc name the Enter and Escape keys',
+  acceleratorIdentity('Ctrl+Return', 'win32') === acceleratorIdentity('Ctrl+Enter', 'win32') &&
+    acceleratorIdentity('Ctrl+Esc', 'win32') === acceleratorIdentity('Ctrl+Escape', 'win32'),
+)
+
+const sameCombination = ['Alt+Ctrl+C', 'Control+Alt+C', 'CommandOrControl+Alt+C', 'CTRL+alt+c']
+for (const [held, changed] of [
+  ['video', 'image'],
+  ['image', 'video'],
+] as const) {
+  for (const spelling of sameCombination) {
+    const combo = new CombinationBackend()
+    const reg = new HotkeyRegistry(combo, 'win32')
+    reg.register(held, 'Ctrl+Alt+C', noop)
+    check(
+      `${changed} cannot take ${held}'s Ctrl+Alt+C spelled ${spelling}`,
+      !reg.register(changed, spelling, noop),
+    )
+    check(
+      `a rejected ${changed} ${spelling} leaves ${held} registered`,
+      reg.current(held) === 'Ctrl+Alt+C' &&
+        reg.current(changed) === null &&
+        combo.held.get(acceleratorIdentity('Ctrl+Alt+C', 'win32')) === 'Ctrl+Alt+C',
+    )
+  }
+}
+
+{
+  const combo = new CombinationBackend()
+  const reg = new HotkeyRegistry(combo, 'win32')
+  reg.register('video', 'Ctrl+Alt+C', noop)
+  check(
+    'the same action may re-register its combination spelled another way',
+    reg.register('video', 'Alt+Control+c', noop) && reg.current('video') === 'Alt+Control+c',
+  )
+}
+
+{
+  // Startup registers settings.json's video shortcut first, then the image one.
+  const combo = new CombinationBackend()
+  const reg = new HotkeyRegistry(combo, 'win32')
+  const videoOk = reg.register('video', 'CommandOrControl+Alt+C', noop)
+  const imageOk = reg.register('image', 'Alt+Ctrl+C', noop)
+  check(
+    'startup with one combination spelled twice keeps video and refuses only image',
+    videoOk &&
+      !imageOk &&
+      reg.current('video') === 'CommandOrControl+Alt+C' &&
+      reg.current('image') === null,
+  )
+}
+
+{
+  const combo = new CombinationBackend()
+  const reg = new HotkeyRegistry(combo, 'win32')
+  check(
+    'genuinely different combinations both register',
+    reg.register('video', 'Ctrl+Alt+C', noop) &&
+      reg.register('image', 'Ctrl+Shift+C', noop) &&
+      reg.current('video') === 'Ctrl+Alt+C' &&
+      reg.current('image') === 'Ctrl+Shift+C' &&
+      combo.held.size === 2,
+  )
+}
 
 console.log(`\n${passed}/${passed + failed} hotkey registry checks passed.`)
 if (failed > 0) process.exitCode = 1
