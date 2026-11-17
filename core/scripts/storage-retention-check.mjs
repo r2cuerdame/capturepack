@@ -1,6 +1,6 @@
 // Bundles the production retention policy so this check cannot drift from it.
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +8,18 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const work = mkdtempSync(path.join(tmpdir(), 'capturepack-storage-retention-'))
 try {
+  const stub = path.join(work, 'electron-stub.cjs')
+  writeFileSync(
+    stub,
+    `const p=require('node:path');const fs=require('node:fs');` +
+      `exports.app={getPath:()=>p.join(${JSON.stringify(work)},'logs'),` +
+      `getAppPath:()=>'.',isPackaged:false,getVersion:()=>'0.0.0-check',on:()=>{},` +
+      `whenReady:()=>Promise.resolve()};` +
+      `const trashed=[];exports.__trashed=trashed;` +
+      `const bin=p.join(${JSON.stringify(work)},'recycle-bin');` +
+      `exports.shell={trashItem:async(item)=>{fs.mkdirSync(bin,{recursive:true});` +
+      `fs.renameSync(item,p.join(bin,String(trashed.length)+'-'+p.basename(item)));trashed.push(item)}};\n`,
+  )
   const bundle = path.join(work, 'check.cjs')
   execFileSync(
     process.execPath,
@@ -18,6 +30,7 @@ try {
       '--platform=node',
       '--format=cjs',
       `--outfile=${bundle}`,
+      `--alias:electron=${stub}`,
     ],
     { stdio: ['ignore', 'ignore', 'inherit'] },
   )

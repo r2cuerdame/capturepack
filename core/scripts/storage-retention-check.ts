@@ -16,8 +16,19 @@
 // the default a fresh install ships with. Wire the mode into the purge and the
 // first scheduled run empties the folder of a user who never touched the
 // setting.
-import { readFileSync } from 'node:fs'
+import * as electron from 'electron'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
+import AdmZip from 'adm-zip'
+import { beginEditorFlow } from '../src/main/packOperations'
+import {
+  invalidateStorageUsage,
+  purgeOlderThan,
+  runRetentionSweep,
+  startRetentionScheduler,
+} from '../src/main/storage'
+import type { Settings } from '../src/shared/types'
 import {
   budgetFraction,
   budgetLevel,
@@ -447,9 +458,185 @@ check(
     historyRenderer.includes('budgetLevel(usage.totalBytes, usage.maxBytes)'),
 )
 
-if (failed > 0) {
-  console.error(`\nstorage-retention-check failed: ${String(failed)}`)
-  process.exitCode = 1
-} else {
-  console.log('\nstorage-retention-check ok')
+console.log('\nAN OPEN EDITOR KEEPS ITS PACK (#583)')
+const session = source('src/main/session.ts')
+const flowEntries = ['startCaptureFlow', 'startEditFlow', 'startImageCaptureFlow', 'startBrowserPageFlow']
+check(
+  'every flow that takes the gate opens an editor hold with it and releases it with the gate',
+  flowEntries.every((name) => {
+    const body = functionBody(session, name)
+    return /flowActive = true\s+beginFlowLatency\('[^']+'\)\s+openFlowHold\(\)/.test(body) &&
+      /flowActive = false\s+endFlowLatency\(\)\s+closeFlowHold\(\)/.test(body)
+  }) &&
+    (session.match(/^[ \t]+openFlowHold\(\)\r?$/gm) ?? []).length === 4 &&
+    (session.match(/^[ \t]+closeFlowHold\(\)\r?$/gm) ?? []).length === 4,
+)
+check(
+  'a re-edit holds the folder it opens before the editor exists',
+  /openFlowHold\(\)\s*\n\s*holdFlowPack\(dirPath\)/.test(functionBody(session, 'startEditFlow')),
+)
+check(
+  'a fresh capture holds the folder save-first wrote, and the one the final save wrote',
+  (session.match(/holdFlowPack\(handle\.dirPath\)/g) ?? []).length >= 3 &&
+    (session.match(/holdFlowPack\(savedHandle\.dirPath\)/g) ?? []).length === 2,
+)
+
+const trashed = (electron as unknown as { __trashed: string[] }).__trashed
+const outRoot = mkdtempSync(path.join(tmpdir(), 'capturepack-retention-hold-'))
+const OLD = new Date(Date.now() - 40 * DAY)
+
+function writeZip(file: string, entries: Record<string, string>): string {
+  const archive = new AdmZip()
+  for (const [entryName, body] of Object.entries(entries)) archive.addFile(entryName, Buffer.from(body, 'utf8'))
+  archive.writeZip(file)
+  utimesSync(file, OLD, OLD)
+  return file
 }
+
+function oldPack(name: string, companions = false): { dir: string; twin: string; share: string } {
+  const dir = path.join(outRoot, name)
+  mkdirSync(dir, { recursive: true })
+  const manifest = JSON.stringify({ format: 'capturepack', id: name.toLowerCase(), created_at: '2026-01-01T00:00:00Z' })
+  writeFileSync(path.join(dir, 'manifest.json'), manifest)
+  writeFileSync(path.join(dir, 'snapshot.png'), 'x'.repeat(2048))
+  const twin = path.join(outRoot, `${name}.zip`)
+  const share = path.join(outRoot, `${name}.share.zip`)
+  if (companions) {
+    writeZip(twin, { 'manifest.json': manifest })
+    writeZip(share, {
+      'share.json': JSON.stringify({ format: 'capturepack-share', format_version: '0.1.0' }),
+      'viewer.html': '<p>reviewed derived media</p>',
+    })
+  }
+  utimesSync(path.join(dir, 'manifest.json'), OLD, OLD)
+  utimesSync(path.join(dir, 'snapshot.png'), OLD, OLD)
+  utimesSync(dir, OLD, OLD)
+  invalidateStorageUsage()
+  return { dir, twin, share }
+}
+
+const live = {
+  outputDir: outRoot,
+  storageRetentionDays: 7,
+  storageMaxBytes: DEFAULT_STORAGE_MAX_BYTES,
+  storageEnforceMaxBytes: false,
+} as unknown as Settings
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+function packKept(pack: { dir: string; twin: string; share: string }): boolean {
+  return existsSync(pack.dir) && existsSync(pack.twin) && existsSync(pack.share) &&
+    !trashed.includes(pack.dir) && !trashed.includes(pack.twin) && !trashed.includes(pack.share)
+}
+
+async function editorHoldChecks(): Promise<void> {
+  const editing = oldPack('Editing', true)
+  const other = oldPack('Other')
+  {
+    const flow = beginEditorFlow()
+    flow.hold(editing.dir)
+    const result = await purgeOlderThan(live, 0)
+    check(
+      '[Delete everything] leaves the pack an editor holds, with its zip twin and Share Copy',
+      packKept(editing),
+      trashed.map((p) => path.basename(p)).join(','),
+    )
+    check('and reports busy, not success', !result.ok && result.error === 'pack is busy', JSON.stringify(result))
+    check(
+      'while the rest of the same run is still trashed',
+      result.packsDeleted === 1 && trashed.includes(other.dir) && !existsSync(other.dir),
+      JSON.stringify(result),
+    )
+    flow.release()
+  }
+
+  const second = oldPack('Second')
+  const flow = beginEditorFlow()
+  flow.hold(editing.dir)
+  const direct = await runRetentionSweep(live, 'daily')
+  check(
+    'a sweep due while an editor is open defers the whole run and says so',
+    !direct.ok && direct.error === 'pack is busy' && direct.packsDeleted === 0 &&
+      existsSync(second.dir) && packKept(editing),
+    JSON.stringify(direct),
+  )
+
+  const timers: { fn: () => void; repeat: boolean }[] = []
+  const realSetTimeout = globalThis.setTimeout
+  const realSetInterval = globalThis.setInterval
+  globalThis.setTimeout = ((fn: () => void) => {
+    timers.push({ fn, repeat: false })
+    return { unref() {} }
+  }) as unknown as typeof setTimeout
+  globalThis.setInterval = ((fn: () => void) => {
+    timers.push({ fn, repeat: true })
+    return { unref() {} }
+  }) as unknown as typeof setInterval
+  try {
+    startRetentionScheduler(live)
+  } finally {
+    globalThis.setTimeout = realSetTimeout
+    globalThis.setInterval = realSetInterval
+  }
+  const startup = timers.find((t) => !t.repeat)
+  const tick = timers.find((t) => t.repeat)
+  check('the scheduler arms a startup run and an hourly look', startup !== undefined && tick !== undefined)
+  if (startup === undefined || tick === undefined) return
+
+  startup.fn()
+  await settle()
+  tick.fn()
+  await settle()
+  check(
+    'the startup run and the next hourly look both wait out the open editor',
+    existsSync(second.dir) && packKept(editing),
+  )
+
+  flow.release()
+  invalidateStorageUsage()
+  tick.fn()
+  await settle()
+  check(
+    'the first hourly look after the editor closes runs the deferred sweep, without waiting a day',
+    !existsSync(second.dir) && trashed.includes(second.dir),
+  )
+  check(
+    'and a released pack is an ordinary candidate again, companions included',
+    trashed.includes(editing.dir) && trashed.includes(editing.twin) && trashed.includes(editing.share),
+    trashed.map((p) => path.basename(p)).join(','),
+  )
+
+  const third = oldPack('Third')
+  const realNow = Date.now
+  Date.now = () => realNow() + 25 * 60 * 60 * 1_000
+  try {
+    const reopened = beginEditorFlow()
+    tick.fn()
+    await settle()
+    check('a daily run that falls inside a later edit is deferred too', existsSync(third.dir))
+    reopened.release()
+    invalidateStorageUsage()
+    tick.fn()
+    await settle()
+    check('and runs at the next hourly look once that edit closes', !existsSync(third.dir) && trashed.includes(third.dir))
+  } finally {
+    Date.now = realNow
+  }
+}
+
+void editorHoldChecks()
+  .catch((err: unknown) => {
+    failed += 1
+    console.log(`  FAIL  the editor hold checks threw — ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+  })
+  .finally(() => {
+    rmSync(outRoot, { recursive: true, force: true })
+    if (failed > 0) {
+      console.error(`\nstorage-retention-check failed: ${String(failed)}`)
+      process.exitCode = 1
+    } else {
+      console.log('\nstorage-retention-check ok')
+    }
+  })

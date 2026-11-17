@@ -149,6 +149,7 @@ import { reopenedContextDisplayTargets } from './reopenDisplay'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { copyPngToClipboard } from './clipboard'
 import { logError, logInfo, logWarn } from './log'
+import { beginEditorFlow, type EditorFlowHold } from './packOperations'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { runActionsAtState, settleSaveActionSession } from './actions/onSave'
@@ -241,10 +242,25 @@ type EditorOutcome =
 // One flow at a time, shared across capture AND re-edit: two fullscreen
 // editors (or an editor over a capture in progress) must never coexist.
 let flowActive = false
+let flowHold: EditorFlowHold | null = null
 let activeEditor: BrowserWindow | null = null
 
 export function captureFlowActive(): boolean {
   return flowActive
+}
+
+function openFlowHold(): void {
+  flowHold?.release()
+  flowHold = beginEditorFlow()
+}
+
+function closeFlowHold(): void {
+  flowHold?.release()
+  flowHold = null
+}
+
+function holdFlowPack(packPath: string): void {
+  flowHold?.hold(packPath)
 }
 
 // How long the flow kept the user waiting (ROADMAP: "never sacrifice the
@@ -326,6 +342,7 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
   logInfo('[capture] capture requested')
   flowActive = true
   beginFlowLatency('video')
+  openFlowHold()
   try {
     await runFlow(settings)
   } catch (err) {
@@ -335,6 +352,7 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
   } finally {
     flowActive = false
     endFlowLatency()
+    closeFlowHold()
     // An unattended run (#63) exits HERE, not the moment the folder appeared:
     // by now source-first save has published the manifest, copied the prompt
     // path and raised the toast inside the promise above. A flow that saved
@@ -365,6 +383,8 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
   logInfo(`[capture] re-edit requested: ${path.basename(dirPath)}`)
   flowActive = true
   beginFlowLatency('re-edit')
+  openFlowHold()
+  holdFlowPack(dirPath)
   // Let the invoke response reach History before reading replay files and
   // rebuilding provider indexes. runEditFlow necessarily does some synchronous
   // pack I/O before its first await; starting it on this call stack made the
@@ -378,6 +398,7 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
       .finally(() => {
         flowActive = false
         endFlowLatency()
+        closeFlowHold()
       })
   })
   return true
@@ -401,6 +422,7 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
   logInfo('[image] capture requested')
   flowActive = true
   beginFlowLatency('image')
+  openFlowHold()
   try {
     await runImageFlow(settings)
   } catch (err) {
@@ -412,6 +434,7 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
   } finally {
     flowActive = false
     endFlowLatency()
+    closeFlowHold()
   }
 }
 
@@ -450,6 +473,7 @@ export function startBrowserPageFlow(
   )
   flowActive = true
   beginFlowLatency('image')
+  openFlowHold()
   return new Promise<BrowserPageOutcome>((resolve) => {
     let settled = false
     const settle = (outcome: BrowserPageOutcome): void => {
@@ -470,6 +494,7 @@ export function startBrowserPageFlow(
       } finally {
         flowActive = false
         endFlowLatency()
+        closeFlowHold()
         // The editor closed before it ever reported itself visible: the pack
         // was still written, so the extension is told it went through.
         settle({ ok: true })
@@ -1710,6 +1735,7 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
   let handle: PackHandle | null = null
   try {
     handle = await savePack(initialSave)
+    holdFlowPack(handle.dirPath)
     markFlowLatency('saved')
     logInfo(
       `[image] save-first wrote ${path.basename(handle.dirPath)} ` +
@@ -1926,6 +1952,7 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
   try {
     if (handle === null) handle = await savePack(initialSave)
     const savedHandle = handle
+    holdFlowPack(savedHandle.dirPath)
     await updatePack(savedHandle, input)
     logInfo(
       `[image] saved ${path.basename(savedHandle.dirPath)}: ` +
@@ -2420,6 +2447,7 @@ async function runFlow(settings: Settings): Promise<void> {
   let handle: PackHandle | null = null
   try {
     handle = await savePack(initialSave)
+    holdFlowPack(handle.dirPath)
     markFlowLatency('saved')
     logInfo(`[capture] save-first wrote ${path.basename(handle.dirPath)}`)
   } catch (err) {
@@ -2860,6 +2888,7 @@ async function runFlow(settings: Settings): Promise<void> {
     // publication below is still the visible save boundary.
     if (handle === null) handle = await savePack(initialSave)
     const savedHandle = handle
+    holdFlowPack(savedHandle.dirPath)
     if (saveFirstHandle === null) {
       // The detached save-first attempt had no folder to enrich. The DOM
       // snapshot itself was already frozen above, so land that exact source in
@@ -3813,6 +3842,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       outcome.kind === 'saveAsNew'
         ? await saveAsNewPack(dirPath, input)
         : { id: manifest.id, dirPath }
+    holdFlowPack(handle.dirPath)
     if (outcome.kind === 'export') {
       await updatePack(handle, input, { keepReplay: true })
       // This explicit save starts a new action lifecycle for the same pack ID.
