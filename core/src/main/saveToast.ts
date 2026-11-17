@@ -20,7 +20,7 @@ import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
 import type { Settings } from '../shared/types'
 import { readActionResults, retryAction } from './actions/host'
-import { loadSettings } from './settings'
+import { readSettings } from './settings'
 
 const TOAST_WIDTH = 420
 const TOAST_HEIGHT = 180
@@ -87,9 +87,9 @@ function armAutoClose(toast: ActiveToast, state: ToastRenderState): void {
 let active: ActiveToast | null = null
 let ipcRegistered = false
 // The running app's settings object, which the settings GUI mutates in place.
-// loadSettings() is the STARTUP path: it rewrites settings.json and re-arms an
-// --output-dir override the user may since have replaced, so the toast only
-// falls back to it when no live object was handed over.
+// readSettings() re-reads settings.json and re-arms an --output-dir override
+// the user may since have replaced, so the toast only falls back to it when no
+// live object was handed over.
 let liveSettings: Settings | null = null
 
 /** Call once at startup (after settings load) with the live settings object. */
@@ -171,7 +171,7 @@ export function showSaveToast(options: {
     // load must not paint (or show) a window nobody is reporting into.
     if (win.isDestroyed() || active !== toast) return
     toast.loaded = true
-    const settings = liveSettings ?? loadSettings().settings
+    const settings = liveSettings ?? readSettings()
     // Whatever reached the toast or the pack while the page loaded wins over
     // what the toast opened with.
     toast.actionResults = mergeActionResults(readActionResults(options.folderPath), toast.actionResults)
@@ -254,7 +254,7 @@ export function updateToastActionResults(
   // Before the page loads the message would be lost; did-finish-load sends
   // the results kept above instead.
   if (active.loaded) {
-    const settings = liveSettings ?? loadSettings().settings
+    const settings = liveSettings ?? readSettings()
     const payload: ToastActionResultsPayload = {
       results: effective,
       actionConfigs: settings.actionConfigs,
@@ -304,7 +304,7 @@ function registerToastIpc(): void {
     if (typeof configId !== 'string' || configId === '') {
       return { ok: false, error: 'Invalid config id' }
     }
-    const settings = liveSettings ?? loadSettings().settings
+    const settings = liveSettings ?? readSettings()
     const config = settings.actionConfigs.find((c) => c.configId === configId)
     if (config === undefined || !config.enabled) {
       return { ok: false, error: 'Action configuration is disabled or not found' }

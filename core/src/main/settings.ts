@@ -156,22 +156,66 @@ export interface LoadedSettings {
   firstRun: boolean
 }
 
-export function loadSettings(): LoadedSettings {
+// Resolved settings.json paths whose unreadable or malformed content must stay
+// untouched on disk for this run until the file is manually removed.
+const preservedUnparsedFiles = new Set<string>()
+const warnedPreservedFiles = new Set<string>()
+
+function preservedFileKey(file: string): string {
+  const resolved = path.resolve(file)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function settingsFilePresent(file: string): boolean {
+  try {
+    fs.lstatSync(file)
+    return true
+  } catch (err) {
+    // Only ENOENT proves the entry is gone; permission or share-lock failures
+    // mean the file may still exist and must remain protected.
+    return (err as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT'
+  }
+}
+
+function warnPreservedOnce(key: string): void {
+  if (warnedPreservedFiles.has(key)) return
+  warnedPreservedFiles.add(key)
+  console.warn(
+    'capturepack: preserving unreadable or malformed settings.json on disk; skipping overwrite while it remains',
+  )
+}
+
+interface DiskSettingsRead {
+  settings: Settings
+  fileExisted: boolean
+  preserveFile: boolean
+}
+
+function readSettingsFromDisk(file: string): DiskSettingsRead {
   const base = defaultSettings()
   let raw: Record<string, unknown> | null = null
-  // A malformed but non-empty file is preserved on disk (defaults apply in
-  // memory only) so a user's hand-edit mistake is never silently destroyed.
+  // A malformed, non-object, or temporarily unreadable file is preserved on
+  // disk (defaults apply in memory only) so a user's profile or hand-edit
+  // mistake is never silently destroyed.
   let preserveFile = false
   let text: string | null = null
   // Was settings.json there BEFORE this load? An existing but UNREADABLE file
-  // still counts as existing: a permission error on an upgraded install must
-  // never be mistaken for a fresh one.
+  // still counts as existing: a lock or permission error on an upgraded install
+  // must never be mistaken for a fresh one.
   let fileExisted = true
   try {
-    text = fs.readFileSync(settingsFilePath(), 'utf8')
-  } catch {
-    text = null // Missing/unreadable file: fall through and write defaults.
-    fileExisted = fs.existsSync(settingsFilePath())
+    text = fs.readFileSync(file, 'utf8')
+  } catch (err) {
+    text = null
+    const code = (err as NodeJS.ErrnoException | null | undefined)?.code
+    // fs.existsSync() swallows EACCES/EBUSY/EPERM as false, so only treat a
+    // missing file as fresh when read failed with ENOENT and lstat agrees.
+    if (code === 'ENOENT' && !settingsFilePresent(file)) {
+      fileExisted = false
+    } else {
+      fileExisted = true
+      preserveFile = true
+    }
   }
   if (text !== null) {
     try {
@@ -186,8 +230,23 @@ export function loadSettings(): LoadedSettings {
       if (text.trim() !== '') preserveFile = true
     }
   }
-  const settings = raw ? mergeSettings(base, migrateSettings(raw)) : base
-  if (!preserveFile) {
+  return {
+    settings: raw ? mergeSettings(base, migrateSettings(raw)) : base,
+    fileExisted,
+    preserveFile,
+  }
+}
+
+export function loadSettings(): LoadedSettings {
+  const file = settingsFilePath()
+  const key = preservedFileKey(file)
+  const { settings, fileExisted, preserveFile } = readSettingsFromDisk(file)
+  if (preserveFile) {
+    preservedUnparsedFiles.add(key)
+    warnedPreservedFiles.delete(key)
+  } else {
+    preservedUnparsedFiles.delete(key)
+    warnedPreservedFiles.delete(key)
     try {
       saveSettings(settings)
     } catch {
@@ -202,6 +261,16 @@ export function loadSettings(): LoadedSettings {
     settings: override !== null ? { ...settings, outputDir: override } : settings,
     firstRun: !fileExisted,
   }
+}
+
+/**
+ * Side-effect-free settings read for mid-run callers: never writes defaults to
+ * disk and never clears startup preservation state if an initial lock clears.
+ */
+export function readSettings(): Settings {
+  const { settings } = readSettingsFromDisk(settingsFilePath())
+  const override = outputDirOverride(process.argv)
+  return override !== null ? { ...settings, outputDir: override } : settings
 }
 
 /**
@@ -265,6 +334,16 @@ export function clearOutputDirOverride(): void {
 // has not explicitly chosen a new folder, the outputDir written to disk is the
 // one already stored there — never the override.
 export function persistSettings(settings: Settings): void {
+  const file = settingsFilePath()
+  const key = preservedFileKey(file)
+  if (preservedUnparsedFiles.has(key)) {
+    if (settingsFilePresent(file)) {
+      warnPreservedOnce(key)
+      return
+    }
+    preservedUnparsedFiles.delete(key)
+    warnedPreservedFiles.delete(key)
+  }
   if (activeOutputDirOverride !== null && settings.outputDir === activeOutputDirOverride) {
     saveSettings({ ...settings, outputDir: onDiskOutputDir() })
     return
