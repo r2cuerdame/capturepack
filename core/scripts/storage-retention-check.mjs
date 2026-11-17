@@ -1,6 +1,4 @@
 // Bundles the production retention policy so this check cannot drift from it.
-// The Electron stub gives the log a private directory and replaces the Recycle
-// Bin with a folder whose arrivals the check can count (#583).
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

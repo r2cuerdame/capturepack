@@ -249,13 +249,12 @@ export function captureFlowActive(): boolean {
   return flowActive
 }
 
-function openFlow(): void {
-  flowActive = true
+function openFlowHold(): void {
+  flowHold?.release()
   flowHold = beginEditorFlow()
 }
 
-function closeFlow(): void {
-  flowActive = false
+function closeFlowHold(): void {
   flowHold?.release()
   flowHold = null
 }
@@ -341,8 +340,9 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
     return
   }
   logInfo('[capture] capture requested')
-  openFlow()
+  flowActive = true
   beginFlowLatency('video')
+  openFlowHold()
   try {
     await runFlow(settings)
   } catch (err) {
@@ -350,8 +350,9 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
     // 'CapturePack' is the product name — never translated.
     dialog.showErrorBox('CapturePack', uiT(settings)('app.captureFailed', { error: errorMessage(err) }))
   } finally {
-    closeFlow()
+    flowActive = false
     endFlowLatency()
+    closeFlowHold()
     // An unattended run (#63) exits HERE, not the moment the folder appeared:
     // by now source-first save has published the manifest, copied the prompt
     // path and raised the toast inside the promise above. A flow that saved
@@ -380,9 +381,10 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
     return false
   }
   logInfo(`[capture] re-edit requested: ${path.basename(dirPath)}`)
-  openFlow()
-  holdFlowPack(dirPath)
+  flowActive = true
   beginFlowLatency('re-edit')
+  openFlowHold()
+  holdFlowPack(dirPath)
   // Let the invoke response reach History before reading replay files and
   // rebuilding provider indexes. runEditFlow necessarily does some synchronous
   // pack I/O before its first await; starting it on this call stack made the
@@ -394,8 +396,9 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
         dialog.showErrorBox('CapturePack', uiT(settings)('app.reeditFailed', { error: errorMessage(err) }))
       })
       .finally(() => {
-        closeFlow()
+        flowActive = false
         endFlowLatency()
+        closeFlowHold()
       })
   })
   return true
@@ -417,8 +420,9 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
     return
   }
   logInfo('[image] capture requested')
-  openFlow()
+  flowActive = true
   beginFlowLatency('image')
+  openFlowHold()
   try {
     await runImageFlow(settings)
   } catch (err) {
@@ -428,8 +432,9 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
       uiT(settings)('app.captureFailed', { error: errorMessage(err) }),
     )
   } finally {
-    closeFlow()
+    flowActive = false
     endFlowLatency()
+    closeFlowHold()
   }
 }
 
@@ -466,8 +471,9 @@ export function startBrowserPageFlow(
     `[page] browser page received: ${capture.page.url.slice(0, 120)} `
     + `${String(capture.width)}x${String(capture.height)} px`,
   )
-  openFlow()
+  flowActive = true
   beginFlowLatency('image')
+  openFlowHold()
   return new Promise<BrowserPageOutcome>((resolve) => {
     let settled = false
     const settle = (outcome: BrowserPageOutcome): void => {
@@ -486,8 +492,9 @@ export function startBrowserPageFlow(
           uiT(settings)('app.captureFailed', { error: errorMessage(err) }),
         )
       } finally {
-        closeFlow()
+        flowActive = false
         endFlowLatency()
+        closeFlowHold()
         // The editor closed before it ever reported itself visible: the pack
         // was still written, so the extension is told it went through.
         settle({ ok: true })

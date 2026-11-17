@@ -460,18 +460,20 @@ check(
 
 console.log('\nAN OPEN EDITOR KEEPS ITS PACK (#583)')
 const session = source('src/main/session.ts')
+const flowEntries = ['startCaptureFlow', 'startEditFlow', 'startImageCaptureFlow', 'startBrowserPageFlow']
 check(
-  'every flow opens and closes through the editor hold, never a bare flag',
-  !/flowActive = (true|false)/.test(functionBody(session, 'startCaptureFlow')) &&
-    !/flowActive = (true|false)/.test(functionBody(session, 'startEditFlow')) &&
-    !/flowActive = (true|false)/.test(functionBody(session, 'startImageCaptureFlow')) &&
-    !/flowActive = (true|false)/.test(functionBody(session, 'startBrowserPageFlow')) &&
-    (session.match(/^[ \t]+openFlow\(\)\r?$/gm) ?? []).length === 4 &&
-    (session.match(/^[ \t]+closeFlow\(\)\r?$/gm) ?? []).length === 4,
+  'every flow that takes the gate opens an editor hold with it and releases it with the gate',
+  flowEntries.every((name) => {
+    const body = functionBody(session, name)
+    return /flowActive = true\s+beginFlowLatency\('[^']+'\)\s+openFlowHold\(\)/.test(body) &&
+      /flowActive = false\s+endFlowLatency\(\)\s+closeFlowHold\(\)/.test(body)
+  }) &&
+    (session.match(/^[ \t]+openFlowHold\(\)\r?$/gm) ?? []).length === 4 &&
+    (session.match(/^[ \t]+closeFlowHold\(\)\r?$/gm) ?? []).length === 4,
 )
 check(
   'a re-edit holds the folder it opens before the editor exists',
-  /openFlow\(\)\s*\n\s*holdFlowPack\(dirPath\)/.test(functionBody(session, 'startEditFlow')),
+  /openFlowHold\(\)\s*\n\s*holdFlowPack\(dirPath\)/.test(functionBody(session, 'startEditFlow')),
 )
 check(
   'a fresh capture holds the folder save-first wrote, and the one the final save wrote',
