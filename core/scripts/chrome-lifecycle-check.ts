@@ -10,6 +10,7 @@ import {
 import { domPipePath } from '../src/main/chrome/nativeHost'
 import {
   hostCommand,
+  type HostRegistrationStore,
   refreshHostManifestIfInstalled,
   resolveNativeHostScript,
   syncExtensionIfChanged,
@@ -28,6 +29,72 @@ function check(name: string, condition: boolean, detail?: string): void {
     failed += 1
     console.log(`  FAIL  ${name}${detail === undefined ? '' : ` — ${detail}`}`)
   }
+}
+
+const REGISTRY_BROWSERS: Readonly<Record<string, string>> = {
+  Chrome: 'Software\\Google\\Chrome\\',
+  Edge: 'Software\\Microsoft\\Edge\\',
+  Brave: 'Software\\BraveSoftware\\Brave-Browser\\',
+  Chromium: 'Software\\Chromium\\',
+}
+
+function browserOfKey(key: string): string {
+  return Object.keys(REGISTRY_BROWSERS).find((name) => key.includes(REGISTRY_BROWSERS[name] ?? '\0')) ?? key
+}
+
+function fakeRegistrations(
+  initial: Readonly<Record<string, string>> = {},
+  faults: { failRead?: readonly string[]; failWrite?: readonly string[]; failExists?: readonly string[] } = {},
+): {
+  store: HostRegistrationStore
+  value: (browser: string) => string | undefined
+  reads: string[]
+  writes: { browser: string; value: string }[]
+} {
+  const values = new Map<string, string>(Object.entries(initial))
+  const reads: string[] = []
+  const writes: { browser: string; value: string }[] = []
+  const store: HostRegistrationStore = {
+    async read(key) {
+      const browser = browserOfKey(key)
+      reads.push(browser)
+      if (faults.failRead?.includes(browser) === true) throw new Error(`simulated read failure: ${browser}`)
+      return values.get(browser) ?? null
+    },
+    async write(key, value) {
+      const browser = browserOfKey(key)
+      if (faults.failWrite?.includes(browser) === true) throw new Error(`simulated write failure: ${browser}`)
+      values.set(browser, value)
+      writes.push({ browser, value })
+    },
+    fileExists(file) {
+      const browser = [...values.entries()].find(([, v]) => v === file)?.[0]
+      if (browser !== undefined && faults.failExists?.includes(browser) === true) {
+        throw new Error(`simulated access failure: ${browser}`)
+      }
+      return fs.existsSync(file)
+    },
+  }
+  return { store, value: (browser) => values.get(browser), reads, writes }
+}
+
+async function capturingLogs(action: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = []
+  const original = { info: console.info, error: console.error, warn: console.warn }
+  const record = (...args: unknown[]): void => {
+    lines.push(args.map(String).join(' '))
+  }
+  console.info = record
+  console.error = record
+  console.warn = record
+  try {
+    await action()
+  } finally {
+    console.info = original.info
+    console.error = original.error
+    console.warn = original.warn
+  }
+  return lines
 }
 
 console.log('\nChrome integration lifecycle')
@@ -228,11 +295,12 @@ console.log('\nNative host launcher and manifest isolation (CRLF poisoning guard
     ) + '\n'
   fs.writeFileSync(manifestFile, initialManifestContent, 'utf8')
 
-  refreshHostManifestIfInstalled(
+  void refreshHostManifestIfInstalled(
     manifestFile,
     () => {
       throw new Error('simulated unresolved host script')
     },
+    fakeRegistrations().store,
   )
   const afterFailedRefresh = fs.readFileSync(manifestFile, 'utf8')
   check(
@@ -241,6 +309,104 @@ console.log('\nNative host launcher and manifest isolation (CRLF poisoning guard
   )
 
   fs.rmSync(tempDir, { recursive: true, force: true })
+}
+
+async function registrationRepairCases(): Promise<void> {
+  console.log('\nDangling browser registration repair (#587)')
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-registration-repair-'))
+  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
+  const otherManifest = path.join(tempDir, 'other', 'com.capturepack.host.json')
+  const deletedManifest = path.join(tempDir, 'deleted-qa', 'data', 'com.capturepack.host.json')
+  fs.mkdirSync(path.dirname(otherManifest), { recursive: true })
+  fs.writeFileSync(otherManifest, '{}\n', 'utf8')
+  const writeManifest = (origins: readonly string[]): void => {
+    fs.writeFileSync(
+      manifestFile,
+      `${JSON.stringify({ name: 'com.capturepack.host', allowed_origins: origins }, null, 2)}\n`,
+      'utf8',
+    )
+  }
+  const keepManifest = (): string => manifestFile
+  const allowed = ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/']
+
+  try {
+    writeManifest(allowed)
+    const repair = fakeRegistrations({
+      Chrome: deletedManifest,
+      Edge: manifestFile.toUpperCase(),
+      Brave: otherManifest,
+    })
+    const logs = await capturingLogs(() => refreshHostManifestIfInstalled(manifestFile, keepManifest, repair.store))
+    check(
+      'a registration pointing at a deleted manifest is pointed back at this manifest',
+      repair.value('Chrome') === manifestFile && repair.writes.length === 1 && repair.writes[0]?.browser === 'Chrome',
+      JSON.stringify(repair.writes),
+    )
+    check(
+      'registrations already ours, pointing at another existing manifest, or absent are left alone',
+      repair.value('Edge') === manifestFile.toUpperCase() &&
+        repair.value('Brave') === otherManifest &&
+        repair.value('Chromium') === undefined &&
+        repair.reads.length === 4,
+      JSON.stringify(repair.writes),
+    )
+    check(
+      'the repaired browser is named in the log',
+      logs.some((line) => line.includes('repaired') && line.includes('Chrome') && !line.includes('Edge')),
+      logs.join(' | '),
+    )
+
+    const settled = fakeRegistrations({ Chrome: manifestFile })
+    await refreshHostManifestIfInstalled(manifestFile, keepManifest, settled.store)
+    check('an already healthy machine writes nothing', settled.writes.length === 0)
+
+    fs.rmSync(manifestFile, { force: true })
+    const uninstalled = fakeRegistrations({ Chrome: deletedManifest, Edge: deletedManifest })
+    await refreshHostManifestIfInstalled(manifestFile, keepManifest, uninstalled.store)
+    check(
+      'no manifest of ours means no registration is read, created or changed',
+      uninstalled.writes.length === 0 && uninstalled.reads.length === 0 && !fs.existsSync(manifestFile),
+    )
+
+    writeManifest([])
+    const noIds = fakeRegistrations({ Chrome: deletedManifest })
+    await refreshHostManifestIfInstalled(manifestFile, keepManifest, noIds.store)
+    check(
+      'a manifest with no allowed extension changes no registration',
+      noIds.writes.length === 0 && noIds.value('Chrome') === deletedManifest,
+    )
+
+    writeManifest(allowed)
+    const unreachableManifest = path.join(tempDir, 'unreachable', 'com.capturepack.host.json')
+    const flaky = fakeRegistrations(
+      { Edge: deletedManifest, Brave: deletedManifest, Chromium: unreachableManifest },
+      { failRead: ['Chrome'], failWrite: ['Edge'], failExists: ['Chromium'] },
+    )
+    let threw = false
+    let flakyLogs: string[] = []
+    try {
+      flakyLogs = await capturingLogs(() => refreshHostManifestIfInstalled(manifestFile, keepManifest, flaky.store))
+    } catch {
+      threw = true
+    }
+    check(
+      'registry read, write and existence failures never throw and the other browsers are still repaired',
+      !threw &&
+        flaky.value('Brave') === manifestFile &&
+        flaky.value('Edge') === deletedManifest &&
+        flaky.value('Chromium') === unreachableManifest,
+      JSON.stringify(flaky.writes),
+    )
+    check(
+      'each registry failure is logged with its browser',
+      flakyLogs.some((line) => line.includes('Chrome') && line.includes('could not read')) &&
+        flakyLogs.some((line) => line.includes('Edge') && line.includes('could not repair')) &&
+        flakyLogs.some((line) => line.includes('Chromium') && line.includes('could not check')),
+      flakyLogs.join(' | '),
+    )
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
 }
 
 {
@@ -421,5 +587,11 @@ console.log('\nStable extension folder sync (#534)')
   }
 }
 
-console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
-process.exit(failed === 0 ? 0 : 1)
+registrationRepairCases()
+  .catch((err: unknown) => {
+    check('registration repair cases run to completion', false, String(err))
+  })
+  .finally(() => {
+    console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
+    process.exit(failed === 0 ? 0 : 1)
+  })

@@ -344,7 +344,7 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     if (live.chromeDomEnabled !== before.chromeDomEnabled) {
       if (live.chromeDomEnabled) {
         syncExtensionIfChanged()
-        refreshHostManifestIfInstalled()
+        void refreshHostManifestIfInstalled()
         startDomBridge()
       } else {
         stopDomBridge()
