@@ -437,7 +437,7 @@ function main(): void {
       syncExtensionIfChanged()
       // A registration written by a previous build keeps describing it. This
       // refreshes an existing install but deliberately does not create one.
-      refreshHostManifestIfInstalled()
+      void refreshHostManifestIfInstalled()
       startDomBridge()
     }
     // A whole page from the browser's toolbar button opens the same still

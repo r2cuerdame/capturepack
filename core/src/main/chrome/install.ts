@@ -410,6 +410,18 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
   return results
 }
 
+export interface HostRegistrationStore {
+  read(key: string): Promise<string | null>
+  write(key: string, value: string): Promise<void>
+  fileExists(file: string): boolean
+}
+
+const systemRegistrationStore: HostRegistrationStore = {
+  read: (key) => regRead(key),
+  write: (key, value) => regWrite(key, value),
+  fileExists: (file) => fs.existsSync(file),
+}
+
 /**
  * Re-writes an EXISTING manifest and launcher with this build's paths, keeping
  * the extension IDs the user already allowed. Called once at app start.
@@ -422,12 +434,17 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
  * "재설치할때마다 연결이 안돼": a reinstall updates the app and leaves the
  * registration describing the previous one. A machine with no manifest is left
  * alone; installing is still the user's decision.
+ *
+ * A browser registration pointing at a manifest file that no longer exists is
+ * pointed back at this one (#587): another run (a QA sandbox) can overwrite it
+ * and then delete its folder, and the extension silently stops finding us.
  */
-export function refreshHostManifestIfInstalled(
+export async function refreshHostManifestIfInstalled(
   target: string = manifestPath(),
   manifestWriter: (allowed: readonly string[]) => string = (allowed) =>
     writeHostManifest(allowed, writeLauncherIfNeeded, target),
-): void {
+  registrations: HostRegistrationStore = systemRegistrationStore,
+): Promise<void> {
   let allowed: string[] = []
   try {
     const raw = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
@@ -446,6 +463,43 @@ export function refreshHostManifestIfInstalled(
     logInfo('[chrome] native host manifest refreshed for this build')
   } catch (err) {
     logError('[chrome] could not refresh the native host manifest:', err)
+  }
+  await repairDanglingRegistrations(target, registrations)
+}
+
+async function repairDanglingRegistrations(
+  target: string,
+  registrations: HostRegistrationStore,
+): Promise<void> {
+  const repaired: string[] = []
+  for (const browser of BROWSERS) {
+    const key = `HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`
+    let current: string | null
+    try {
+      current = await registrations.read(key)
+    } catch (err) {
+      logError(`[chrome] could not read the ${browser.label} host registration (absent or unreadable):`, err)
+      continue
+    }
+    if (current === null || current.trim() === '') continue
+    if (current.toLowerCase() === target.toLowerCase()) continue
+    let exists = true
+    try {
+      exists = registrations.fileExists(current)
+    } catch (err) {
+      logError(`[chrome] could not check the ${browser.label} host registration target:`, err)
+      continue
+    }
+    if (exists) continue
+    try {
+      await registrations.write(key, target)
+      repaired.push(browser.label)
+    } catch (err) {
+      logError(`[chrome] could not repair the ${browser.label} host registration:`, err)
+    }
+  }
+  if (repaired.length > 0) {
+    logInfo(`[chrome] host registration pointed at a deleted manifest; repaired for ${repaired.join(', ')}`)
   }
 }
 
