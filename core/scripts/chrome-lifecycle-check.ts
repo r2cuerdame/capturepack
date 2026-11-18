@@ -14,6 +14,7 @@ import {
   refreshHostManifestIfInstalled,
   resolveNativeHostScript,
   syncExtensionIfChanged,
+  unregisterBrowsers,
   writeHostManifest,
   writeLauncherIfNeeded,
 } from '../src/main/chrome/install'
@@ -44,16 +45,23 @@ function browserOfKey(key: string): string {
 
 function fakeRegistrations(
   initial: Readonly<Record<string, string>> = {},
-  faults: { failRead?: readonly string[]; failWrite?: readonly string[]; failExists?: readonly string[] } = {},
+  faults: {
+    failRead?: readonly string[]
+    failWrite?: readonly string[]
+    failExists?: readonly string[]
+    failRemove?: readonly string[]
+  } = {},
 ): {
   store: HostRegistrationStore
   value: (browser: string) => string | undefined
   reads: string[]
   writes: { browser: string; value: string }[]
+  removes: string[]
 } {
   const values = new Map<string, string>(Object.entries(initial))
   const reads: string[] = []
   const writes: { browser: string; value: string }[] = []
+  const removes: string[] = []
   const store: HostRegistrationStore = {
     async read(key) {
       const browser = browserOfKey(key)
@@ -67,6 +75,12 @@ function fakeRegistrations(
       values.set(browser, value)
       writes.push({ browser, value })
     },
+    async remove(key) {
+      const browser = browserOfKey(key)
+      if (faults.failRemove?.includes(browser) === true) throw new Error(`simulated delete failure: ${browser}`)
+      values.delete(browser)
+      removes.push(browser)
+    },
     fileExists(file) {
       const browser = [...values.entries()].find(([, v]) => v === file)?.[0]
       if (browser !== undefined && faults.failExists?.includes(browser) === true) {
@@ -75,7 +89,7 @@ function fakeRegistrations(
       return fs.existsSync(file)
     },
   }
-  return { store, value: (browser) => values.get(browser), reads, writes }
+  return { store, value: (browser) => values.get(browser), reads, writes, removes }
 }
 
 async function capturingLogs(action: () => Promise<void>): Promise<string[]> {
@@ -309,6 +323,97 @@ console.log('\nNative host launcher and manifest isolation (CRLF poisoning guard
   )
 
   fs.rmSync(tempDir, { recursive: true, force: true })
+}
+
+async function registrationUnregisterCases(): Promise<void> {
+  console.log('\nDisconnect removes only this install\'s browser registrations (#591)')
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-unregister-'))
+  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
+  const otherManifest = path.join(tempDir, 'other', 'com.capturepack.host.json')
+  const deletedManifest = path.join(tempDir, 'deleted-qa', 'data', 'com.capturepack.host.json')
+  const unreachableManifest = path.join(tempDir, 'unreachable', 'com.capturepack.host.json')
+  fs.mkdirSync(path.dirname(otherManifest), { recursive: true })
+  fs.writeFileSync(otherManifest, '{}\n', 'utf8')
+
+  try {
+    fs.writeFileSync(manifestFile, '{}\n', 'utf8')
+    const mixed = fakeRegistrations({
+      Chrome: manifestFile,
+      Edge: manifestFile.toUpperCase(),
+      Brave: deletedManifest,
+      Chromium: otherManifest,
+    })
+    const logs = await capturingLogs(() => unregisterBrowsers(manifestFile, mixed.store))
+    check(
+      'a registration pointing at this manifest is removed, case-insensitively',
+      mixed.value('Chrome') === undefined && mixed.value('Edge') === undefined,
+      JSON.stringify(mixed.removes),
+    )
+    check(
+      'a registration pointing at a deleted manifest is removed',
+      mixed.value('Brave') === undefined,
+      JSON.stringify(mixed.removes),
+    )
+    check(
+      'a registration pointing at another existing manifest is kept',
+      mixed.value('Chromium') === otherManifest && !mixed.removes.includes('Chromium') && mixed.writes.length === 0,
+      JSON.stringify(mixed.removes),
+    )
+    const keptLines = logs.filter((line) => line.includes('kept'))
+    check(
+      'the kept browser is named in exactly one log line',
+      keptLines.length === 1 && keptLines[0]?.includes('Chromium') === true,
+      logs.join(' | '),
+    )
+    check('this install\'s manifest file is still deleted', !fs.existsSync(manifestFile))
+
+    fs.writeFileSync(manifestFile, '{}\n', 'utf8')
+    const absent = fakeRegistrations({ Edge: '', Brave: '   ' })
+    await capturingLogs(() => unregisterBrowsers(manifestFile, absent.store))
+    check(
+      'an absent or empty registration is neither written nor removed',
+      absent.removes.length === 0 && absent.writes.length === 0 && absent.reads.length === 4,
+      JSON.stringify(absent.removes),
+    )
+
+    fs.writeFileSync(manifestFile, '{}\n', 'utf8')
+    const flaky = fakeRegistrations(
+      { Edge: unreachableManifest, Brave: manifestFile, Chromium: deletedManifest },
+      { failRead: ['Chrome'], failExists: ['Edge'], failRemove: ['Brave'] },
+    )
+    let threw = false
+    let flakyLogs: string[] = []
+    try {
+      flakyLogs = await capturingLogs(() => unregisterBrowsers(manifestFile, flaky.store))
+    } catch {
+      threw = true
+    }
+    check(
+      'read, existence and delete failures never throw and the remaining browsers are still processed',
+      !threw &&
+        flaky.reads.length === 4 &&
+        flaky.value('Chromium') === undefined &&
+        flaky.value('Edge') === unreachableManifest &&
+        flaky.value('Brave') === manifestFile &&
+        flaky.writes.length === 0,
+      JSON.stringify({ removes: flaky.removes, reads: flaky.reads }),
+    )
+    check(
+      'an unreadable registration and one whose target cannot be checked are not removed',
+      !flaky.removes.includes('Chrome') && !flaky.removes.includes('Edge'),
+      JSON.stringify(flaky.removes),
+    )
+    check(
+      'each failure is logged with its browser',
+      ['Chrome', 'Edge', 'Brave'].every((browser) =>
+        flakyLogs.some((line) => line.includes(browser) && line.includes('simulated')),
+      ),
+      flakyLogs.join(' | '),
+    )
+    check('the manifest file is deleted even when a browser fails', !fs.existsSync(manifestFile))
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function registrationRepairCases(): Promise<void> {
@@ -588,8 +693,9 @@ console.log('\nStable extension folder sync (#534)')
 }
 
 registrationRepairCases()
+  .then(registrationUnregisterCases)
   .catch((err: unknown) => {
-    check('registration repair cases run to completion', false, String(err))
+    check('registration repair and unregister cases run to completion', false, String(err))
   })
   .finally(() => {
     console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
