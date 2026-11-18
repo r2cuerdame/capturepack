@@ -413,12 +413,14 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
 export interface HostRegistrationStore {
   read(key: string): Promise<string | null>
   write(key: string, value: string): Promise<void>
+  remove(key: string): Promise<void>
   fileExists(file: string): boolean
 }
 
 const systemRegistrationStore: HostRegistrationStore = {
   read: (key) => regRead(key),
   write: (key, value) => regWrite(key, value),
+  remove: (key) => regDelete(key),
   fileExists: (file) => fs.existsSync(file),
 }
 
@@ -503,16 +505,41 @@ async function repairDanglingRegistrations(
   }
 }
 
-export async function unregisterBrowsers(): Promise<void> {
+export async function unregisterBrowsers(
+  target: string = manifestPath(),
+  registrations: HostRegistrationStore = systemRegistrationStore,
+): Promise<void> {
   for (const browser of BROWSERS) {
+    const key = `HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`
+    let current: string | null
     try {
-      await regDelete(`HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`)
-    } catch {
-      // A key that was never there is the state we wanted.
+      current = await registrations.read(key)
+    } catch (err) {
+      logError(`[chrome] could not read the ${browser.label} host registration (absent or unreadable):`, err)
+      continue
+    }
+    if (current === null || current.trim() === '') continue
+    if (current.toLowerCase() !== target.toLowerCase()) {
+      let exists: boolean
+      try {
+        exists = registrations.fileExists(current)
+      } catch (err) {
+        logError(`[chrome] could not check the ${browser.label} host registration target:`, err)
+        continue
+      }
+      if (exists) {
+        logInfo(`[chrome] kept the ${browser.label} host registration: it belongs to another install (${current})`)
+        continue
+      }
+    }
+    try {
+      await registrations.remove(key)
+    } catch (err) {
+      logError(`[chrome] could not remove the ${browser.label} host registration:`, err)
     }
   }
   try {
-    fs.unlinkSync(manifestPath())
+    fs.unlinkSync(target)
   } catch {
     // Same.
   }
