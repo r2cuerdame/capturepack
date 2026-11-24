@@ -111,6 +111,44 @@ async function capturingLogs(action: () => Promise<void>): Promise<string[]> {
   return lines
 }
 
+async function capturingLogsOrThrow(action: () => Promise<void>): Promise<{ threw: boolean; logs: string[] }> {
+  try {
+    return { threw: false, logs: await capturingLogs(action) }
+  } catch {
+    return { threw: true, logs: [] }
+  }
+}
+
+interface RegistrationFixture {
+  tempDir: string
+  manifestFile: string
+  otherManifest: string
+  deletedManifest: string
+  unreachableManifest: string
+}
+
+async function withRegistrationFixture(
+  prefix: string,
+  run: (fixture: RegistrationFixture) => Promise<void>,
+): Promise<void> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const hostFile = 'com.capturepack.host.json'
+  const fixture: RegistrationFixture = {
+    tempDir,
+    manifestFile: path.join(tempDir, hostFile),
+    otherManifest: path.join(tempDir, 'other', hostFile),
+    deletedManifest: path.join(tempDir, 'deleted-qa', 'data', hostFile),
+    unreachableManifest: path.join(tempDir, 'unreachable', hostFile),
+  }
+  fs.mkdirSync(path.dirname(fixture.otherManifest), { recursive: true })
+  fs.writeFileSync(fixture.otherManifest, '{}\n', 'utf8')
+  try {
+    await run(fixture)
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
 console.log('\nChrome integration lifecycle')
 
 {
@@ -327,15 +365,8 @@ console.log('\nNative host launcher and manifest isolation (CRLF poisoning guard
 
 async function registrationUnregisterCases(): Promise<void> {
   console.log('\nDisconnect removes only this install\'s browser registrations (#591)')
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-unregister-'))
-  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
-  const otherManifest = path.join(tempDir, 'other', 'com.capturepack.host.json')
-  const deletedManifest = path.join(tempDir, 'deleted-qa', 'data', 'com.capturepack.host.json')
-  const unreachableManifest = path.join(tempDir, 'unreachable', 'com.capturepack.host.json')
-  fs.mkdirSync(path.dirname(otherManifest), { recursive: true })
-  fs.writeFileSync(otherManifest, '{}\n', 'utf8')
-
-  try {
+  await withRegistrationFixture('capturepack-unregister-', async (fixture) => {
+    const { manifestFile, otherManifest, deletedManifest, unreachableManifest } = fixture
     fs.writeFileSync(manifestFile, '{}\n', 'utf8')
     const mixed = fakeRegistrations({
       Chrome: manifestFile,
@@ -381,13 +412,7 @@ async function registrationUnregisterCases(): Promise<void> {
       { Edge: unreachableManifest, Brave: manifestFile, Chromium: deletedManifest },
       { failRead: ['Chrome'], failExists: ['Edge'], failRemove: ['Brave'] },
     )
-    let threw = false
-    let flakyLogs: string[] = []
-    try {
-      flakyLogs = await capturingLogs(() => unregisterBrowsers(manifestFile, flaky.store))
-    } catch {
-      threw = true
-    }
+    const { threw, logs: flakyLogs } = await capturingLogsOrThrow(() => unregisterBrowsers(manifestFile, flaky.store))
     check(
       'read, existence and delete failures never throw and the remaining browsers are still processed',
       !threw &&
@@ -411,30 +436,23 @@ async function registrationUnregisterCases(): Promise<void> {
       flakyLogs.join(' | '),
     )
     check('the manifest file is deleted even when a browser fails', !fs.existsSync(manifestFile))
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  }
+  })
 }
 
 async function registrationRepairCases(): Promise<void> {
   console.log('\nDangling browser registration repair (#587)')
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-registration-repair-'))
-  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
-  const otherManifest = path.join(tempDir, 'other', 'com.capturepack.host.json')
-  const deletedManifest = path.join(tempDir, 'deleted-qa', 'data', 'com.capturepack.host.json')
-  fs.mkdirSync(path.dirname(otherManifest), { recursive: true })
-  fs.writeFileSync(otherManifest, '{}\n', 'utf8')
-  const writeManifest = (origins: readonly string[]): void => {
-    fs.writeFileSync(
-      manifestFile,
-      `${JSON.stringify({ name: 'com.capturepack.host', allowed_origins: origins }, null, 2)}\n`,
-      'utf8',
-    )
-  }
-  const keepManifest = (): string => manifestFile
-  const allowed = ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/']
+  await withRegistrationFixture('capturepack-registration-repair-', async (fixture) => {
+    const { manifestFile, otherManifest, deletedManifest, unreachableManifest } = fixture
+    const writeManifest = (origins: readonly string[]): void => {
+      fs.writeFileSync(
+        manifestFile,
+        `${JSON.stringify({ name: 'com.capturepack.host', allowed_origins: origins }, null, 2)}\n`,
+        'utf8',
+      )
+    }
+    const keepManifest = (): string => manifestFile
+    const allowed = ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/']
 
-  try {
     writeManifest(allowed)
     const repair = fakeRegistrations({
       Chrome: deletedManifest,
@@ -482,18 +500,13 @@ async function registrationRepairCases(): Promise<void> {
     )
 
     writeManifest(allowed)
-    const unreachableManifest = path.join(tempDir, 'unreachable', 'com.capturepack.host.json')
     const flaky = fakeRegistrations(
       { Edge: deletedManifest, Brave: deletedManifest, Chromium: unreachableManifest },
       { failRead: ['Chrome'], failWrite: ['Edge'], failExists: ['Chromium'] },
     )
-    let threw = false
-    let flakyLogs: string[] = []
-    try {
-      flakyLogs = await capturingLogs(() => refreshHostManifestIfInstalled(manifestFile, keepManifest, flaky.store))
-    } catch {
-      threw = true
-    }
+    const { threw, logs: flakyLogs } = await capturingLogsOrThrow(() =>
+      refreshHostManifestIfInstalled(manifestFile, keepManifest, flaky.store),
+    )
     check(
       'registry read, write and existence failures never throw and the other browsers are still repaired',
       !threw &&
@@ -509,9 +522,7 @@ async function registrationRepairCases(): Promise<void> {
         flakyLogs.some((line) => line.includes('Chromium') && line.includes('could not check')),
       flakyLogs.join(' | '),
     )
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  }
+  })
 }
 
 {
