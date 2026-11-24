@@ -49,6 +49,8 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ## 0.6.1 — Candidate (not released)
 
+Short notes: [docs/releases/0.6.1.md](docs/releases/0.6.1.md).
+
 ### Added
 
 - Chrome element picking and document snapshots now traverse open Shadow DOM
@@ -67,6 +69,8 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   review each image before sharing.
 - Git plugin state and metadata are written to temporary files and atomically
   replaced, with temporary-file cleanup on failure.
+- A downloaded update installs when the app quits or on the next start after a
+  killed run, never during a capture or save ([#149](https://github.com/r2cuerdame/capturepack/issues/149)).
 
 ### Fixed
 
@@ -162,6 +166,17 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   running settings rather than rewriting `settings.json` or bringing back an
   `--output-dir` override the user had replaced
   ([#540](https://github.com/r2cuerdame/capturepack/issues/540)).
+- Damaged or briefly unreadable settings are no longer replaced by the defaults
+  ([#574](https://github.com/r2cuerdame/capturepack/issues/574)).
+- A capture open for editing is not sent to the Recycle Bin by cleanup or the
+  Settings delete buttons ([#583](https://github.com/r2cuerdame/capturepack/issues/583)), and a failed re-render keeps the
+  previous replay and stills ([#544](https://github.com/r2cuerdame/capturepack/issues/544)).
+- Trimming a video keeps moving boxes in place ([#562](https://github.com/r2cuerdame/capturepack/issues/562)).
+- Chrome page text no longer breaks where a multibyte character is split
+  between pipe chunks ([#549](https://github.com/r2cuerdame/capturepack/issues/549)).
+- A browser connection that points at a deleted file is repaired at start
+  ([#587](https://github.com/r2cuerdame/capturepack/issues/587)); Disconnect removes only this installation's connections
+  ([#591](https://github.com/r2cuerdame/capturepack/issues/591)).
 
 ### Documentation
 

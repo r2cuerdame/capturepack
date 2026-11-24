@@ -3,8 +3,8 @@
 This document fixes where the 0.6.1 candidate ends and the 0.6.2 plan begins,
 and gives each stage completion conditions that a check, a CI step or a
 recorded field result can settle. It is not a release note and not a release
-claim: **0.6.0 is the current stable release**, `core/package.json` still
-builds `0.6.0`, and 0.6.1 is published only when a person runs the Release
+claim: **0.6.0 is the current stable release**, `core/package.json` builds
+`0.6.1` ([#602](https://github.com/r2cuerdame/capturepack/issues/602)), and 0.6.1 is published only when a person runs the Release
 workflow ([RELEASING.md](RELEASING.md)).
 
 `check:docs` holds this document to the repository: every check it names must
@@ -61,8 +61,8 @@ installer yet.
 | 5 | No regression anywhere | `npm run qa:checks` finishes with all 103 discovered checks passing and type checking clean — zero failures, zero skipped checks | The whole gate |
 | 6 | Five-second workflow | The standing condition above, on the candidate's own head | See the standing condition |
 
-Promoting the candidate to 0.6.1 is a separate act that this document does not
-perform: bump `core/package.json` and the lockfile, date the changelog heading,
+`core/package.json` and the lockfile already carry 0.6.1. Publishing it is a
+separate act that this document does not perform: date the changelog heading,
 move the READMEs and the website to the new version, run `npm run qa:rc` on the
 exact source, then a person dispatches the Release workflow
 ([RELEASING.md](RELEASING.md)).

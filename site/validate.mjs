@@ -54,7 +54,7 @@ function compareVersions(left, right) {
   return 0
 }
 function isCandidateAhead(version, publicVersion) {
-  const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(version)?.[1]
+  const candidateBase = /^(\d+\.\d+\.\d+)(?:-rc\.\d+)?$/.exec(version)?.[1]
   return candidateBase !== undefined && compareVersions(candidateBase, publicVersion) > 0
 }
 const packageIsCandidateAhead = isCandidateAhead(packageVersion, PUBLIC_VERSION)
@@ -377,6 +377,9 @@ check(
 check(
   'release candidate comparison accepts only a strictly newer patch line',
   isCandidateAhead('0.6.1-rc.1', PUBLIC_VERSION)
+    && isCandidateAhead('0.6.1', PUBLIC_VERSION)
+    && !isCandidateAhead('0.6.0', PUBLIC_VERSION)
+    && !isCandidateAhead('0.5.9', PUBLIC_VERSION)
     && !isCandidateAhead('0.6.0-rc.1', PUBLIC_VERSION)
     && !isCandidateAhead('0.5.9-rc.9', PUBLIC_VERSION)
     && !isCandidateAhead('0.6.1-beta.1', PUBLIC_VERSION),
