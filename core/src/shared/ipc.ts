@@ -416,6 +416,7 @@ export interface CaptureStartPayload {
   // Both are 0 when replayMaxWidth is 0 (native).
   replayWidth: number
   replayHeight: number
+  nativeFallbackAllowed?: boolean
   // TEST PATH for the frame-evidence machinery (--simulate-no-frames, issue
   // #39): the recorder starts for real, but every chunk it produces is dropped
   // and the track's frame count is read as 0 — exactly what a machine with a

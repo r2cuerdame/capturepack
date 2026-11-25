@@ -1,9 +1,13 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   NativeReplayFallbackManager,
   NativeReplayFrameParser,
   nativeFallbackArguments,
+  nativeFallbackDisplayRefusal,
+  nativeFallbackRefusal,
+  NATIVE_REPLAY_TOPOLOGY_SETTLE_MS,
   nativeFallbackFps,
   nativeFallbackRequestedFps,
   nativeReplayHelperPath,
@@ -115,6 +119,69 @@ check(
       'utf8',
     ).includes('app.asar.unpacked'),
 )
+
+console.log('\nNative fallback refusal and monitor identity')
+{
+  const portrait = { size: { width: 1200, height: 1920 }, scaleFactor: 1, displayFrequency: 60 }
+  check(
+    'a 4K display (2560x1440 DIP at 150%) never falls back to windows-gdi-bitblt',
+    nativeFallbackDisplayRefusal({ size: { width: 2560, height: 1440 }, scaleFactor: 1.5, displayFrequency: 60 }) !== null,
+  )
+  check(
+    'a 240 Hz display never falls back to windows-gdi-bitblt',
+    nativeFallbackDisplayRefusal({ size: { width: 1920, height: 1080 }, scaleFactor: 1, displayFrequency: 240 }) !== null,
+  )
+  check(
+    'a 60 Hz 1200x1920 portrait display keeps the degraded fallback',
+    nativeFallbackDisplayRefusal(portrait) === null,
+  )
+  check(
+    'a fallback requested while the display topology is still settling is refused',
+    nativeFallbackRefusal(portrait, 100_000, 98_700) !== null &&
+      nativeFallbackRefusal(portrait, 100_000, 100_000 - NATIVE_REPLAY_TOPOLOGY_SETTLE_MS) === null &&
+      nativeFallbackRefusal(portrait, 100_000, null) === null,
+  )
+  const labelled = nativeFallbackArguments({
+    display: { ...displays[0], label: ' DELL U2412M ' } as never,
+    nativeBounds: { x: 0, y: 0, width: 1200, height: 1920 },
+    requestedFps: 15,
+    width: 1200,
+    height: 1920,
+  })
+  const unlabelled = nativeFallbackArguments({
+    display: { ...displays[0], label: '' } as never,
+    nativeBounds: { x: -1200, y: 0, width: 1200, height: 1920 },
+    requestedFps: 15,
+    width: 1200,
+    height: 1920,
+  })
+  check(
+    'the helper receives the monitor label as a second identity key',
+    labelled[labelled.indexOf('--label') + 1] === 'DELL U2412M' && !unlabelled.includes('--label'),
+    labelled.join(' '),
+  )
+  check(
+    'the helper falls back to a unique label and native size only after the rect misses',
+    /resolvedBy = "label"/u.test(nativeHelperSource) &&
+      /string\.Equals\(candidate\.Label, expectedLabel, StringComparison\.Ordinal\)/u.test(nativeHelperSource) &&
+      /if \(matches\.Count != 1 && expectedLabel\.Length > 0\)/u.test(nativeHelperSource),
+  )
+  const mainCapture = readFileSync(path.join(process.cwd(), 'src', 'main', 'capture.ts'), 'utf8')
+  const rendererCapture = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'capture', 'capture.ts'), 'utf8')
+  check(
+    'main refuses a fallback transition before spawning the helper and records topology changes',
+    mainCapture.indexOf('nativeFallbackRefusal(display, fallbackStartedAtMs, lastTopologyChangeAtMs)') > 0 &&
+      mainCapture.indexOf('nativeFallbackRefusal(display, fallbackStartedAtMs, lastTopologyChangeAtMs)') <
+        mainCapture.indexOf('await nativeReplayFallback.start(') &&
+      mainCapture.includes('lastTopologyChangeAtMs = Date.now()'),
+  )
+  check(
+    'a recorder whose display refuses the fallback fails terminally instead of tearing down into windows-gdi-bitblt',
+    rendererCapture.indexOf('payload.nativeFallbackAllowed === false') > 0 &&
+      rendererCapture.indexOf('payload.nativeFallbackAllowed === false') <
+        rendererCapture.indexOf('switching this display to windows-gdi-bitblt for the rest of the session'),
+  )
+}
 
 console.log('\nBounded native frame protocol')
 {
@@ -545,6 +612,36 @@ console.log('\nActual Windows GDI frame source')
       }
     } finally {
       manager.stopAll()
+    }
+    const runHelper = (extra: string[], x: number): { status: number | null; stderr: string } => {
+      const result = spawnSync(helper, [
+        '--left', String(x),
+        '--top', String(Number(process.env.CAPTUREPACK_NATIVE_Y)),
+        '--expected-native-width', String(Number(process.env.CAPTUREPACK_NATIVE_WIDTH)),
+        '--expected-native-height', String(Number(process.env.CAPTUREPACK_NATIVE_HEIGHT)),
+        '--width', '32', '--height', '32', '--fps', '5', ...extra,
+      ], { input: '', windowsHide: true, timeout: 10_000, encoding: 'buffer' })
+      return { status: result.status, stderr: result.stderr.toString('utf8') }
+    }
+    const exact = runHelper([], Number(process.env.CAPTUREPACK_NATIVE_X))
+    const label = /label="([^"]*)"/u.exec(exact.stderr)?.[1] ?? ''
+    const device = /device=(\S+)/u.exec(exact.stderr)?.[1] ?? ''
+    if (exact.status !== 0 || label === '') {
+      console.log(`  SKIP  moved-origin identity: no friendly monitor label (${exact.stderr.trim()})`)
+    } else {
+      const moved = Number(process.env.CAPTUREPACK_NATIVE_X) + 7
+      const unlabelled = runHelper([], moved)
+      const labelled = runHelper(['--label', label], moved)
+      check(
+        'a stale origin alone does not resolve (the 0.6.3 failure)',
+        unlabelled.status === 2 && /matches=0/u.test(unlabelled.stderr),
+        unlabelled.stderr.trim(),
+      )
+      check(
+        'the same stale origin resolves to the same monitor through its label',
+        labelled.status === 0 && labelled.stderr.includes('resolved=label') && labelled.stderr.includes(`device=${device}`),
+        labelled.stderr.trim(),
+      )
     }
   }
 }

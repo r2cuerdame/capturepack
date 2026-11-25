@@ -56,7 +56,113 @@ internal static class NativeReplayCapture
         public RECT Rect;
         public bool Primary;
         public string Device = "";
+        public string Label = "";
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LUID
+    {
+        public uint LowPart;
+        public int HighPart;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_PATH_SOURCE_INFO
+    {
+        public LUID adapterId;
+        public uint id;
+        public uint modeInfoIdx;
+        public uint statusFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_PATH_TARGET_INFO
+    {
+        public LUID adapterId;
+        public uint id;
+        public uint modeInfoIdx;
+        public uint outputTechnology;
+        public uint rotation;
+        public uint scaling;
+        public uint refreshNumerator;
+        public uint refreshDenominator;
+        public uint scanLineOrdering;
+        public int targetAvailable;
+        public uint statusFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_PATH_INFO
+    {
+        public DISPLAYCONFIG_PATH_SOURCE_INFO sourceInfo;
+        public DISPLAYCONFIG_PATH_TARGET_INFO targetInfo;
+        public uint flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 64)]
+    private struct DISPLAYCONFIG_MODE_INFO
+    {
+        public uint infoType;
+        public uint id;
+        public LUID adapterId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_DEVICE_INFO_HEADER
+    {
+        public uint type;
+        public uint size;
+        public LUID adapterId;
+        public uint id;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAYCONFIG_SOURCE_DEVICE_NAME
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string viewGdiDeviceName;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAYCONFIG_TARGET_DEVICE_NAME
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+        public uint flags;
+        public uint outputTechnology;
+        public ushort edidManufactureId;
+        public ushort edidProductCodeId;
+        public uint connectorInstance;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string monitorFriendlyDeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string monitorDevicePath;
+    }
+
+    private const uint QDC_ONLY_ACTIVE_PATHS = 2;
+    private const uint DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME = 1;
+    private const uint DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME = 2;
+
+    [DllImport("user32.dll")]
+    private static extern int GetDisplayConfigBufferSizes(
+        uint flags,
+        out uint pathCount,
+        out uint modeCount);
+
+    [DllImport("user32.dll")]
+    private static extern int QueryDisplayConfig(
+        uint flags,
+        ref uint pathCount,
+        [Out] DISPLAYCONFIG_PATH_INFO[] paths,
+        ref uint modeCount,
+        [Out] DISPLAYCONFIG_MODE_INFO[] modes,
+        IntPtr topologyId);
+
+    [DllImport("user32.dll")]
+    private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME request);
+
+    [DllImport("user32.dll")]
+    private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_TARGET_DEVICE_NAME request);
 
     private sealed class CapturedFrame
     {
@@ -157,8 +263,66 @@ internal static class NativeReplayCapture
         return fallback;
     }
 
+    private static string StringArg(string[] args, string name, string fallback)
+    {
+        for (var i = 0; i + 1 < args.Length; i++)
+        {
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) return args[i + 1];
+        }
+        return fallback;
+    }
+
+    private static Dictionary<string, List<string>> FriendlyNamesByDevice()
+    {
+        var names = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            uint pathCount, modeCount;
+            if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out pathCount, out modeCount) != 0) return names;
+            var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+            var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+            if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero) != 0) return names;
+            for (var i = 0; i < pathCount; i++)
+            {
+                var source = new DISPLAYCONFIG_SOURCE_DEVICE_NAME();
+                source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                source.header.size = (uint)Marshal.SizeOf(typeof(DISPLAYCONFIG_SOURCE_DEVICE_NAME));
+                source.header.adapterId = paths[i].sourceInfo.adapterId;
+                source.header.id = paths[i].sourceInfo.id;
+                if (DisplayConfigGetDeviceInfo(ref source) != 0) continue;
+                var target = new DISPLAYCONFIG_TARGET_DEVICE_NAME();
+                target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+                target.header.size = (uint)Marshal.SizeOf(typeof(DISPLAYCONFIG_TARGET_DEVICE_NAME));
+                target.header.adapterId = paths[i].targetInfo.adapterId;
+                target.header.id = paths[i].targetInfo.id;
+                if (DisplayConfigGetDeviceInfo(ref target) != 0) continue;
+                var device = source.viewGdiDeviceName ?? "";
+                List<string> list;
+                if (!names.TryGetValue(device, out list))
+                {
+                    list = new List<string>();
+                    names[device] = list;
+                }
+                list.Add((target.monitorFriendlyDeviceName ?? "").Trim());
+            }
+        }
+        catch
+        {
+        }
+        return names;
+    }
+
+    private static string Describe(List<Monitor> monitors)
+    {
+        return string.Join("; ", monitors.Select(m =>
+            m.Device + " " + m.Rect.Left + "," + m.Rect.Top + " " +
+            (m.Rect.Right - m.Rect.Left) + "x" + (m.Rect.Bottom - m.Rect.Top) +
+            " \"" + m.Label + "\"").ToArray());
+    }
+
     private static List<Monitor> Monitors()
     {
+        var friendly = FriendlyNamesByDevice();
         var result = new List<Monitor>();
         EnumDisplayMonitors(
             IntPtr.Zero,
@@ -168,12 +332,15 @@ internal static class NativeReplayCapture
                 var info = new MONITORINFOEX();
                 info.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
                 if (!GetMonitorInfo(handle, ref info)) return true;
+                var device = info.szDevice ?? "";
+                List<string> labels;
                 result.Add(new Monitor
                 {
                     Handle = handle,
                     Rect = info.rcMonitor,
                     Primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0,
-                    Device = info.szDevice ?? ""
+                    Device = device,
+                    Label = friendly.TryGetValue(device, out labels) && labels.Count == 1 ? labels[0] : ""
                 });
                 return true;
             },
@@ -358,18 +525,34 @@ internal static class NativeReplayCapture
         var expectedTop = IntArg(args, "--top", Int32.MinValue);
         var expectedNativeWidth = IntArg(args, "--expected-native-width", -1);
         var expectedNativeHeight = IntArg(args, "--expected-native-height", -1);
+        var expectedLabel = StringArg(args, "--label", "").Trim();
         var matches = monitors.Where(candidate =>
             candidate.Rect.Left == expectedLeft &&
             candidate.Rect.Top == expectedTop &&
             candidate.Rect.Right - candidate.Rect.Left == expectedNativeWidth &&
             candidate.Rect.Bottom - candidate.Rect.Top == expectedNativeHeight).ToList();
+        var resolvedBy = "rect";
+        if (matches.Count != 1 && expectedLabel.Length > 0)
+        {
+            var labelled = monitors.Where(candidate =>
+                string.Equals(candidate.Label, expectedLabel, StringComparison.Ordinal) &&
+                candidate.Rect.Right - candidate.Rect.Left == expectedNativeWidth &&
+                candidate.Rect.Bottom - candidate.Rect.Top == expectedNativeHeight).ToList();
+            if (labelled.Count == 1)
+            {
+                matches = labelled;
+                resolvedBy = "label";
+            }
+        }
         if (matches.Count != 1)
         {
             Console.Error.WriteLine(
                 "native monitor identity did not resolve uniquely: rect=" +
                 expectedLeft + "," + expectedTop + " " +
                 expectedNativeWidth + "x" + expectedNativeHeight +
-                " matches=" + matches.Count + " connected=" + monitors.Count);
+                " label=\"" + expectedLabel + "\"" +
+                " matches=" + matches.Count + " connected=" + monitors.Count +
+                " [" + Describe(monitors) + "]");
             return 2;
         }
         var monitor = matches[0];
@@ -403,6 +586,8 @@ internal static class NativeReplayCapture
                 "ready backend=windows-gdi-bitblt rect=" +
                 monitor.Rect.Left + "," + monitor.Rect.Top +
                 " device=" + monitor.Device +
+                " resolved=" + resolvedBy +
+                " label=\"" + monitor.Label + "\"" +
                 " native=" + nativeWidth + "x" + nativeHeight +
                 " output=" + outputWidth + "x" + outputHeight +
                 " fps=" + fps);
