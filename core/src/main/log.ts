@@ -57,6 +57,7 @@ type LogLevel = 'INFO' | 'WARN' | 'ERROR'
 let currentBytes: number | null = null
 let writeFailures = 0
 let fileLoggingEnabled = true
+let consoleOpen = true
 
 /** %APPDATA%/CapturePack/logs — what About's "Open logs folder" opens. */
 export function logsDir(): string {
@@ -131,6 +132,8 @@ export interface ForensicsHooks {
  * to say so.
  */
 export function initForensics(hooks: ForensicsHooks): void {
+  closeConsoleOnError(process.stdout)
+  closeConsoleOnError(process.stderr)
   try {
     // No submitURL: with uploadToServer false nothing is ever transmitted, and
     // the dumps land in app.getPath('crashDumps') — the directory issue #60
@@ -138,7 +141,7 @@ export function initForensics(hooks: ForensicsHooks): void {
     crashReporter.start({ uploadToServer: false, compress: true })
   } catch (err) {
     // A crash reporter that will not start is not a reason to refuse to run.
-    console.error('[log] crash reporter did not start:', String(err))
+    if (consoleOpen) console.error('[log] crash reporter did not start:', String(err))
   }
   logInfo(
     `[app] CapturePack ${app.getVersion()} starting — electron ${process.versions.electron}, ` +
@@ -166,6 +169,17 @@ export function initForensics(hooks: ForensicsHooks): void {
  * normally". Swallowing the error and then certifying the run clean is the
  * dishonesty this whole feature exists to remove.
  */
+// A launching shell that closes leaves stdout as a dead pipe. Without a
+// listener every console write throws EPIPE as an uncaught exception, whose
+// handler logs to the console again and never stops.
+function closeConsoleOnError(stream: NodeJS.WriteStream): void {
+  stream.on('error', (err: NodeJS.ErrnoException) => {
+    if (!consoleOpen) return
+    consoleOpen = false
+    write('WARN', `[log] console output closed (${err.code ?? err.message}); main.log continues`)
+  })
+}
+
 function installProcessHandlers(hooks: ForensicsHooks): void {
   process.on('uncaughtException', (err) => {
     logError('[app] uncaught exception', err)
@@ -217,12 +231,12 @@ export function redactHome(text: string): string {
 }
 
 export function logInfo(message: string): void {
-  console.info(message)
+  if (consoleOpen) console.info(message)
   write('INFO', message)
 }
 
 export function logWarn(message: string): void {
-  console.warn(message)
+  if (consoleOpen) console.warn(message)
   write('WARN', message)
 }
 
@@ -239,7 +253,7 @@ export function logWarn(message: string): void {
 export function logError(message: string, err?: unknown): void {
   const detail = err === undefined ? '' : ` ${describeError(err)}`
   const line = redactHome(message + detail)
-  console.error(line)
+  if (consoleOpen) console.error(line)
   write('ERROR', line)
 }
 
@@ -305,7 +319,7 @@ function write(level: LogLevel, message: string): void {
     writeFailures += 1
     if (writeFailures >= MAX_WRITE_FAILURES) {
       fileLoggingEnabled = false
-      console.error('[log] file logging disabled after repeated failures:', String(err))
+      if (consoleOpen) console.error('[log] file logging disabled after repeated failures:', String(err))
     }
   }
 }

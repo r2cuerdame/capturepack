@@ -516,7 +516,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.6.3`; packs containing the
+`core/package.json` is application version `0.6.4`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -740,8 +740,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 103 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **106 gate steps** — 104 with
+`qa:rc` currently runs 104 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **107 gate steps** — 105 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,

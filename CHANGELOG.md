@@ -47,6 +47,18 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - MCP exposes frames and replays for every display, windows without UI
   Automation controls, and bounded timelines in Markdown export.
 
+## 0.6.4 — 2026-11-25
+
+Short notes: [docs/releases/0.6.4.md](docs/releases/0.6.4.md).
+
+### Fixed
+
+- When the shell or terminal that started CapturePack closed, every console
+  write raised an uncaught `EPIPE` whose handler wrote to the console again.
+  The loop used about one CPU core, counted hundreds of thousands of faults and
+  rotated every older log generation away. CapturePack now stops mirroring to a
+  closed console, records that once in `main.log` and keeps logging there.
+
 ## 0.6.3 — 2026-11-25
 
 Short notes: [docs/releases/0.6.3.md](docs/releases/0.6.3.md).
