@@ -39,6 +39,7 @@ export class BoundedBlobBatch<T> {
     private readonly commitParts: (
       payload: T,
       allowEmptyBarrier: boolean,
+      consumeEmptyBarrier: boolean,
     ) => boolean,
     private readonly cancelParts: () => void,
   ) {}
@@ -47,8 +48,8 @@ export class BoundedBlobBatch<T> {
     return this.appendPart(source)
   }
 
-  commit(payload: T, allowEmptyBarrier = false): boolean {
-    return this.commitParts(payload, allowEmptyBarrier)
+  commit(payload: T, allowEmptyBarrier = false, consumeEmptyBarrier = false): boolean {
+    return this.commitParts(payload, allowEmptyBarrier, consumeEmptyBarrier)
   }
 
   cancel(): void {
@@ -124,8 +125,8 @@ export class BoundedBlobIngestQueue<T> {
     if (!this.cancelled) this.batches.add(batch)
     return new BoundedBlobBatch<T>(
       (source) => this.appendBatchPart(batch, source),
-      (payload, allowEmptyBarrier) =>
-        this.commitBatch(batch, payload, allowEmptyBarrier),
+      (payload, allowEmptyBarrier, consumeEmptyBarrier) =>
+        this.commitBatch(batch, payload, allowEmptyBarrier, consumeEmptyBarrier),
       () => this.cancelBatch(batch),
     )
   }
@@ -221,6 +222,7 @@ export class BoundedBlobIngestQueue<T> {
     batch: OpenBlobBatch,
     payload: T,
     allowEmptyBarrier: boolean,
+    consumeEmptyBarrier: boolean,
   ): boolean {
     if (
       this.cancelled ||
@@ -241,6 +243,11 @@ export class BoundedBlobIngestQueue<T> {
       // barrier over all prior work before the replacement starts.
       batch.closed = true
       this.batches.delete(batch)
+      if (consumeEmptyBarrier) {
+        this.pending.push({ source: null, size: 0,
+          payload: { value: payload }, sequence: ++this.nextSequence })
+        this.startDrain()
+      }
       return true
     }
     batch.closed = true
@@ -287,9 +294,18 @@ export class BoundedBlobIngestQueue<T> {
         let source = item.source
         item.source = null
         if (source === null) {
-          this.activeBlobBytes = 0
-          this.activePayload = null
-          this.markSettled(item.sequence)
+          try {
+            const payload = this.activePayload
+            if (!this.cancelled && this.consumer !== null && payload !== null) {
+              this.consumer(new Uint8Array(0), payload.value)
+            }
+          } catch (error) {
+            this.onError?.(error)
+          } finally {
+            this.activeBlobBytes = 0
+            this.activePayload = null
+            this.markSettled(item.sequence)
+          }
           continue
         }
         let conversion: Promise<ArrayBuffer>
@@ -373,8 +389,9 @@ export async function commitRecorderBatchBeforeReplacement<T>(
   payload: T,
   startReplacement: () => void,
   allowEmptyBarrier = false,
+  consumeEmptyBarrier = false,
 ): Promise<boolean> {
-  if (!batch.commit(payload, allowEmptyBarrier)) return false
+  if (!batch.commit(payload, allowEmptyBarrier, consumeEmptyBarrier)) return false
   const oldSessionBarrier = queue.flush()
   startReplacement()
   await oldSessionBarrier

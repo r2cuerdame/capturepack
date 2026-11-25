@@ -1,7 +1,4 @@
-// Replay ring buffer over one getDisplayMedia stream. Chromium's fragmented
-// MP4 path uses one encoder and a bounded moof/mdat ring. A runtime without
-// legal MP4/AVC falls back to two staggered, complete VP8/VP9 WebM sessions:
-// WebM clusters cannot be safely spliced/rebased like fragmented MP4.
+import { AvcMatroskaRemuxer } from './avcMatroskaRemuxer'
 import type {
   CaptureDxgiTimingReferencePayload,
   CaptureFramesPayload,
@@ -214,6 +211,7 @@ interface ActiveRecorder {
   recorder: MediaRecorder
   generation: number
   ingestQueue: BoundedBlobIngestQueue<RecorderIngestPayload>
+  avcRemuxer: AvcMatroskaRemuxer | null
   startedAtMs: number
   clockSamples: NonNullable<
     NonNullable<CaptureReplayResultPayload['ringDiagnostics']>['clockSamples']
@@ -231,6 +229,7 @@ interface RecorderIngestPayload {
   readonly generation: number
   readonly ring: FragmentedMp4Ring
   readonly session: ActiveRecorder
+  readonly finish?: boolean
 }
 
 interface ReplayHold {
@@ -2464,6 +2463,7 @@ function failCapture(message: string, generation = captureGeneration): void {
 }
 
 function teardown(): void {
+  clearRecorderRemuxers()
   captureGeneration += 1
   captureStreamGeneration += 1
   sourceLatencyCalibrationCancel?.()
@@ -2594,6 +2594,7 @@ function retainNativeReplayClock(): void {
  * an equivalent per-frame clock itself.
  */
 function suspendReplayEncoding(): void {
+  clearRecorderRemuxers()
   captureGeneration += 1
   sourceLatencyCalibrationCancel?.()
   sourceLatencyCalibrationCancel = null
@@ -3197,13 +3198,19 @@ function installFreshReplayStorage(generation: number): boolean {
         ) {
           return
         }
-        const completedFragments = payload.ring.pushBytes(
-          bytes,
-          payload.endAtMs,
-        )
+        const remuxer = payload.session.avcRemuxer
+        const chunks = remuxer === null
+          ? [{ bytes, endAtMs: payload.endAtMs }]
+          : [...remuxer.pushBytes(bytes, payload.endAtMs),
+              ...(payload.finish ? remuxer.finish(payload.endAtMs) : [])]
+        let completedFragments = 0
+        for (const chunk of chunks) {
+          completedFragments += payload.ring.pushBytes(chunk.bytes, chunk.endAtMs)
+        }
         if (completedFragments > 0) {
           payload.session.lastFragmentAtMs = payload.endAtMs
         }
+        if (payload.finish) releaseRecorderRemuxer(payload.session)
       },
       (error) => {
         failCapture(
@@ -3215,9 +3222,6 @@ function installFreshReplayStorage(generation: number): boolean {
     startRecorder(generation)
     return activeRecorder !== null
   } else {
-    // Only fallback runtimes pay for two encoders. Each slot is a complete
-    // bounded WebM session; Matroska/AVC can never reach this branch because
-    // pickRecorderFormat deliberately skips that illegal container/name pair.
     const fallback = new WebmDualSlotRing({
       generation,
       segmentMs,
@@ -3240,11 +3244,27 @@ function installFreshReplayStorage(generation: number): boolean {
   }
 }
 
+const recorderRemuxers = new Set<AvcMatroskaRemuxer>()
+
+function releaseRecorderRemuxer(session: ActiveRecorder): void {
+  const remuxer = session.avcRemuxer
+  if (remuxer === null) return
+  session.avcRemuxer = null
+  recorderRemuxers.delete(remuxer)
+  remuxer.clear()
+}
+
+function clearRecorderRemuxers(): void {
+  for (const remuxer of recorderRemuxers) remuxer.clear()
+  recorderRemuxers.clear()
+}
+
 /**
  * Releases every byte owner from the epoch that ended at the replay request.
  * The live MediaStream, cadence sampler and context clock deliberately survive.
  */
 function discardHeldReplayStorage(): void {
+  clearRecorderRemuxers()
   ingestQueue?.cancel()
   ingestQueue = null
   replayRing?.clear()
@@ -3328,7 +3348,7 @@ function createRecorder(format: RecorderFormat): MediaRecorder {
   const options: MediaRecorderOptions & {
     videoKeyFrameIntervalDuration?: number
   } = {
-    mimeType: format.mimeType,
+    mimeType: format.recordingMimeType ?? format.mimeType,
     videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
     ...(format.strategy === 'fragmented-mp4'
       ? {
@@ -3369,6 +3389,8 @@ function startRecorder(generation: number): void {
     recorder,
     generation,
     ingestQueue: queue,
+    avcRemuxer: format.recordingMimeType === undefined ? null :
+      new AvcMatroskaRemuxer(Math.min(ring.stats().retainedBudgetBytes, 8 * 1024 * 1024), startPayload?.fps ?? 15),
     startedAtMs: performance.now(),
     clockSamples: [],
     hadOutput: false,
@@ -3378,6 +3400,7 @@ function startRecorder(generation: number): void {
     flushBatchOverflowed: false,
     flushTimer: undefined,
   }
+  if (session.avcRemuxer !== null) recorderRemuxers.add(session.avcRemuxer)
   recorder.ondataavailable = (event) => {
     // Test path (--simulate-no-frames): behave exactly like a recorder whose
     // desktop capturer delivers nothing — the encoder output is dropped on the
@@ -3555,6 +3578,7 @@ async function flushRecorderSession(
       () => {
         session.flushBatch?.cancel()
         session.flushBatch = null
+        releaseRecorderRemuxer(session)
         releaseRecorderReferences(recorder, [])
       },
     )
@@ -3578,6 +3602,7 @@ async function flushRecorderSession(
   const flushBatch = session.flushBatch
   session.flushBatch = null
   if (session.flushBatchOverflowed || flushBatch === null) {
+    releaseRecorderRemuxer(session)
     flushBatch?.cancel()
     releaseRecorderReferences(recorder, [])
     failCapture(
@@ -3594,10 +3619,13 @@ async function flushRecorderSession(
       generation: session.generation,
       ring,
       session,
+      finish: true,
     },
     startReplacement,
     session.hadOutput,
+    session.avcRemuxer !== null,
   )
+  releaseRecorderRemuxer(session)
   releaseRecorderReferences(recorder, [])
   if (
     !committed ||
