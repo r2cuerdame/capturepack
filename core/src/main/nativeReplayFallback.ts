@@ -24,6 +24,35 @@ export const NATIVE_REPLAY_MAX_FPS = 5
 // replay is useful only if it preserves time, so bound its long edge before
 // encoding. The manifest already declares this backend as degraded.
 export const NATIVE_REPLAY_MAX_LONG_EDGE = 1280
+export const NATIVE_REPLAY_MAX_SOURCE_PIXELS = 3840 * 2160
+export const NATIVE_REPLAY_MAX_REFRESH_HZ = 120
+export const NATIVE_REPLAY_TOPOLOGY_SETTLE_MS = 15_000
+
+type FallbackDisplay = Pick<Display, 'size' | 'scaleFactor' | 'displayFrequency'>
+
+export function nativeFallbackDisplayRefusal(display: FallbackDisplay): string | null {
+  const width = Math.round(display.size.width * display.scaleFactor)
+  const height = Math.round(display.size.height * display.scaleFactor)
+  const hz = Number.isFinite(display.displayFrequency) ? Math.round(display.displayFrequency) : 0
+  if (width * height >= NATIVE_REPLAY_MAX_SOURCE_PIXELS || hz >= NATIVE_REPLAY_MAX_REFRESH_HZ) {
+    return `windows-gdi-bitblt fallback is disabled on a ${width}x${height} ${hz} Hz display`
+  }
+  return null
+}
+
+export function nativeFallbackRefusal(
+  display: FallbackDisplay,
+  nowMs: number,
+  lastTopologyChangeAtMs: number | null,
+): string | null {
+  const refusal = nativeFallbackDisplayRefusal(display)
+  if (refusal !== null) return refusal
+  if (lastTopologyChangeAtMs !== null && nowMs - lastTopologyChangeAtMs < NATIVE_REPLAY_TOPOLOGY_SETTLE_MS) {
+    return `display topology changed ${Math.max(0, Math.round(nowMs - lastTopologyChangeAtMs))} ms ago; ` +
+      'the recorder is rebuilt on the primary source instead of windows-gdi-bitblt'
+  }
+  return null
+}
 
 export interface NativeReplayFrame {
   sequence: number
@@ -95,6 +124,7 @@ export function nativeFallbackArguments(
   )
   const width = Math.max(1, Math.round(nativeWidth * scale))
   const height = Math.max(1, Math.round(nativeHeight * scale))
+  const label = typeof request.display.label === 'string' ? request.display.label.trim() : ''
   return [
     '--left',
     String(Math.round(request.nativeBounds.x)),
@@ -110,6 +140,7 @@ export function nativeFallbackArguments(
     String(height),
     '--fps',
     String(nativeFallbackFps(request.requestedFps)),
+    ...(label === '' ? [] : ['--label', label]),
   ]
 }
 

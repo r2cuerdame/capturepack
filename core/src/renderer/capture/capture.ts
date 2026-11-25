@@ -2439,6 +2439,13 @@ function failCapture(message: string, generation = captureGeneration): void {
     terminalCaptureFailure(message, generation)
     return
   }
+  if (payload.nativeFallbackAllowed === false) {
+    terminalCaptureFailure(
+      `${message}; windows-gdi-bitblt fallback is disabled for this display`,
+      generation,
+    )
+    return
+  }
   // Circuit breaker: the rest of THIS recorder-window session stays on the
   // alternate backend. Retrying the same Chromium stream after it proved dead
   // is not recovery, and flapping would throw away the fallback ring.

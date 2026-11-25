@@ -58,6 +58,8 @@ import {
 } from './displayMediaPolicy'
 import {
   NativeReplayFallbackManager,
+  nativeFallbackDisplayRefusal,
+  nativeFallbackRefusal,
   type NativeReplayFrame,
 } from './nativeReplayFallback'
 import {
@@ -274,6 +276,7 @@ let generation = 0
 // Serializes rebuilds so hotplug bursts and restartCapture never interleave.
 let rebuildChain: Promise<void> = Promise.resolve()
 let hotplugTimer: ReturnType<typeof setTimeout> | undefined
+let lastTopologyChangeAtMs: number | null = null
 let watchingDisplays = false
 
 /** The recorder state that drives the tray tooltip/icon at this instant. */
@@ -1171,6 +1174,11 @@ function setupNativeReplayFallbackIpc(): void {
       const isTransition = !isHealthProbe
       const fallbackStartedAtMs = Date.now()
       if (isTransition) {
+        const refusal = nativeFallbackRefusal(display, fallbackStartedAtMs, lastTopologyChangeAtMs)
+        if (refusal !== null) {
+          logWarn(`[capture] display ${wantedId}: primary replay failure confirmed; ${refusal}`)
+          throw new Error(refusal)
+        }
         logWarn(
           `[capture] display ${wantedId}: primary replay failure confirmed; ` +
             'starting the independent windows-gdi-bitblt source',
@@ -2070,19 +2078,27 @@ function watchDisplays(): void {
   if (watchingDisplays) return
   watchingDisplays = true
   const onDisplayChange = (): void => {
+    lastTopologyChangeAtMs = Date.now()
     clearTimeout(hotplugTimer)
     hotplugTimer = setTimeout(() => void queueRebuild(), HOTPLUG_DEBOUNCE_MS)
   }
-  const onMetricsChange = (_event: unknown, _display: Display, changedMetrics: string[]): void => {
+  const onMetricsChange = (_event: unknown, display: Display, changedMetrics: string[]): void => {
     // A workArea-only change (taskbar moved/resized, dock connect) does not
     // affect what the recorders capture; rebuilding would needlessly discard
     // replay buffers. Anything else (bounds, scaleFactor, rotation) rebuilds —
     // rebuild() then keeps the windows whose parameters are unchanged.
     if (changedMetrics.length > 0 && changedMetrics.every((m) => m === 'workArea')) return
+    logInfo(`[capture] display ${display.id} metrics changed: ${changedMetrics.join(', ')}`)
     onDisplayChange()
   }
-  screen.on('display-added', onDisplayChange)
-  screen.on('display-removed', onDisplayChange)
+  screen.on('display-added', (_event: unknown, display: Display) => {
+    logInfo(`[capture] display ${display.id} added`)
+    onDisplayChange()
+  })
+  screen.on('display-removed', (_event: unknown, display: Display) => {
+    logInfo(`[capture] display ${display.id} removed`)
+    onDisplayChange()
+  })
   screen.on('display-metrics-changed', onMetricsChange)
 }
 
@@ -2464,6 +2480,7 @@ async function createCaptureWindow(
       replayMaxWidth: settings.replayMaxWidth,
       replayWidth: replay.width,
       replayHeight: replay.height,
+      ...(nativeFallbackDisplayRefusal(display) === null ? {} : { nativeFallbackAllowed: false }),
       // Test path for issue #39: a real recorder over a desktop capturer that
       // delivers nothing. Nobody can break Desktop Duplication on demand, so
       // this is how the no-frames path stays provable.
