@@ -45,6 +45,72 @@ electron-builder's implicit CI upload before those checks.
 5. Commit and push the exact source revision intended for release. Confirm that
    `core/package.json`, the lockfile and the changelog all name the same
    version.
+6. Run the [resource comparison gate](#resource-comparison-gate) against the
+   previous public release with the packaged build of that exact revision. Do
+   not create the tag, the draft or the release unless it exits 0.
+
+## Resource comparison gate
+
+CapturePack's strength is how little it uses. Every release is measured
+against the previous public release under the same conditions, and if CPU,
+GPU, memory or screen stutter increases, the release does not go out. This
+gate runs before `gh release create` on the home PC and before dispatching the
+Release workflow.
+
+What is compared, for the whole CapturePack process tree (main, renderers, GPU
+process and every child process such as the context host):
+
+- CPU, as a percentage of all logical cores
+- working set, private bytes and GPU dedicated memory
+- GPU engine utilization: video encode, 3D and copy
+- screen stutter: DWM composition intervals longer than 25 ms, per minute
+
+```powershell
+$Prev = 'X.Y.Z'   # previous public release
+$Dir = "$env:TEMP\capturepack-prev-$Prev"
+gh release download "v$Prev" --pattern "CapturePack-Setup-$Prev.exe" --dir $Dir
+7z x -y "-o$Dir\nsis" "$Dir\CapturePack-Setup-$Prev.exe" '$PLUGINSDIR/app-64.7z'
+7z x -y "-o$Dir\app" "$Dir\nsis\`$PLUGINSDIR\app-64.7z"
+cd C:\_Project\capturepack\core
+pwsh -NoProfile -File scripts\release-perf-compare.ps1 `
+  -Build "$Prev|20|$Dir\app", "candidate|20|release\win-unpacked" `
+  -Baseline $Prev -Candidate candidate
+```
+
+The candidate is `core/release/win-unpacked` from `npm run dist` at the exact
+release revision. The `|20|` is the capture frame rate both builds get.
+
+Same conditions means both builds start from identical fresh settings
+(frame rate, 30 s replay, 1920 long edge, all displays, automatic backend,
+UIA on) in throwaway profiles, run at the same time over the same screen
+content, and are measured per process tree for three 60-second rounds. Stutter
+belongs to the whole desktop, so each build then also runs alone for three
+interleaved 60-second rounds next to a control round with neither running.
+
+Exit code 0 is a pass, 1 means something increased, 2 means the run was
+invalid (a build never started recording, system CPU stayed at 60% or more, the
+frame rates differ without `-AtDefaults`, or it was started between 22:00 and
+08:00). A side-by-side
+metric counts as increased when the candidate is higher in every round and the
+median increase is above the measurement floor: 0.02 points of CPU, 0.02 points
+per GPU engine, 8 MB of memory. Stutter counts as increased when the
+candidate's median is above every baseline round and more than one per minute
+above the baseline median. The floors come from measuring identical code twice:
+0.6.2 and 0.6.3 at the same 20 fps differed by up to 0.07 points of CPU,
+0.017 points of video encode and 2–4 MB of working set per round.
+
+When a release changes a default that changes capture cost (frame rate,
+resolution limit, backend), also run each build at its own default, for example
+`-Build "0.6.2|15|...", "0.6.3|20|..." -AtDefaults`. An increase there also
+holds the release until the owner decides.
+
+The measurement is passive. Builds start hidden (`--openAsHidden
+--no-login-item`) with telemetry off (`CAPTUREPACK_FIELD_QA=0`), updates, MCP,
+the Chrome bridge and recording notifications off, and hotkeys nobody uses. The
+script only reads process counters, PDH GPU counters and `DwmFlush` intervals,
+never injects input or wakes the display, does not use WMI, and stops only the
+processes it started. Put `summary.md` in the release PR and keep
+`results.json` with it.
 
 ## Publish from GitHub Actions
 
