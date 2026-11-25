@@ -1,7 +1,7 @@
 {
   "name": "capturepack",
   "productName": "CapturePack",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Rewind recent screen activity, pick captured UI objects, and save structured local evidence for humans and AI.",
   "license": "MIT",
   "author": "r2cuerdame",
@@ -88,6 +88,7 @@
     "check:settings": "node scripts/settings-limits-check.mjs",
     "check:storage-retention": "node scripts/storage-retention-check.mjs",
     "check:log-rotation": "node scripts/log-rotation-check.mjs",
+    "check:console-epipe": "node scripts/console-epipe-check.mjs",
     "check:hotkeys": "node scripts/hotkey-registry-check.mjs",
     "check:about": "node scripts/about-window-check.mjs",
     "check:update-notice": "node scripts/update-notice-check.mjs",

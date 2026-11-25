@@ -84,6 +84,7 @@ work does not settle remains open: a real three-screen capture
 
 ## Release notes
 
+- [0.6.4](releases/0.6.4.md) — stops a console write loop that burned a CPU core after the launching shell closed.
 - [0.6.3](releases/0.6.3.md) — 20 fps default capture rate, selectable 5–60 fps.
 - [0.6.2](releases/0.6.2.md) — replay fallback stutter fix.
 - [0.6.1](releases/0.6.1.md) — short notes for the next public build (not published yet).
