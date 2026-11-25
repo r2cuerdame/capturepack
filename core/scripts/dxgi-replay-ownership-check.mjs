@@ -36,7 +36,7 @@ if (process.argv.includes('--mutate-omit-recorder-stop')) {
   suspend = suspend.replace('recorder.stop()', 'void recorder')
 }
 const rendererCode = [
-  fn(retention, 'detachRecorderHandlers'), fn(retention, 'releaseRecorderReferences'),
+  fn(retention, 'detachRecorderHandlers'), fn(retention, 'releaseRecorderReferences'), fn(renderer, 'clearRecorderRemuxers'),
   suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
   fn(renderer, 'resumeShippingReplayEncoding'), fn(renderer, 'startCapture'), workloadNode.getText(renderer),
 ].join('\n')
@@ -95,7 +95,7 @@ function harness() {
     replayHold: { watchdog: 'hold' }, replayResumeTokens: { clear: () => events.push('resume-tokens-clear') },
     retryTimer: 'retry', primaryRetryTimer: undefined, evidenceTimer: 'evidence', cadenceTimer: 'cadence', cadence: {},
     activeRecorder: oldSession, replayRing: { clear: () => events.push('ring-clear') },
-    webmRing: { clear: () => events.push('webm-clear') },
+    webmRing: { clear: () => events.push('webm-clear') }, recorderRemuxers: new Set(),
     stopFrameTicks: () => { events.push('lane-s-ticks-stop'); rendererContext.tickVideo = null },
     startFrameTicks: () => {
       assert.ok(rendererContext.stream, 'clock needs an installed stream')
