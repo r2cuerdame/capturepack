@@ -81,6 +81,7 @@ import {
 } from './updater'
 import { shouldAnnounceUpdate } from './updateNotice'
 import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
+import { capProcessesAtNormal } from './processPriority'
 
 const LOGIN_HIDDEN_ARG = '--openAsHidden'
 const LOGIN_ITEM_NAME = 'CapturePack'
@@ -268,6 +269,13 @@ function main(): void {
     // FIRST, before anything a browser could talk to: a running main process is
     // proof that setup is over.
     clearInstallerStandDown()
+    if (process.platform === 'win32') {
+      const capAppPriority = (): void => {
+        capProcessesAtNormal(app.getAppMetrics().map((metric) => metric.pid))
+      }
+      capAppPriority()
+      setInterval(capAppPriority, 60_000).unref()
+    }
     // `firstRun` is TRUE only when no settings file existed a moment ago — the
     // one honest fresh-install signal (GOAL "Welcome": never shown on update).
     const { settings, firstRun } = loadSettings()

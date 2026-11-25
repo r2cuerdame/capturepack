@@ -317,6 +317,10 @@ function nativeCapturedComparableTime(
 // Session-lifetime circuit breaker. Once Chromium failed and this window moved
 // to GDI, no error path is allowed to flap it back to the same failed source.
 let nativeFallbackCircuitOpen = false
+const PRIMARY_RETRY_FIRST_MS = 60_000
+const PRIMARY_RETRY_MAX_MS = 15 * 60_000
+let primaryRetryTimer: number | undefined
+let primaryRetryDelayMs = PRIMARY_RETRY_FIRST_MS
 let primaryReadinessCancel: (() => void) | null = null
 // Renderer lifetime, not capture generation: the expensive first Chromium/GPU
 // startup window is discarded once. Recovery/settings restarts still prove two
@@ -2520,6 +2524,8 @@ function teardown(): void {
   replayResumeTokens.clear()
   window.clearTimeout(retryTimer)
   retryTimer = undefined
+  window.clearTimeout(primaryRetryTimer)
+  primaryRetryTimer = undefined
   window.clearTimeout(evidenceTimer)
   evidenceTimer = undefined
   window.clearInterval(cadenceTimer)
@@ -2926,6 +2932,7 @@ async function startNativeFallbackCapture(
     native.height,
   )
   if (generation !== captureGeneration) return
+  schedulePrimaryRetry(payload, generation)
   // The first canvas pixels predate the track. Associate them with the next
   // automatic source-rate presentation after the rVFC sink exists; there is no
   // second manual clock that can encode the initial source frame twice.
@@ -2940,6 +2947,32 @@ async function startNativeFallbackCapture(
     native.firstFrame.sessionId,
     native.firstFrame.sequence,
   )
+}
+
+function schedulePrimaryRetry(
+  payload: CaptureStartPayload,
+  generation: number,
+): void {
+  window.clearTimeout(primaryRetryTimer)
+  const delayMs = primaryRetryDelayMs
+  primaryRetryDelayMs = Math.min(PRIMARY_RETRY_MAX_MS, delayMs * 2)
+  primaryRetryTimer = window.setTimeout(() => {
+    primaryRetryTimer = undefined
+    if (
+      generation !== captureGeneration ||
+      startPayload !== payload ||
+      captureBackend !== 'windows-gdi-bitblt'
+    ) {
+      return
+    }
+    console.info(
+      `[capture] display ${payload.displayId}: retrying the primary replay source after ` +
+        `${Math.round(delayMs / 1000)} s on windows-gdi-bitblt`,
+    )
+    nativeFallbackCircuitOpen = false
+    retried = false
+    void startCapture(payload)
+  }, delayMs)
 }
 
 function installRecordingStream(
@@ -4242,6 +4275,7 @@ window.captureBridge.onStart((payload) => {
   // the prior command through startCapture()->teardown().
   retried = false
   nativeFallbackCircuitOpen = false
+  primaryRetryDelayMs = PRIMARY_RETRY_FIRST_MS
   void startCapture(payload)
 })
 window.captureBridge.onReplayWorkload(({ active }) => {

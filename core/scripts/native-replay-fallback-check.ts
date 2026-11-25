@@ -12,6 +12,13 @@ import {
   type NativeReplayStartResult,
 } from '../src/main/nativeReplayFallback'
 import { buildManifest } from '../src/main/exporter'
+import {
+  APP_PRIORITY_CEILING,
+  HELPER_PRIORITY,
+  capProcessesAtNormal,
+  lowerHelperPriority,
+  type PriorityPort,
+} from '../src/main/processPriority'
 import { NativeFallbackStartupErrors } from '../src/renderer/capture/nativeFallbackStartup'
 import {
   NativeFrameClock,
@@ -227,6 +234,74 @@ console.log('\nProduction circuit breaker')
     'once fallback is active a second failure is terminal instead of flapping primary',
     renderer.includes("captureBackend === 'windows-gdi-bitblt'") &&
       renderer.includes('nativeFallbackCircuitOpen'),
+  )
+  check(
+    'the GDI fallback retries the primary source on a bounded backoff instead of latching for the session',
+    renderer.includes('schedulePrimaryRetry(payload, generation)') &&
+      renderer.includes('PRIMARY_RETRY_FIRST_MS = 60_000') &&
+      renderer.includes('PRIMARY_RETRY_MAX_MS = 15 * 60_000') &&
+      renderer.includes('primaryRetryDelayMs = Math.min(PRIMARY_RETRY_MAX_MS, delayMs * 2)') &&
+      renderer.includes("captureBackend !== 'windows-gdi-bitblt'") &&
+      renderer.includes('primaryRetryDelayMs = PRIMARY_RETRY_FIRST_MS'),
+  )
+  const helperSource = readFileSync(
+    path.join(process.cwd(), 'scripts', 'native-replay-capture.cs'),
+    'utf8',
+  )
+  check(
+    'the GDI helper scales without HALFTONE and sleeps instead of spinning',
+    helperSource.includes('SetStretchBltMode(dest, COLORONCOLOR)') &&
+      !helperSource.includes('HALFTONE') &&
+      !helperSource.includes('SpinWait'),
+  )
+  const fakePort = (initial: Record<number, number>): PriorityPort & { values: Record<number, number> } => {
+    const values = { ...initial }
+    return {
+      values,
+      get: (pid) => {
+        if (!(pid in values)) throw new Error('gone')
+        return values[pid]!
+      },
+      set: (pid, priority) => { values[pid] = priority },
+    }
+  }
+  const apps = fakePort({ 1: -7, 2: 0, 3: 10, 4: -14 })
+  const capped = capProcessesAtNormal([1, 2, 3, 4, 5], apps)
+  check(
+    'above-normal app processes are lowered to normal and lower ones are left alone',
+    capped.join(',') === '1,4' &&
+      apps.values[1] === APP_PRIORITY_CEILING &&
+      apps.values[4] === APP_PRIORITY_CEILING &&
+      apps.values[2] === 0 &&
+      apps.values[3] === 10,
+  )
+  const helpers = fakePort({ 7: 0, 8: 19 })
+  check(
+    'replay helpers start below normal and idle helpers are not raised',
+    lowerHelperPriority(7, helpers) &&
+      helpers.values[7] === HELPER_PRIORITY &&
+      !lowerHelperPriority(8, helpers) &&
+      helpers.values[8] === 19 &&
+      !lowerHelperPriority(undefined, helpers) &&
+      !lowerHelperPriority(9, helpers),
+  )
+  const fallbackSource = readFileSync(
+    path.join(process.cwd(), 'src', 'main', 'nativeReplayFallback.ts'),
+    'utf8',
+  )
+  const runtimeSource = readFileSync(
+    path.join(process.cwd(), 'src', 'main', 'dxgiReplayRuntime.ts'),
+    'utf8',
+  )
+  const mainSource = readFileSync(
+    path.join(process.cwd(), 'src', 'main', 'index.ts'),
+    'utf8',
+  )
+  check(
+    'both replay helpers and every app process are wired to the priority policy',
+    fallbackSource.includes('lowerHelperPriority(child.pid)') &&
+      runtimeSource.includes('lowerHelperPriority(child.pid)') &&
+      mainSource.includes('capProcessesAtNormal(app.getAppMetrics().map((metric) => metric.pid))'),
   )
   check(
     'bounded producer ACK follows a completed canvas paint rather than throttled presentation',
