@@ -82,22 +82,30 @@ release revision. The `|20|` is the capture frame rate both builds get.
 
 Same conditions means both builds start from identical fresh settings
 (frame rate, 30 s replay, 1920 long edge, all displays, automatic backend,
-UIA on) in throwaway profiles, run at the same time over the same screen
-content, and are measured per process tree for three 60-second rounds. Stutter
-belongs to the whole desktop, so each build then also runs alone for three
-interleaved 60-second rounds next to a control round with neither running.
+UIA on) in throwaway profiles and run at the same time over the same screen
+content, measured per process tree. A screen capture only produces a frame when
+the screen changes, so a build measured alone at another time is measured
+against different work; running them together removes that. Each of the five
+side-by-side rounds launches both builds afresh, alternating which starts
+first, and measures one 60-second window: two copies of the same build differ
+by tens of megabytes and a few hundredths of a CPU point from one launch to the
+next, so rounds within one launch are not independent. Stutter belongs to the
+whole desktop, so each build then also runs alone for three interleaved
+60-second rounds next to a control round with neither running. A round starts
+only when system CPU is below 60%, and a window whose system CPU averaged 60%
+or more is discarded and measured again, at most three times.
 
 Exit code 0 is a pass, 1 means something increased, 2 means the run was
 invalid (a build never started recording, system CPU stayed at 60% or more, the
 frame rates differ without `-AtDefaults`, or it was started between 22:00 and
-08:00). A side-by-side
-metric counts as increased when the candidate is higher in every round and the
-median increase is above the measurement floor: 0.02 points of CPU, 0.02 points
-per GPU engine, 8 MB of memory. Stutter counts as increased when the
-candidate's median is above every baseline round and more than one per minute
-above the baseline median. The floors come from measuring identical code twice:
-0.6.2 and 0.6.3 at the same 20 fps differed by up to 0.07 points of CPU,
-0.017 points of video encode and 2–4 MB of working set per round.
+08:00). A side-by-side metric counts as increased when the candidate is higher
+in all five rounds and the median increase is above the measurement floor:
+0.03 points of CPU, 0.03 points per GPU engine, 10 MB of memory. Stutter counts
+as increased when the candidate's median is above every baseline round and more
+than one per minute above the baseline median. The floors are the typical
+round-to-round difference between two copies of 0.6.3 launched together five
+times (2026-11-25): CPU 0.001–0.067 points, video encode 0.014–0.219 points,
+private memory 1–48 MB, GPU dedicated memory 0–39 MB, with no consistent sign.
 
 When a release changes a default that changes capture cost (frame rate,
 resolution limit, backend), also run each build at its own default, for example

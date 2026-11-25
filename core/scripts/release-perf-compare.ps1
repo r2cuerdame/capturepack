@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory)] [string[]] $Build,
   [string] $Baseline = '',
   [string] $Candidate = '',
-  [int] $Rounds = 3,
+  [int] $Rounds = 5,
+  [int] $SoloRounds = 3,
   [int] $Seconds = 60,
   [int] $SoloSeconds = 60,
   [int] $WarmupSeconds = 90,
@@ -14,9 +15,9 @@ param(
   [double] $CpuLimit = 60,
   [int] $QuietHourStart = 22,
   [int] $QuietHourEnd = 8,
-  [double] $CpuFloor = 0.02,
-  [double] $GpuFloor = 0.02,
-  [double] $MemoryFloorMB = 8,
+  [double] $CpuFloor = 0.03,
+  [double] $GpuFloor = 0.03,
+  [double] $MemoryFloorMB = 10,
   [double] $StutterFloor = 1
 )
 $ErrorActionPreference = 'Stop'
@@ -237,7 +238,7 @@ function Measure-Window($instances, [int]$secs, [bool]$withDwm) {
   }
   $frames = if ($withDwm) { [CpDwmSampler]::Stop() } else { @() }
   $gpuRows = @(Receive-Job $gpuJob -Wait -AutoRemoveJob)
-  $sysCpu = Receive-Job $sysJob -Wait -AutoRemoveJob
+  $sysCpu = [double](Receive-Job $sysJob -Wait -AutoRemoveJob)
   $per = [ordered]@{}
   foreach ($inst in $instances) {
     $label = $inst.Build.Label
@@ -281,6 +282,17 @@ function Measure-Window($instances, [int]$secs, [bool]$withDwm) {
   $window
 }
 
+function Measure-Quiet($instances, [int]$secs, [bool]$withDwm, [string]$name) {
+  for ($try = 1; $try -le 3; $try++) {
+    $null = Wait-CpuBelow
+    $w = Measure-Window $instances $secs $withDwm
+    if ($w.systemCpuAvgPct -lt $CpuLimit) { return $w }
+    Write-Run ('{0} discarded: system cpu averaged {1:N1}% during the window' -f $name, $w.systemCpuAvgPct)
+  }
+  Write-Run "invalid: $name stayed at or above $CpuLimit% system cpu in three windows"
+  $null
+}
+
 Assert-AllowedHour
 Write-Run ("out={0} displays={1} rounds={2} builds={3}" -f $OutDir, $displays, $Rounds, (($builds | ForEach-Object { "$($_.Label)(v$($_.Version),$($_.Fps)fps)" }) -join ', '))
 $result = [ordered]@{
@@ -292,39 +304,40 @@ $result = [ordered]@{
   valid = $true
 }
 
-$null = Wait-CpuBelow
-$running = @($builds | ForEach-Object { Start-Instance $_ })
-try {
-  if (-not (Wait-Recording $running)) { $result.valid = $false }
-  else {
-    for ($r = 1; $r -le $Rounds; $r++) {
-      $null = Wait-CpuBelow
-      $w = Measure-Window $running $Seconds $false
-      $w.round = $r
-      $result.sideBySide += $w
-      Write-Run ("side-by-side round {0}: {1}" -f $r, (($w.instances.GetEnumerator() | ForEach-Object { '{0} cpu={1:N3}% enc={2:N3}% 3d={3:N3}% copy={4:N3}% ws={5:N0}MB' -f $_.Key, $_.Value.cpuAvgPct, $_.Value.gpuVideoEncodePct, $_.Value.gpu3dPct, $_.Value.gpuCopyPct, $_.Value.workingSetAvgMB }) -join ' | '))
-    }
+for ($r = 1; $r -le $Rounds -and $result.valid; $r++) {
+  $null = Wait-CpuBelow
+  $ordered = if ($r % 2) { @($builds) } else { @($builds)[($builds.Count - 1)..0] }
+  $running = @($ordered | ForEach-Object { Start-Instance $_ })
+  try {
+    if (-not (Wait-Recording $running)) { $result.valid = $false; break }
+    $w = Measure-Quiet $running $Seconds $false "side-by-side round $r"
+    if ($null -eq $w) { $result.valid = $false; break }
+    $w.round = $r
+    $w.launchOrder = @($ordered.Label)
+    $result.sideBySide += $w
+    Write-Run ("side-by-side round {0}: {1}" -f $r, (($w.instances.GetEnumerator() | ForEach-Object { '{0} cpu={1:N3}% enc={2:N3}% 3d={3:N3}% copy={4:N3}% ws={5:N0}MB priv={6:N0}MB gpumem={7:N0}MB' -f $_.Key, $_.Value.cpuAvgPct, $_.Value.gpuVideoEncodePct, $_.Value.gpu3dPct, $_.Value.gpuCopyPct, $_.Value.workingSetAvgMB, $_.Value.privateAvgMB, $_.Value.gpuDedicatedAvgMB }) -join ' | '))
+  } finally {
+    foreach ($inst in $running) { Stop-Instance $inst }
   }
-} finally {
-  foreach ($inst in $running) { Stop-Instance $inst }
 }
 
 if (-not $SkipSolo -and $result.valid) {
   $order = @($builds.Label) + @('(none)')
-  for ($r = 1; $r -le $Rounds; $r++) {
+  for ($r = 1; $r -le $SoloRounds; $r++) {
     $shift = ($r - 1) % $order.Count
     $rotated = @($order[$shift..($order.Count - 1)]) + @(if ($shift -gt 0) { $order[0..($shift - 1)] })
     foreach ($label in $rotated) {
-      $null = Wait-CpuBelow
       if ($label -eq '(none)') {
-        $w = Measure-Window @() $SoloSeconds $true
+        $w = Measure-Quiet @() $SoloSeconds $true "solo round $r $label"
       } else {
+        $null = Wait-CpuBelow
         $inst = Start-Instance ($builds | Where-Object Label -eq $label)
         try {
           if (-not (Wait-Recording @($inst))) { $result.valid = $false; continue }
-          $w = Measure-Window @($inst) $SoloSeconds $true
+          $w = Measure-Quiet @($inst) $SoloSeconds $true "solo round $r $label"
         } finally { Stop-Instance $inst }
       }
+      if ($null -eq $w) { $result.valid = $false; continue }
       $w.round = $r
       $w.label = $label
       $result.solo += $w
