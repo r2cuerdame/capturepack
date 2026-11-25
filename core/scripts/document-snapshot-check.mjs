@@ -74,7 +74,7 @@ function el(tag, options = {}) {
   return node
 }
 
-function snapshotOf(root) {
+function snapshotOf(root, options) {
   const script = readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'extensions', 'chrome', 'document-snapshot.js'),
     'utf8',
@@ -101,7 +101,7 @@ function snapshotOf(root) {
     opacity: node.style.opacity ?? '1',
   })
   runInNewContext(script, sandbox)
-  return sandbox.window.__capturepackDocumentSnapshot()
+  return sandbox.window.__capturepackDocumentSnapshot(options)
 }
 
 const find = (snap, tag) => snap.elements.filter((e) => e.tag === tag)
@@ -464,6 +464,34 @@ console.log('\nThe cap counts shadow elements like any other')
     'and what it did record came from inside the shadow tree',
     find(snap, 'li').length === 3998,
     `${String(find(snap, 'li').length)} li`,
+  )
+}
+
+console.log('\nA full-page walk records a long page, not its first 4000 elements')
+{
+  const rows = (count) => Array.from({ length: count }, (_, i) =>
+    el('li', { text: `row ${String(i)}`, rect: { left: 0, top: i * 3, width: 100, height: 2 } }))
+  const page = (count) => el('html', { rect: { left: 0, top: 0, width: 1000, height: count * 3 }, children: rows(count) })
+  const whole = snapshotOf(page(12000), { scope: 'document', width: 1000, height: 36000 })
+  check(
+    'a 12000-row page is recorded whole in document scope',
+    whole.scope === 'document' && whole.truncated === false && find(whole, 'li').length === 12000
+      && whole.elements[whole.elements.length - 1]?.text === 'row 11999',
+    `${String(whole.elements.length)} element(s), truncated ${String(whole.truncated)}`,
+  )
+  const over = snapshotOf(page(20100), { scope: 'document', width: 1000, height: 60300 })
+  check(
+    'past 20000 it stops and says so',
+    over.elements.length === 20000 && over.truncated === true,
+    `${String(over.elements.length)} element(s), truncated ${String(over.truncated)}`,
+  )
+  const viewport = snapshotOf(el('html', {
+    children: Array.from({ length: 4100 }, (_, i) => el('li', { text: `row ${String(i)}` })),
+  }))
+  check(
+    'a viewport walk keeps its cap of 4000',
+    viewport.scope === 'viewport' && viewport.elements.length === 4000 && viewport.truncated === true,
+    `${String(viewport.elements.length)} element(s), truncated ${String(viewport.truncated)}`,
   )
 }
 

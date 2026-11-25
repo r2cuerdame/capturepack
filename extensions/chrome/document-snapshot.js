@@ -37,6 +37,7 @@
 
 ;(() => {
   const MAX_ELEMENTS = 4000
+  const MAX_DOCUMENT_ELEMENTS = 20000
   const MAX_TEXT = 200
   const MAX_ATTR = 300
   const MIN_SIZE_PX = 2
@@ -193,7 +194,7 @@
    * whole branch is invisible — a closed menu costs one refusal, not one per
    * item inside it.
    */
-  function walk(area) {
+  function walk(area, limit) {
     const elements = []
     let truncated = false
     let visited = 0
@@ -202,7 +203,7 @@
       const el = stack.pop()
       if (el === undefined || el === null) continue
       visited += 1
-      if (elements.length >= MAX_ELEMENTS) {
+      if (elements.length >= limit) {
         truncated = true
         break
       }
@@ -254,7 +255,7 @@
       && typeof options.width === 'number' && options.width > 0
       && typeof options.height === 'number' && options.height > 0
     const area = wholeDocument ? documentArea(options) : viewportArea()
-    const { elements, truncated, visited } = walk(area)
+    const { elements, truncated, visited } = walk(area, wholeDocument ? MAX_DOCUMENT_ELEMENTS : MAX_ELEMENTS)
     return {
       // The space the bounds are in, so the host never has to guess. For a
       // document walk it is the PICTURE: its CSS size, with no scroll offset,

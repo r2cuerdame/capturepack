@@ -172,11 +172,13 @@ console.log('\nThe picker actually uses it, in every frame')
   // worker can be told apart from the one QA rejected; 0.4.2 keeps it again and
   // picks and walks through open shadow roots (#345); 0.4.3 reaches frames
   // nested in those roots and propagates disarm; 0.4.4 stops dropping an SPA
-  // route change whose tab URL moved before the hint arrived (#387) — the app
-  // only recopies the extension folder when this number moves, so without it
-  // the new worker would never reach an installed browser.
+  // route change whose tab URL moved before the hint arrived (#387); 0.4.5
+  // walks a full page up to 20000 elements and keeps its header under the
+  // host's frame bound (#157) — the app only recopies the extension folder
+  // when this number moves, so without it the new worker would never reach an
+  // installed browser.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.4.4', manifest.version)
+    manifest.version === '0.4.5', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 

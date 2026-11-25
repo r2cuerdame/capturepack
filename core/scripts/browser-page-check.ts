@@ -30,6 +30,7 @@ import {
   domBridgeStatus,
   browserPageStats,
   onBrowserPageCaptured,
+  parseDomDocument,
   parseDomPayload,
   requestDomForCapture,
   startDomBridge,
@@ -123,6 +124,7 @@ function bundle(options: {
   pixelWidth?: number
   chunkChars?: number
   document?: boolean
+  elements?: number
 } = {}): { header: Record<string, unknown>; chunks: Record<string, unknown>[] } {
   const png = options.png ?? PNG
   const base64 = png.toString('base64')
@@ -161,10 +163,14 @@ function bundle(options: {
       scope: 'document',
       url: 'https://example.test/long',
       title: 'A long page',
-      elements: [
-        { i: 0, tag: 'header', role: 'banner', bounds: { x: 0, y: 0, width: 40, height: 5 }, text: 'Top' },
-        { i: 1, tag: 'section', role: '', bounds: { x: 2, y: 50, width: 30, height: 8 }, text: 'Bottom' },
-      ],
+      elements: options.elements === undefined
+        ? [
+            { i: 0, tag: 'header', role: 'banner', bounds: { x: 0, y: 0, width: 40, height: 5 }, text: 'Top' },
+            { i: 1, tag: 'section', role: '', bounds: { x: 2, y: 50, width: 30, height: 8 }, text: 'Bottom' },
+          ]
+        : Array.from({ length: options.elements }, (_, i) => ({
+            i, tag: 'li', role: 'listitem', bounds: { x: 0, y: i % 60, width: 40, height: 1 }, text: `row ${String(i)}`,
+          })),
       truncated: false,
       visitedCount: 3,
       elapsedMs: 1,
@@ -250,6 +256,18 @@ async function bridgeHalf(): Promise<void> {
       && capture.document.elements[1]?.bounds.y === 50 && capture.document.viewport.height === 60)
     check('the extension is told it went through', replyFor('good')?.['ok'] === true)
   }
+  {
+    const before = received.length
+    const { header, chunks } = bundle({ captureId: 'long-document', elements: 12_000 })
+    send(header)
+    for (const chunk of chunks) send(chunk)
+    const done = await waitFor(() => replyFor('long-document') !== undefined, 5_000)
+    const capture = received[before]
+    check('a long page keeps its whole document past the viewport cap of 4000',
+      done && capture?.document?.elements.length === 12_000 && capture.document.truncated === false
+      && capture.document.elements[11_999]?.text === 'row 11999',
+      `${String(capture?.document?.elements.length)} element(s), truncated ${String(capture?.document?.truncated)}`)
+  }
 
   console.log('\nEvery kind of bad bundle is refused out loud, and answered')
   {
@@ -327,7 +345,7 @@ async function bridgeHalf(): Promise<void> {
   }
   const stats = browserPageStats()
   check('the bridge counts what it received and refused',
-    stats.received === 3 && stats.refused >= 5 && stats.pending === 0, JSON.stringify(stats))
+    stats.received === 4 && stats.refused >= 5 && stats.pending === 0, JSON.stringify(stats))
   check('nothing above was mistaken for a pick', domBridgeStatus().elementPicks === 0)
 
   console.log('\nA character split across pipe pieces arrives whole (#549)')
@@ -689,6 +707,37 @@ async function payloadHalf(): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
+function capHalf(): void {
+  console.log('\nThe host bounds a document by its scope')
+  const doc = (scope: 'document' | 'viewport', count: number): Record<string, unknown> => ({
+    viewport: { width: 40, height: 60, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+    scope,
+    url: 'https://example.test/long',
+    title: 'A long page',
+    elements: Array.from({ length: count }, (_, i) => ({
+      i, tag: 'li', role: '', bounds: { x: 0, y: i % 60, width: 40, height: 1 },
+    })),
+    truncated: false,
+    visitedCount: count,
+    elapsedMs: 1,
+    omitted: [],
+  })
+  const whole = parseDomDocument(doc('document', 20_000))
+  check('a full-page document keeps up to 20000 elements',
+    whole?.elements.length === 20_000 && whole.truncated === false,
+    `${String(whole?.elements.length)} element(s), truncated ${String(whole?.truncated)}`)
+  const over = parseDomDocument(doc('document', 20_001))
+  check('one more is cut there and marked as a prefix',
+    over?.elements.length === 20_000 && over.truncated === true,
+    `${String(over?.elements.length)} element(s), truncated ${String(over?.truncated)}`)
+  const viewport = parseDomDocument(doc('viewport', 4_001))
+  check('a viewport document keeps its cap of 4000',
+    viewport?.elements.length === 4_000 && viewport.truncated === true,
+    `${String(viewport?.elements.length)} element(s), truncated ${String(viewport?.truncated)}`)
+}
+
+// ---------------------------------------------------------------------------
+
 function sourceHalf(): void {
   console.log('\nOne editor path, pinned in the source')
   // The bundle runs from a temp directory; the runner runs from core/.
@@ -738,6 +787,7 @@ async function main(): Promise<void> {
   placementHalf()
   await sleep(50)
   await payloadHalf()
+  capHalf()
   sourceHalf()
   console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${String(passed)} passed, ${String(failed)} failed\n`)
   if (failed > 0) process.exitCode = 1
