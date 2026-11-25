@@ -400,7 +400,7 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
   for (const browser of BROWSERS) {
     let ok = false
     try {
-      await regWrite(`HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`, target)
+      await regWrite(hostKey(browser), target)
       ok = true
     } catch (err) {
       logError(`[chrome] could not register the host for ${browser.label}:`, err)
@@ -452,10 +452,7 @@ export async function refreshHostManifestIfInstalled(
     const raw = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
     const origins = raw['allowed_origins']
     if (!Array.isArray(origins)) return
-    allowed = origins
-      .filter((o): o is string => typeof o === 'string')
-      .map((o) => o.replace(/^chrome-extension:\/\//, '').replace(/\/$/, ''))
-      .filter((o) => o !== '')
+    allowed = extensionIdsOf(origins).filter((o) => o !== '')
   } catch {
     return // Never installed (or unreadable): not ours to decide.
   }
@@ -469,32 +466,63 @@ export async function refreshHostManifestIfInstalled(
   await repairDanglingRegistrations(target, registrations)
 }
 
+type Browser = (typeof BROWSERS)[number]
+
+type RegistrationOwner = 'ours' | 'dangling' | 'foreign'
+
+interface ClassifiedRegistration {
+  key: string
+  current: string
+  owner: RegistrationOwner
+}
+
+function hostKey(browser: Browser): string {
+  return `HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`
+}
+
+function samePath(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
+function extensionIdsOf(origins: readonly unknown[]): string[] {
+  return origins
+    .filter((o): o is string => typeof o === 'string')
+    .map((o) => o.replace(/^chrome-extension:\/\//, '').replace(/\/$/, ''))
+}
+
+async function classifyRegistration(
+  browser: Browser,
+  target: string,
+  registrations: HostRegistrationStore,
+): Promise<ClassifiedRegistration | null> {
+  const key = hostKey(browser)
+  let current: string | null
+  try {
+    current = await registrations.read(key)
+  } catch (err) {
+    logError(`[chrome] could not read the ${browser.label} host registration (absent or unreadable):`, err)
+    return null
+  }
+  if (current === null || current.trim() === '') return null
+  if (samePath(current, target)) return { key, current, owner: 'ours' }
+  try {
+    return { key, current, owner: registrations.fileExists(current) ? 'foreign' : 'dangling' }
+  } catch (err) {
+    logError(`[chrome] could not check the ${browser.label} host registration target:`, err)
+    return null
+  }
+}
+
 async function repairDanglingRegistrations(
   target: string,
   registrations: HostRegistrationStore,
 ): Promise<void> {
   const repaired: string[] = []
   for (const browser of BROWSERS) {
-    const key = `HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`
-    let current: string | null
+    const registration = await classifyRegistration(browser, target, registrations)
+    if (registration?.owner !== 'dangling') continue
     try {
-      current = await registrations.read(key)
-    } catch (err) {
-      logError(`[chrome] could not read the ${browser.label} host registration (absent or unreadable):`, err)
-      continue
-    }
-    if (current === null || current.trim() === '') continue
-    if (current.toLowerCase() === target.toLowerCase()) continue
-    let exists = true
-    try {
-      exists = registrations.fileExists(current)
-    } catch (err) {
-      logError(`[chrome] could not check the ${browser.label} host registration target:`, err)
-      continue
-    }
-    if (exists) continue
-    try {
-      await registrations.write(key, target)
+      await registrations.write(registration.key, target)
       repaired.push(browser.label)
     } catch (err) {
       logError(`[chrome] could not repair the ${browser.label} host registration:`, err)
@@ -510,30 +538,16 @@ export async function unregisterBrowsers(
   registrations: HostRegistrationStore = systemRegistrationStore,
 ): Promise<void> {
   for (const browser of BROWSERS) {
-    const key = `HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`
-    let current: string | null
-    try {
-      current = await registrations.read(key)
-    } catch (err) {
-      logError(`[chrome] could not read the ${browser.label} host registration (absent or unreadable):`, err)
+    const registration = await classifyRegistration(browser, target, registrations)
+    if (registration === null) continue
+    if (registration.owner === 'foreign') {
+      logInfo(
+        `[chrome] kept the ${browser.label} host registration: it belongs to another install (${registration.current})`,
+      )
       continue
     }
-    if (current === null || current.trim() === '') continue
-    if (current.toLowerCase() !== target.toLowerCase()) {
-      let exists: boolean
-      try {
-        exists = registrations.fileExists(current)
-      } catch (err) {
-        logError(`[chrome] could not check the ${browser.label} host registration target:`, err)
-        continue
-      }
-      if (exists) {
-        logInfo(`[chrome] kept the ${browser.label} host registration: it belongs to another install (${current})`)
-        continue
-      }
-    }
     try {
-      await registrations.remove(key)
+      await registrations.remove(registration.key)
     } catch (err) {
       logError(`[chrome] could not remove the ${browser.label} host registration:`, err)
     }
@@ -541,7 +555,7 @@ export async function unregisterBrowsers(
   try {
     fs.unlinkSync(target)
   } catch {
-    // Same.
+    // An already missing or locked manifest must not stop the disconnect.
   }
   logInfo('[chrome] native host unregistered')
 }
@@ -555,11 +569,7 @@ export async function nativeHostState(): Promise<NativeHostInstallState> {
     const raw = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
     manifestWritten = true
     const origins = raw['allowed_origins']
-    if (Array.isArray(origins)) {
-      allowed = origins
-        .filter((o): o is string => typeof o === 'string')
-        .map((o) => o.replace(/^chrome-extension:\/\//, '').replace(/\/$/, ''))
-    }
+    if (Array.isArray(origins)) allowed = extensionIdsOf(origins)
   } catch {
     manifestWritten = false
   }
@@ -567,8 +577,8 @@ export async function nativeHostState(): Promise<NativeHostInstallState> {
   for (const browser of BROWSERS) {
     let registered = false
     try {
-      const value = await regRead(`HKCU\\${browser.key}\\${NATIVE_HOST_NAME}`)
-      registered = value !== null && value.toLowerCase() === target.toLowerCase()
+      const value = await regRead(hostKey(browser))
+      registered = value !== null && samePath(value, target)
     } catch {
       registered = false
     }
