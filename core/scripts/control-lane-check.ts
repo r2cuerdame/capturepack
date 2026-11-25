@@ -537,6 +537,14 @@ async function main(): Promise<void> {
       ],
       [true, false, true, true],
     )
+    check(
+      'a window quarantined again waits twice as long, and a clean walk resets that streak',
+      [
+        typeof budgetResult?.repeatBlockedMs === 'number' && budgetResult.repeatBlockedMs > 400,
+        typeof budgetResult?.pardonedBlockedMs === 'number' && budgetResult.pardonedBlockedMs <= 250,
+      ],
+      [true, true],
+    )
   }
 
   // t=100: the window is walked. Two controls.

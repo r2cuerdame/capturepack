@@ -194,6 +194,9 @@ namespace CapturePack {
     /// HashSet this also bounds harm if Windows later reuses the handle value.
     static readonly Dictionary<long, double> BlockedUntil =
       new Dictionary<long, double>();
+    static readonly Dictionary<long, int> BlockStreak =
+      new Dictionary<long, int>();
+    const double MaxBlockedTtlMs = 30 * 60 * 1000;
     /// Virtual finish time for the whole lane's 3% CPU budget. Every UIA
     /// operation adds its full cost here. Event-driven/initial structure walks
     /// may temporarily borrow against it after their per-window 3 s floor, but
@@ -512,7 +515,10 @@ namespace CapturePack {
       }
       foreach (long h in restore) {
         BlockedUntil.Remove(h);
-        if (!Desired.Contains(h)) continue;
+        if (!Desired.Contains(h)) {
+          BlockStreak.Remove(h);
+          continue;
+        }
         Wanted[h] = 0;
         if (Tracked.ContainsKey(h)) continue;
         TrackedWindow w = new TrackedWindow();
@@ -541,6 +547,7 @@ namespace CapturePack {
       foreach (long h in all) Untrack(h);
       Desired.Clear();
       BlockedUntil.Clear();
+      BlockStreak.Clear();
       GlobalNextPassMs = 0;
       UrgentTokensMs = UrgentTokenCapacityMs;
       UrgentTokenRefillRate = 0.03;
@@ -930,11 +937,14 @@ namespace CapturePack {
       if (!Tracked.TryGetValue(hwnd, out w)) return 0;
       if (w.Strikes < maxStrikes) return 0;
       LastBlockedPassMs = w.LastPassMs;
-      // Do not forget a provider's earned CPU debt when Untrack destroys its
-      // TrackedWindow. Otherwise a 2050 ms offender returns every fixed TTL
-      // and recreates the same expensive call indefinitely.
+      int streak;
+      BlockStreak.TryGetValue(hwnd, out streak);
+      streak = Math.Min(streak + 1, 16);
+      BlockStreak[hwnd] = streak;
+      double baseTtl = Math.Max(1, blockTtlMs);
+      double ttl = Math.Min(baseTtl * Math.Pow(2, streak - 1), Math.Max(baseTtl, MaxBlockedTtlMs));
       BlockedUntil[hwnd] = Math.Max(
-        NowMs + Math.Max(1, blockTtlMs),
+        NowMs + ttl,
         w.NextPassMs);
       Untrack(hwnd);
       return hwnd;
@@ -997,6 +1007,7 @@ namespace CapturePack {
       w.Dirty = retryRequired;
       if (!retryRequired) {
         w.Strikes = 0;
+        BlockStreak.Remove(hwnd);
       } else if (SevereFindAllOverrun(findAllMs, timeoutMs, ceiling)) {
         w.Strikes = ceiling;
       } else {
@@ -1400,6 +1411,29 @@ if ($BudgetSelfTest) {
   $ttlRestored = [CapturePack.ControlLane]::RestoreExpiredQuarantines()
   $reusedAfterTtl = [CapturePack.ControlLane]::NeedsWalk(
     $ttlHwnd, 3000, 300000)
+  for ($i = 0; $i -lt 3; $i++) {
+    [CapturePack.ControlLane]::RecordWalkOutcome(
+      $ttlHwnd, 1, 120, $true, $false, 0, 3)
+  }
+  [void][CapturePack.ControlLane]::BlockIfHopeless($ttlHwnd, 3, 250)
+  $repeatBlockedMs = [CapturePack.ControlLane]::BlockedRemainingMs($ttlHwnd)
+  $pardonHwnd = [long]930002
+  [CapturePack.ControlLane]::SetTracked([long[]]@($pardonHwnd))
+  for ($i = 0; $i -lt 3; $i++) {
+    [CapturePack.ControlLane]::RecordWalkOutcome(
+      $pardonHwnd, 1, 120, $true, $false, 0, 3)
+  }
+  [void][CapturePack.ControlLane]::BlockIfHopeless($pardonHwnd, 3, 250)
+  Start-Sleep -Milliseconds 300
+  [void][CapturePack.ControlLane]::RestoreExpiredQuarantines()
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $pardonHwnd, 1, 120, $false, $false, 0, 3)
+  for ($i = 0; $i -lt 3; $i++) {
+    [CapturePack.ControlLane]::RecordWalkOutcome(
+      $pardonHwnd, 1, 120, $true, $false, 0, 3)
+  }
+  [void][CapturePack.ControlLane]::BlockIfHopeless($pardonHwnd, 3, 250)
+  $pardonedBlockedMs = [CapturePack.ControlLane]::BlockedRemainingMs($pardonHwnd)
 
   Write-Line (([ordered]@{
     event = 'budget-selftest'
@@ -1466,6 +1500,8 @@ if ($BudgetSelfTest) {
     reusedBeforeTtl = $reusedBeforeTtl
     ttlRestored = $ttlRestored
     reusedAfterTtl = $reusedAfterTtl
+    repeatBlockedMs = $repeatBlockedMs
+    pardonedBlockedMs = $pardonedBlockedMs
   }) | ConvertTo-Json -Compress)
   $passed = -not $cadenceBefore -and $cadenceAt -and
     $findAllReason -eq 'findall-timeout' -and
