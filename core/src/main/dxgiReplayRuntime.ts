@@ -13,6 +13,7 @@ import {
 } from './dxgiReplayRing'
 import { enumerateFmp4VideoSamples } from '../renderer/capture/fmp4SampleTimeline'
 import { dxgiQpcToUnixNs } from './dxgiTimingReference'
+import { lowerHelperPriority } from './processPriority'
 import type { CaptureCadenceSummary } from '../shared/captureCadence'
 
 export const DXGI_REPLAY_RUNTIME_SWITCH = '--dxgi-native-replay'
@@ -560,6 +561,7 @@ export type DxgiReplayRuntimeSnapshotResult = DxgiReplayRuntimeSnapshot | {
 }
 
 export interface DxgiReplayRuntimeProcess {
+  readonly pid?: number
   readonly stdin: { write(data: string): boolean; end(): void }
   readonly stdout: { on(event: 'data', listener: (chunk: Buffer) => void): unknown }
   readonly stderr: { on(event: 'data', listener: (chunk: Buffer) => void): unknown }
@@ -699,6 +701,7 @@ export class DxgiReplayRuntimeManager {
     } catch (error) {
       return this.setFallback('native-not-ready', String(error))
     }
+    lowerHelperPriority(child.pid)
     this.process = child
     this.serviceStartedAtMs = this.options.nowMs?.() ?? performance.now()
     child.stdout.on('data', (chunk: Buffer) => this.onStdout(child, chunk))

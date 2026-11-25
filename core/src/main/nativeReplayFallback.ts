@@ -7,6 +7,7 @@ import {
   MIN_CAPTURE_FPS,
   normalizeCaptureFps,
 } from '../shared/types'
+import { lowerHelperPriority } from './processPriority'
 
 const FRAME_MAGIC = Buffer.from('CPRF')
 const FRAME_HEADER_BYTES = 56
@@ -213,6 +214,7 @@ export class NativeReplayFallbackManager {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })
+    lowerHelperPriority(child.pid)
     const session: NativeReplaySession = { id, process: child, stopping: false }
     this.sessions.set(request.webContentsId, session)
     const ownsSlot = (): boolean =>

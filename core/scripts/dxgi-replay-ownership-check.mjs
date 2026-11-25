@@ -93,7 +93,7 @@ function harness() {
     stopReplayHealthWatchdog: () => events.push('watchdog-stop'),
     ingestQueue: { cancel: () => events.push('ingest-cancel') }, recorderQueue: Promise.resolve(),
     replayHold: { watchdog: 'hold' }, replayResumeTokens: { clear: () => events.push('resume-tokens-clear') },
-    retryTimer: 'retry', evidenceTimer: 'evidence', cadenceTimer: 'cadence', cadence: {},
+    retryTimer: 'retry', primaryRetryTimer: undefined, evidenceTimer: 'evidence', cadenceTimer: 'cadence', cadence: {},
     activeRecorder: oldSession, replayRing: { clear: () => events.push('ring-clear') },
     webmRing: { clear: () => events.push('webm-clear') },
     stopFrameTicks: () => { events.push('lane-s-ticks-stop'); rendererContext.tickVideo = null },

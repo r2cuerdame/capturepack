@@ -47,6 +47,21 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - MCP exposes frames and replays for every display, windows without UI
   Automation controls, and bounded timelines in Markdown export.
 
+## 0.6.2 — 2026-11-25
+
+Short notes: [docs/releases/0.6.2.md](docs/releases/0.6.2.md).
+
+### Fixed
+
+- Mouse and screen stutter while the degraded windows-gdi-bitblt replay
+  fallback runs on a high-resolution, high-refresh display. The fallback no
+  longer stays on for the rest of the session: the full-quality source is
+  retried after 1 minute, then on a doubling interval up to 15 minutes.
+- Replay helpers run below normal priority and no CapturePack process runs
+  above normal priority, so capture never outranks the foreground app.
+- The GDI fallback scales without HALFTONE and sleeps between frames instead
+  of spinning.
+
 ## 0.6.1 — Candidate (not released)
 
 Short notes: [docs/releases/0.6.1.md](docs/releases/0.6.1.md).

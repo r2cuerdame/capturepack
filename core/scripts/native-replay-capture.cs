@@ -26,7 +26,7 @@ internal static class NativeReplayCapture
 {
     private const int SRCCOPY = 0x00CC0020;
     private const int CAPTUREBLT = unchecked((int)0x40000000);
-    private const int HALFTONE = 4;
+    private const int COLORONCOLOR = 3;
     private const uint MONITORINFOF_PRIMARY = 1;
     private static volatile bool stopping;
 
@@ -233,7 +233,7 @@ internal static class NativeReplayCapture
             long capturedEpochMs = 0;
             try
             {
-                SetStretchBltMode(dest, HALFTONE);
+                SetStretchBltMode(dest, COLORONCOLOR);
                 // Try SRCCOPY first to avoid DWM hardware cursor hide/unhide flicker on Windows.
                 bool bltOk = StretchBlt(
                     dest,
@@ -445,9 +445,7 @@ internal static class NativeReplayCapture
                 var remainingTicks = next - clock.ElapsedTicks;
                 if (remainingTicks > 0)
                 {
-                    var sleepMs = (int)Math.Floor(remainingTicks * 1000 / Stopwatch.Frequency);
-                    if (sleepMs > 0) Thread.Sleep(sleepMs);
-                    while (!stopping && clock.ElapsedTicks < next) Thread.SpinWait(50);
+                    Thread.Sleep((int)Math.Ceiling(remainingTicks * 1000 / Stopwatch.Frequency));
                 }
                 else if (-remainingTicks > intervalTicks * 3)
                 {
