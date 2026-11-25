@@ -1076,16 +1076,18 @@ export const DEFAULT_IMAGE_CAPTURE_HOTKEY = 'Ctrl+Alt+S'
  * Persisted 1..4 fps profiles are legacy input and normalize to this floor.
  */
 export const MIN_CAPTURE_FPS = 5
-export const MAX_CAPTURE_FPS = 30
+export const MAX_CAPTURE_FPS = 60
+export const DEFAULT_CAPTURE_FPS = 20
+export const CAPTURE_FPS_PRESETS: readonly number[] = [10, 15, 20, 30, 60]
 
 /** Normalizes persisted or patched recorder requests onto the supported grid. */
-export function normalizeCaptureFps(value: unknown, fallback = 15): number {
+export function normalizeCaptureFps(value: unknown, fallback = DEFAULT_CAPTURE_FPS): number {
   const clamp = (fps: number): number =>
     Math.min(MAX_CAPTURE_FPS, Math.max(MIN_CAPTURE_FPS, Math.round(fps)))
   const safeFallback =
     typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0
       ? clamp(fallback)
-      : 15
+      : DEFAULT_CAPTURE_FPS
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? clamp(value)
     : safeFallback
@@ -1098,7 +1100,7 @@ export function normalizeCaptureFps(value: unknown, fallback = 15): number {
  * Bump only when a stored value has to be reinterpreted, never for a new key —
  * an unknown key already falls back to its default.
  */
-export const SETTINGS_VERSION = 2
+export const SETTINGS_VERSION = 3
 
 // How the annotation editor opens (GOAL "Editor Window Mode"): the fullscreen
 // overlay (DEFAULT — fastest annotation) or a real movable/resizable window.

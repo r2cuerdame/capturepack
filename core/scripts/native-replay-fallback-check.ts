@@ -64,7 +64,8 @@ check(
   'returned request provenance uses the supported-rate clamp',
   nativeFallbackRequestedFps(1) === 5 &&
     nativeFallbackRequestedFps(15) === 15 &&
-    nativeFallbackRequestedFps(31) === 30 &&
+    nativeFallbackRequestedFps(60) === 60 &&
+    nativeFallbackRequestedFps(61) === 60 &&
     nativeFallbackRequestedFps(NaN) === 5,
 )
 const nativeHelperSource = readFileSync(

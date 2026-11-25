@@ -12,6 +12,7 @@ import {
   RETENTION_KEEP_EVERYTHING,
 } from '../shared/retention'
 import {
+  DEFAULT_CAPTURE_FPS,
   DEFAULT_CAPTURE_HOTKEY,
   DEFAULT_IMAGE_CAPTURE_HOTKEY,
   normalizeCaptureFps,
@@ -105,7 +106,7 @@ function defaultSettings(): Settings {
     captureHotkey: DEFAULT_CAPTURE_HOTKEY,
     imageCaptureHotkey: DEFAULT_IMAGE_CAPTURE_HOTKEY,
     replaySeconds: 30,
-    fps: 15,
+    fps: DEFAULT_CAPTURE_FPS,
     replayMaxWidth: 1920,
     // All displays by default (GOAL "Multi-Monitor Support"). Migration is
     // silent by construction: mergeSettings keeps any VALID stored value, so an
@@ -287,11 +288,15 @@ export function readSettings(): Settings {
  * afterwards is left alone forever: their profile is already stamped, so this
  * never looks at it again. Any other value ("all", a fixed display id) was a
  * real choice and is untouched here too.
+ *
+ * v2 -> v3: fps 15 was the DEFAULT before 0.6.3; it becomes 20 the same way.
  */
 function migrateSettings(raw: Record<string, unknown>): Record<string, unknown> {
-  if (typeof raw.settingsVersion === 'number') return raw
+  const version = typeof raw.settingsVersion === 'number' ? raw.settingsVersion : 1
+  if (version >= SETTINGS_VERSION) return raw
   const migrated = { ...raw }
-  if (migrated.captureDisplay === 'cursor') migrated.captureDisplay = 'all'
+  if (version < 2 && migrated.captureDisplay === 'cursor') migrated.captureDisplay = 'all'
+  if (version < 3 && migrated.fps === 15) migrated.fps = DEFAULT_CAPTURE_FPS
   migrated.settingsVersion = SETTINGS_VERSION
   return migrated
 }

@@ -272,7 +272,7 @@ Outils, configuration des clients et réglages : [docs/MCP.md](docs/MCP.md).
 ## Réglages et diagnostics
 
 - Réglages → Capture configure indépendamment les raccourcis vidéo (`Ctrl+Alt+C`) et
-  image (`Ctrl+Alt+S`), la durée du replay et la cadence de capture de 5 à 30 fps.
+  image (`Ctrl+Alt+S`), la durée du replay et la cadence de capture de 5 à 60 fps.
 - À propos / Informations → **Ouvrir le dossier des journaux** ouvre les diagnostics
   d’exécution locaux, dont la taille est plafonnée. Les journaux ne sont jamais
   envoyés automatiquement.

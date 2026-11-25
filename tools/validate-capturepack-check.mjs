@@ -595,7 +595,7 @@ try {
   const invalidLowRequestedFps = runValidator(motionPack)
   check('requested_fps=0 remains outside the legacy reader range',
     invalidLowRequestedFps.status === 1
-      && invalidLowRequestedFps.stdout.includes('requested_fps MUST be a number in 1..30'))
+      && invalidLowRequestedFps.stdout.includes('requested_fps MUST be a number in 1..60'))
 
   motionManifest.media.cadence.requested_fps = 15
   motionManifest.media.displays[1].cadence.requested_fps = 15
@@ -607,13 +607,13 @@ try {
       && dishonestFallback.stdout.includes('windows-gdi-bitblt MUST be declared degraded'))
 
   motionManifest.media.displays[0].cadence.quality = 'degraded'
-  motionManifest.media.cadence.requested_fps = 31
-  motionManifest.media.displays[1].cadence.requested_fps = 31
+  motionManifest.media.cadence.requested_fps = 61
+  motionManifest.media.displays[1].cadence.requested_fps = 61
   writeJson(motionManifestFile, motionManifest)
   const invalidRequestedFps = runValidator(motionPack)
-  check('capture diagnostics enforce the supported 1..30 requested FPS range',
+  check('capture diagnostics enforce the supported 1..60 requested FPS range',
     invalidRequestedFps.status === 1
-      && invalidRequestedFps.stdout.includes('requested_fps MUST be a number in 1..30'))
+      && invalidRequestedFps.stdout.includes('requested_fps MUST be a number in 1..60'))
 
   motionManifest.media.cadence.requested_fps = 15
   motionManifest.media.displays[1].cadence.requested_fps = 30

@@ -28,7 +28,7 @@ verification history. These are the current additions and next gates:
 
 - Video context uses `Ctrl+Alt+C`; explicit cross-monitor region or complete
   virtual-desktop image context uses independently configurable `Ctrl+Alt+S`.
-  Capture rate is 5–30 fps.
+  Capture rate is 5–60 fps.
 - Object Pick is a still-image affordance. A screenshot — live or reopened from
   History — picks real objects out of the captured Windows surface/control
   evidence, built-in UI Automation, optional Chrome DOM preview observations and

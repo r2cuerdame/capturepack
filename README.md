@@ -265,7 +265,7 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 ## Settings and diagnostics
 
 - Settings → Capture independently configures the video (`Ctrl+Alt+C`) and image
-  (`Ctrl+Alt+S`) shortcuts, replay length and 5–30 fps capture rate.
+  (`Ctrl+Alt+S`) shortcuts, replay length and 5–60 fps capture rate.
 - About / Information → **Open logs folder** opens the local, size-capped run
   diagnostics. Logs are never uploaded automatically.
 
