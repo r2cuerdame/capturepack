@@ -41,6 +41,32 @@
   const MAX_CAPTURE_MS = 90_000
   /** Base64 characters per wire chunk (a multiple of four). */
   const CHUNK_CHARS = 512 * 1024
+  const MAX_HEADER_BYTES = 3 * 1024 * 1024
+
+  let utf8 = null
+
+  // Chrome's native-messaging JSON writer escapes '<' as <, five bytes more than JSON.stringify.
+  function wireBytes(value) {
+    const json = JSON.stringify(value)
+    let escaped = 0
+    for (let at = json.indexOf('<'); at !== -1; at = json.indexOf('<', at + 1)) escaped += 1
+    if (utf8 === null) utf8 = new TextEncoder()
+    return utf8.encode(json).byteLength + 5 * escaped
+  }
+
+  function fitDocument(header, maxBytes) {
+    if (!header.document || wireBytes(header) <= maxBytes) return header
+    const elements = header.document.elements
+    const document = { ...header.document, elements: [], truncated: true }
+    let room = maxBytes - wireBytes({ ...header, document })
+    let kept = 0
+    while (kept < elements.length) {
+      room -= wireBytes(elements[kept]) + 1
+      if (room < 0) break
+      kept += 1
+    }
+    return { ...header, document: { ...document, elements: elements.slice(0, kept) } }
+  }
 
   function reason(err) {
     return String(err && err.message ? err.message : err).slice(0, 200)
@@ -252,9 +278,10 @@
    */
   function bundleMessages(result, options) {
     const { protocol, captureId, tab, via, timestamp, base64 } = options
+    const maxHeaderBytes = options.maxHeaderBytes ?? MAX_HEADER_BYTES
     const chunking = plan.chunkPlan(base64.length, result.page.chunkChars)
     if (chunking === null) throw new Error('the picture could not be chunked')
-    const header = {
+    const header = fitDocument({
       type: 'page.captured',
       protocol,
       timestamp,
@@ -267,7 +294,8 @@
       },
       document: result.document,
       png: { bytes: result.png.byteLength, chunks: chunking.chunks, chunkChars: chunking.chunkChars },
-    }
+    }, maxHeaderBytes)
+    if (wireBytes(header) > maxHeaderBytes) throw new Error('the page description is too large to send')
     const chunks = []
     for (let index = 0; index < chunking.chunks; index += 1) {
       chunks.push({
@@ -282,7 +310,7 @@
     return { header, chunks }
   }
 
-  const api = { createFullPageCapturer, bundleMessages, CHUNK_CHARS, MAX_CAPTURE_MS }
+  const api = { createFullPageCapturer, bundleMessages, CHUNK_CHARS, MAX_CAPTURE_MS, MAX_HEADER_BYTES }
   if (typeof globalThis !== 'undefined') globalThis.__capturepackFullPageCapture = api
   if (typeof self !== 'undefined') self.__capturepackFullPageCapture = api
 })()

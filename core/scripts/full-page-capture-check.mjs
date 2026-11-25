@@ -43,7 +43,7 @@ function extensionSource(name) {
 // ---------------------------------------------------------------------------
 
 function loadWorker() {
-  const sandbox = { console, Math, Number, String, Object, Array, Error, JSON, Infinity, setTimeout, clearTimeout }
+  const sandbox = { console, Math, Number, String, Object, Array, Error, JSON, Infinity, setTimeout, clearTimeout, TextEncoder }
   sandbox.self = sandbox
   runInNewContext(extensionSource('full-page-plan.js'), sandbox)
   runInNewContext(extensionSource('full-page-capture.js'), sandbox)
@@ -513,6 +513,74 @@ console.log('\nThe bundle that crosses the wire')
     check('the picture is the canvas the tiles were drawn on',
       JSON.parse(Buffer.from(result.png).toString('utf8')).height === 2400)
   }
+}
+
+console.log('\nA long document is held under the native host\'s frame bound')
+{
+  const { MAX_HEADER_BYTES } = worker.capture
+  const hostFrameBytes = /export const MAX_FRAME_BYTES = (\d+) \* (\d+) \* (\d+)/u
+    .exec(readFileSync(resolve(EXTENSION, '..', '..', 'core', 'src', 'main', 'chrome', 'nativeHost.ts'), 'utf8'))
+  const hostBound = hostFrameBytes === null ? 0 : Number(hostFrameBytes[1]) * Number(hostFrameBytes[2]) * Number(hostFrameBytes[3])
+  check('the header budget sits below the host\'s frame bound', MAX_HEADER_BYTES > 0 && MAX_HEADER_BYTES < hostBound,
+    `${String(MAX_HEADER_BYTES)} vs ${String(hostBound)}`)
+
+  const chromeBytes = (value) => {
+    const json = JSON.stringify(value)
+    return Buffer.byteLength(json, 'utf8') + 5 * (json.match(/</gu) ?? []).length
+  }
+  const pageResult = (elements) => ({
+    ok: true,
+    png: new Uint8Array([1, 2, 3, 4]),
+    page: { url: 'https://example.test/long', title: 'Long', cssWidth: 1440, cssHeight: 90000, chunkChars: 8 },
+    document: {
+      viewport: { width: 1440, height: 90000, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+      scope: 'document',
+      url: 'https://example.test/long',
+      title: 'Long',
+      elements,
+      truncated: false,
+      visitedCount: elements.length,
+      elapsedMs: 3,
+      omitted: [],
+    },
+  })
+  const rows = (count, text) => Array.from({ length: count }, (_, i) => ({
+    i, tag: 'li', role: 'listitem', bounds: { x: 0, y: i * 4, width: 1400, height: 4 }, text: `${text} ${String(i)}`,
+  }))
+  const options = { protocol: 1, captureId: 'p9', tab: { url: 'https://example.test/long', title: 'Long' }, via: 'toolbar', timestamp: 5, base64: 'AQIDBA==' }
+
+  const fits = pageResult(rows(12000, 'row'))
+  const kept = bundleMessages(fits, options).header
+  check('a document under the budget is sent whole', kept.document.elements.length === 12000 && kept.document.truncated === false
+    && kept.document === fits.document, String(kept.document.elements.length))
+
+  const big = pageResult(rows(20000, '한글 행 '.repeat(20)))
+  const trimmed = bundleMessages(big, options).header
+  const trimmedBytes = chromeBytes(trimmed)
+  check('a document over the budget is cut to a prefix that fits',
+    trimmedBytes <= MAX_HEADER_BYTES && trimmed.document.elements.length > 0 && trimmed.document.elements.length < 20000
+    && trimmed.document.elements.every((e, i) => e.i === i),
+    `${String(trimmed.document.elements.length)} element(s), ${String(trimmedBytes)} bytes`)
+  check('and the cut is stated, not hidden', trimmed.document.truncated === true && big.document.truncated === false
+    && trimmed.document.visitedCount === 20000)
+  check('the prefix is as long as the budget allows',
+    chromeBytes({ ...trimmed, document: { ...trimmed.document, elements: big.document.elements.slice(0, trimmed.document.elements.length + 1) } })
+      > MAX_HEADER_BYTES)
+
+  const angled = pageResult(rows(20000, '<'.repeat(60)))
+  const angledHeader = bundleMessages(angled, options).header
+  check('Chrome\'s six-byte escape of < is counted', chromeBytes(angledHeader) <= MAX_HEADER_BYTES && angledHeader.document.truncated === true,
+    `${String(chromeBytes(angledHeader))} bytes`)
+
+  const hugeTitle = { ...pageResult([]), page: { ...pageResult([]).page, title: 'x'.repeat(MAX_HEADER_BYTES) } }
+  let refused = null
+  try {
+    bundleMessages(hugeTitle, options)
+  } catch (err) {
+    refused = err
+  }
+  check('a header that cannot fit at all fails the capture instead of reaching the host', /too large/u.test(String(refused?.message)),
+    String(refused))
 }
 
 console.log('\nThe worker wires it to the toolbar, and the picker keeps its doors')

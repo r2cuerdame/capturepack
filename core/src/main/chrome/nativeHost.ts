@@ -69,9 +69,8 @@ function frame(message: unknown): Buffer {
  * reading it would mean allocating on a stranger's say-so.
  *
  * Raised from 1 MB with #157: a full-page capture's header carries the whole
- * document walk (up to 4000 elements) and its picture follows in 512 KiB
- * base64 chunks, each its own frame — so no legitimate frame comes near this,
- * and the bound still means what it always did.
+ * document walk, which the extension trims to 3 MiB on the wire, and its
+ * picture follows in 512 KiB base64 chunks, each its own frame.
  */
 export const MAX_FRAME_BYTES = 4 * 1024 * 1024
 

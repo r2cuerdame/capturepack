@@ -87,6 +87,7 @@ export interface DomViewport {
  */
 /** What the host will accept from one document, however much is offered. */
 const DOM_SNAPSHOT_MAX_ELEMENTS = 4000
+const DOM_DOCUMENT_MAX_ELEMENTS = 20000
 
 export interface DomDocumentSnapshot {
   viewport: {
@@ -882,7 +883,8 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
       if (width !== null && width > 0 && height !== null && height > 0
         && dpr !== null && dpr > 0 && dpr <= 16) {
         const elements: NonNullable<DomEvent['document']>['elements'] = []
-        for (const entry of rawElements.slice(0, DOM_SNAPSHOT_MAX_ELEMENTS)) {
+        const limit = d['scope'] === 'document' ? DOM_DOCUMENT_MAX_ELEMENTS : DOM_SNAPSHOT_MAX_ELEMENTS
+        for (const entry of rawElements.slice(0, limit)) {
           if (typeof entry !== 'object' || entry === null) continue
           const el = entry as Record<string, unknown>
           const b = el['bounds']
@@ -934,7 +936,7 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
           // The extension's own cap, or ours: either way the pack says the list
           // is a prefix rather than the page.
           truncated: d['truncated'] === true
-            || rawElements.length > DOM_SNAPSHOT_MAX_ELEMENTS,
+            || rawElements.length > limit,
           // Defaulted rather than refused, unlike the viewport above: a wrong
           // census makes the pack's own account of the walk less exact, while a
           // wrong viewport puts rectangles in the wrong place. Still read under
