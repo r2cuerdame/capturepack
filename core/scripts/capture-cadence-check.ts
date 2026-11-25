@@ -183,7 +183,7 @@ console.log('\nSupported capture-rate floor')
       !captureSource.includes('recorderStream'),
   )
   check(
-    'native fallback IPC normalizes every request onto the current 5..30 writer range',
+    'native fallback IPC normalizes every request onto the current 5..60 writer range',
     mainCaptureSource.includes('normalizeCaptureFps') &&
       /const requestedFps =\s*normalizeCaptureFps\(\s*request\?\.requestedFps,\s*currentSettings\?\.fps \?\? MIN_CAPTURE_FPS,\s*\)/u.test(
         mainCaptureSource,

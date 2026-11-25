@@ -47,6 +47,19 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - MCP exposes frames and replays for every display, windows without UI
   Automation controls, and bounded timelines in Markdown export.
 
+## 0.6.3 — 2026-11-25
+
+Short notes: [docs/releases/0.6.3.md](docs/releases/0.6.3.md).
+
+### Changed
+
+- Replay capture defaults to 20 fps instead of 15. Settings accept 5–60 fps
+  and suggest 10, 15, 20, 30 and 60.
+- A settings profile still on the former 15 fps default moves to 20 once
+  (settings version 3). Any other stored rate stays as chosen.
+- Pack format: `requested_fps` accepts 1..60 (was 1..30). Validators older
+  than this release reject a pack recorded above 30 fps.
+
 ## 0.6.2 — 2026-11-25
 
 Short notes: [docs/releases/0.6.2.md](docs/releases/0.6.2.md).

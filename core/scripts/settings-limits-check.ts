@@ -18,6 +18,8 @@ import {
   settingsFilePath,
 } from '../src/main/settings'
 import {
+  CAPTURE_FPS_PRESETS,
+  DEFAULT_CAPTURE_FPS,
   MAX_CAPTURE_FPS,
   MIN_CAPTURE_FPS,
   normalizeCaptureFps,
@@ -33,9 +35,14 @@ function check(name: string, condition: boolean, detail = ''): void {
 
 console.log('CAPTURE FPS')
 check('minimum is 5', MIN_CAPTURE_FPS === 5)
-check('maximum is 30', MAX_CAPTURE_FPS === 30)
-check('an older 60 fps profile normalizes to 30', normalizeCaptureFps(60) === 30)
+check('maximum is 60', MAX_CAPTURE_FPS === 60)
+check('default is 20', DEFAULT_CAPTURE_FPS === 20)
+check('presets are 10/15/20/30/60', CAPTURE_FPS_PRESETS.join('/') === '10/15/20/30/60')
+check('every preset survives normalization', CAPTURE_FPS_PRESETS.every((fps) => normalizeCaptureFps(fps) === fps))
+check('a 120 fps profile normalizes to 60', normalizeCaptureFps(120) === 60)
+check('60 stays 60', normalizeCaptureFps(60) === 60)
 check('30 stays 30', normalizeCaptureFps(30) === 30)
+check('missing input falls back to the 20 fps default', normalizeCaptureFps(undefined) === 20)
 check('an older 1 fps profile migrates to 5', normalizeCaptureFps(1) === 5)
 check('an older 4 fps profile migrates to 5', normalizeCaptureFps(4) === 5)
 check('a positive fraction rounds and clamps onto the integer grid', normalizeCaptureFps(0.2) === 5)
@@ -51,8 +58,12 @@ const captureSettingsStore = readFileSync(
   'utf8',
 )
 check(
-  'the Settings numeric input advertises the same 5..30 contract',
-  /id="fps"\s+min="5"\s+max="30"/u.test(captureSettingsHtml),
+  'the Settings numeric input advertises the same 5..60 contract',
+  /id="fps"\s+min="5"\s+max="60"/u.test(captureSettingsHtml),
+)
+check(
+  'the Settings fps input offers the 10/15/20/30/60 presets',
+  CAPTURE_FPS_PRESETS.every((fps) => new RegExp(`id="fpsPresets"[^]*?<option value="${fps}">`, 'u').test(captureSettingsHtml)),
 )
 check(
   'IPC settings patches and loaded profiles share the normalizer',
@@ -339,7 +350,7 @@ withProfileEnv([], ({ desktop }) => {
     'a missing settings.json reports firstRun=true and writes default settings',
     loaded.firstRun === true &&
       existsSync(settingsFilePath()) &&
-      onDisk.fps === 15 &&
+      onDisk.fps === DEFAULT_CAPTURE_FPS &&
       onDisk.welcomeShown === false &&
       onDisk.outputDir === path.join(desktop, 'CapturePack'),
   )
@@ -367,7 +378,7 @@ for (const failure of [
 
     check(
       `${failure.label} does not mistake existing settings.json for firstRun`,
-      loaded.firstRun === false && loaded.settings.fps === 15,
+      loaded.firstRun === false && loaded.settings.fps === DEFAULT_CAPTURE_FPS,
     )
     check(
       `${failure.label} leaves original settings.json untouched on startup`,
@@ -406,7 +417,7 @@ withProfileEnv([], ({ userData }) => {
   const loaded = loadSettings()
   check(
     'a real unreadable entry (directory at settings.json) reports firstRun=false without crashing',
-    loaded.firstRun === false && loaded.settings.fps === 15,
+    loaded.firstRun === false && loaded.settings.fps === DEFAULT_CAPTURE_FPS,
   )
   let persistThrew = false
   try {
@@ -432,7 +443,7 @@ for (const malformed of [
     check(
       `${malformed.label} reports firstRun=false and preserves disk bytes on startup`,
       loaded.firstRun === false &&
-        loaded.settings.fps === 15 &&
+        loaded.settings.fps === DEFAULT_CAPTURE_FPS &&
         readFileSync(file, 'utf8') === malformed.body,
     )
 
@@ -543,9 +554,29 @@ withProfileEnv([], () => {
   const repaired = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
   check(
     'an empty/whitespace settings.json is not firstRun and initializes default JSON',
-    loaded.firstRun === false && repaired.fps === 15,
+    loaded.firstRun === false && repaired.fps === 20,
   )
 })
+
+for (const fpsCase of [
+  { label: 'a v2 profile on the old 15 fps default moves to 20', stored: { settingsVersion: 2, fps: 15 }, fps: 20 },
+  { label: 'an unversioned profile on 15 fps moves to 20', stored: { fps: 15 }, fps: 20 },
+  { label: 'a v2 profile with a chosen 24 fps keeps it', stored: { settingsVersion: 2, fps: 24 }, fps: 24 },
+  { label: 'a v3 profile with 15 fps is a choice and stays', stored: { settingsVersion: 3, fps: 15 }, fps: 15 },
+]) {
+  withProfileEnv([], () => {
+    mkdirSync(path.dirname(settingsFilePath()), { recursive: true })
+    const file = settingsFilePath()
+    writeFileSync(file, JSON.stringify(fpsCase.stored), 'utf8')
+    const loaded = loadSettings()
+    const onDisk = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    check(
+      fpsCase.label,
+      loaded.settings.fps === fpsCase.fps && onDisk.settingsVersion === 3,
+      `fps=${loaded.settings.fps} disk=${String(onDisk.settingsVersion)}`,
+    )
+  })
+}
 
 if (failed > 0) {
   console.error(`\nsettings-limits-check failed: ${failed}`)

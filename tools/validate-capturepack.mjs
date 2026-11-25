@@ -164,8 +164,8 @@ function validateCadence(value, label, formatVersion, hasReplay) {
     ok = false;
   }
   if (value.requested_fps !== undefined
-      && (!isNum(value.requested_fps) || value.requested_fps < 1 || value.requested_fps > 30)) {
-    fail(`${label}.requested_fps MUST be a number in 1..30 (SPEC §5.3)`);
+      && (!isNum(value.requested_fps) || value.requested_fps < 1 || value.requested_fps > 60)) {
+    fail(`${label}.requested_fps MUST be a number in 1..60 (SPEC §5.3)`);
     ok = false;
   }
   if (value.backend !== undefined

@@ -274,7 +274,7 @@ Herramientas, configuración del cliente y ajustes: [docs/MCP.md](docs/MCP.md).
 
 - Ajustes → Captura configura por separado los atajos de vídeo (`Ctrl+Alt+C`) e
   imagen (`Ctrl+Alt+S`), la duración de la repetición y la tasa de captura de
-  5 a 30 fps.
+  5 a 60 fps.
 - Acerca de / Información → **Abrir carpeta de registros** abre los diagnósticos
   locales de ejecución, con tamaño limitado. Los registros nunca se suben
   automáticamente.

@@ -249,7 +249,8 @@
       <div class="row">
         <label class="label" for="fps" data-i18n="settings.captureFps">Capture FPS</label>
         <span class="control">
-          <input type="number" id="fps" min="5" max="30" step="1" />
+          <input type="number" id="fps" min="5" max="60" step="1" list="fpsPresets" />
+          <datalist id="fpsPresets"><option value="10"></option><option value="15"></option><option value="20"></option><option value="30"></option><option value="60"></option></datalist>
           <span class="unit">fps</span>
         </span>
       </div>

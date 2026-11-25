@@ -271,7 +271,7 @@ Ferramentas, configuração de clientes e ajustes: [docs/MCP.md](docs/MCP.md).
 
 - Configurações → Captura permite alterar separadamente os atalhos de vídeo
   (`Ctrl+Alt+C`) e de imagem (`Ctrl+Alt+S`), a duração do replay e a taxa de
-  captura de 5 a 30 fps.
+  captura de 5 a 60 fps.
 - Sobre / Informações → **Abrir pasta de logs** abre os diagnósticos locais de
   execução, com tamanho limitado. Os logs nunca são enviados automaticamente.
 

@@ -46,7 +46,7 @@ import { computeDisplayNumbers } from '../../shared/numbering'
 // a box, and what has to be STORED for it to keep that number. Rendering a
 // number and assigning one are different jobs, which is why only the first is
 // re-exported by shared/numbering.
-import { nextDisplayNumber, planNumberPins } from '../../shared/types'
+import { DEFAULT_CAPTURE_FPS, nextDisplayNumber, planNumberPins } from '../../shared/types'
 import { contextFrameRequestsForDisplays } from '../../shared/displayClock'
 import {
   ObjectIndex,
@@ -233,7 +233,7 @@ let replayDurationMs = 0 // manifest replay_duration_ms; caps every lifetime sta
 let fitScale = 1
 let loaded = false
 let exporting = false
-let fps = 15
+let fps = DEFAULT_CAPTURE_FPS
 let scrubInvert = false
 let scrubSensitivityMs = 100
 let defaultManualDurationMs = 1000

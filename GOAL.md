@@ -47,7 +47,7 @@ before that implementation can become a default or a release claim, but it is
 not a 0.6.0 publication gate.
 
 - Live recording is on by default, holds 30 seconds by default, is configurable
-  from 1–60 seconds at 5–30 fps, and records nothing when switched off.
+  from 1–60 seconds at 5–60 fps, and records nothing when switched off.
 - `Ctrl+Alt+C` freezes a video-context replay. `Ctrl+Alt+S` opens explicit
   region capture with a separate full-virtual-desktop action. The shortcuts are
   independently configurable.
@@ -696,7 +696,7 @@ After a month, the journal itself becomes the best roadmap.
 
 - Video context from a 30-second replay buffer by default (1–60 seconds)
 - Explicit image context: cross-monitor region or complete virtual desktop
-- Capture rate configurable from 5–30 fps
+- Capture rate configurable from 5–60 fps (default 20; presets 10/15/20/30/60)
 
 `Ctrl+Alt+C` is the video flow. `Ctrl+Alt+S` freezes every display before any
 selector appears, then opens a boundary-free virtual-desktop region selector
@@ -1725,7 +1725,7 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
     (`Ctrl+Alt+S`). Each must include a modifier; a conflict with another app's
     global shortcut is detected on registration and rolls back only that action
     without unregistering the other. Changes apply instantly and update the
-    tray labels. Replay length is 1–60 seconds and capture rate is 5–30 fps. The
+    tray labels. Replay length is 1–60 seconds and capture rate is 5–60 fps. The
     section also carries the
     **replay resolution limit** — a DROPDOWN of the few choices that matter (native/no
     limit, 3840, 2560, 1920 default, 1280, 720), each labelled with the quality/CPU trade

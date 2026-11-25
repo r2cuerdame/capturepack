@@ -273,7 +273,7 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
 ## Einstellungen und Diagnose
 
 - Unter Einstellungen → Aufnahme lassen sich die Kürzel für Video (`Ctrl+Alt+C`)
-  und Bild (`Ctrl+Alt+S`), die Replay-Länge und die Aufnahmerate von 5–30 fps
+  und Bild (`Ctrl+Alt+S`), die Replay-Länge und die Aufnahmerate von 5–60 fps
   unabhängig voneinander einstellen.
 - Über CapturePack / Information → **Protokollordner öffnen** öffnet die lokale,
   in der Größe begrenzte Laufzeitdiagnose. Protokolle werden nie automatisch

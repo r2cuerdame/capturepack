@@ -516,7 +516,7 @@ for (const { lang, text: localized } of localizedReadmes) {
 check(
   'settings and local diagnostics are visible',
   readme.includes('Open logs folder')
-    && readme.includes('5–30 fps')
+    && readme.includes('5–60 fps')
     && readme.includes('independently configures the video')
     && readme.includes('(`Ctrl+Alt+C`)')
     && readme.includes('(`Ctrl+Alt+S`)')
