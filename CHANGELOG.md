@@ -47,6 +47,25 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - MCP exposes frames and replays for every display, windows without UI
   Automation controls, and bounded timelines in Markdown export.
 
+## 0.6.5 — 2026-11-25
+
+Short notes: [docs/releases/0.6.5.md](docs/releases/0.6.5.md).
+
+### Fixed
+
+- A one-click full-page capture of a long page kept only the first 4000
+  elements of the page's DOM, so the lower part of the picture had no DOM
+  context (measured: 4,000 of 5,855 on a Wikipedia article, 4,000 of 12,049 on
+  an MDN reference page). The extension (0.4.5) now walks a full page up to
+  20,000 elements, and the app accepts that many for a full-page document; a
+  viewport walk keeps its 4,000 cap
+  ([#157](https://github.com/r2cuerdame/capturepack/issues/157)).
+- The full-page header that carries the DOM is held under 3 MiB as Chrome
+  sends it. The native host hangs up on a frame over 4 MiB, which lost the
+  capture; a document that does not fit is now cut to a prefix and marked
+  truncated, and a header that cannot fit at all fails the capture on the icon
+  instead of reaching the host.
+
 ## 0.6.4 — 2026-11-25
 
 Short notes: [docs/releases/0.6.4.md](docs/releases/0.6.4.md).
