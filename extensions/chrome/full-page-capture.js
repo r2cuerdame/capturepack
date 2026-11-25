@@ -43,13 +43,14 @@
   const CHUNK_CHARS = 512 * 1024
   const MAX_HEADER_BYTES = 3 * 1024 * 1024
 
-  const utf8 = new TextEncoder()
+  let utf8 = null
 
   // Chrome's native-messaging JSON writer escapes '<' as <, five bytes more than JSON.stringify.
   function wireBytes(value) {
     const json = JSON.stringify(value)
     let escaped = 0
     for (let at = json.indexOf('<'); at !== -1; at = json.indexOf('<', at + 1)) escaped += 1
+    if (utf8 === null) utf8 = new TextEncoder()
     return utf8.encode(json).byteLength + 5 * escaped
   }
 
