@@ -84,6 +84,8 @@ work does not settle remains open: a real three-screen capture
 
 ## Release notes
 
+- [0.6.3](releases/0.6.3.md) — 20 fps default capture rate, selectable 5–60 fps.
+- [0.6.2](releases/0.6.2.md) — replay fallback stutter fix.
 - [0.6.1](releases/0.6.1.md) — short notes for the next public build (not published yet).
 - [0.3.3](releases/0.3.3.md) — historical release notes.
 - [0.3.3-rc.1](releases/0.3.3-rc.1.md) — historical prerelease notes.
