@@ -84,7 +84,6 @@ work does not settle remains open: a real three-screen capture
 
 ## Release notes
 
-- [0.6.5](releases/0.6.5.md) — a full-page capture keeps the DOM of a long page, not only its first 4000 elements.
 - [0.6.4](releases/0.6.4.md) — stops a console write loop that burned a CPU core after the launching shell closed.
 - [0.6.3](releases/0.6.3.md) — 20 fps default capture rate, selectable 5–60 fps.
 - [0.6.2](releases/0.6.2.md) — replay fallback stutter fix.
